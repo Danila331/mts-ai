@@ -49,7 +49,9 @@ class Api:
         self.rerank_model = env("RERANKER_MODEL", "qwen/qwen3-reranker-8b")
         # Свои имена (EB_*): платформа передаёт TOP_K, MAX_TOKENS, TEMPERATURE под бейзлайн,
         # и они не должны молча перебивать настройки нашего решения.
-        self.max_tokens = env_num("EB_MAX_TOKENS", 700, 128, 8192)
+        # Демо-замеры: с размышлениями судья стабильно выше (7.3 → 7.55 на 18 демо жюри,
+        # 4 прогона). Пустые ответы от съеденного лимита ловит повтор с EB_THINKING_BUDGET.
+        self.max_tokens = env_num("EB_MAX_TOKENS", 2500, 128, 8192)
         self.temperature = env_num("EB_TEMPERATURE", 0.0, 0.0, 2.0, float)
         self.timeout = env_num("EB_REQUEST_TIMEOUT", 60.0, 5.0, 600.0, float)
         self.embed_batch = env_num("EB_EMBED_BATCH", 16, 1, 256)
@@ -59,7 +61,9 @@ class Api:
         self.disable_thinking = env("EB_DISABLE_THINKING", "1") != "0"
         # chat_template_kwargs — vLLM (вероятно, прокси платформы); reasoning — OpenRouter;
         # enable_thinking — DashScope; none — ничего не слать.
-        self.thinking_param = env("EB_THINKING_PARAM", "chat_template_kwargs")
+        # none (по умолчанию) — размышления НЕ отключаем: судья на демо оценивает их выше.
+        # chat_template_kwargs — vLLM; reasoning — OpenRouter; enable_thinking — DashScope.
+        self.thinking_param = env("EB_THINKING_PARAM", "none")
         self.thinking_budget = env_num("EB_THINKING_BUDGET", 3000, 500, 16000)
         self.thinking_overflows = 0
         self._thinking_param_ok = True

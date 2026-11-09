@@ -253,7 +253,7 @@ class SolutionEndToEndTest(unittest.TestCase):
                      ("3", "Пользователь: Мы СНТ.\nАссистент: Какая задача?\nПользователь: Учёт. Подойдёт?"),
                      ("10", "Сколько стоит платформа учёта?")]
         with MockApi(reject_template_kwargs=True) as mock:
-            rows, log = self._run(mock, questions)
+            rows, log = self._run(mock, questions, extra_env={"EB_THINKING_PARAM": "chat_template_kwargs"})
         self.assertEqual([r["id"] for r in rows], ["7", "3", "10"])
         for r in rows:
             self.assertEqual(r["answer"], "Да, это возможно: первый факт второй факт Какой у вас регион?")
