@@ -22,11 +22,12 @@ class MockApi:
     DEFAULT_ANSWER = "<think>рассуждаю</think>\n**Да**, это возможно:\n- первый факт\n- второй факт\nКакой у вас регион?"
 
     def __init__(self, reject_template_kwargs=True, fail_chat=False, responder=None,
-                 chat_delay=0.0, rerank_delay=0.0, embed_delay=0.0):
+                 chat_delay=0.0, rerank_delay=0.0, embed_delay=0.0, max_embed_batch=None):
         """responder(messages) -> текст ответа модели; задержки имитируют время работы сервиса."""
         self.reject_template_kwargs = reject_template_kwargs
         self.fail_chat = fail_chat
         self.responder = responder
+        self.max_embed_batch = max_embed_batch
         self.delays = {"chat": chat_delay, "rerank": rerank_delay, "embeddings": embed_delay}
         self.lock = threading.Lock()
         self.calls = {"chat": 0, "embeddings": 0, "rerank": 0, "rejected": 0}
@@ -52,6 +53,8 @@ class MockApi:
                 kind = next((k for k in ("embeddings", "rerank") if self.path.endswith("/" + k)), "chat")
                 time.sleep(mock.delays[kind])
                 if self.path.endswith("/embeddings"):
+                    if mock.max_embed_batch and len(body["input"]) > mock.max_embed_batch:
+                        return self._send(400, {"error": "batch size is invalid"})
                     with mock.lock:
                         mock.calls["embeddings"] += 1
                     data = [{"index": i, "embedding": fake_vector(t)} for i, t in enumerate(body["input"])]
