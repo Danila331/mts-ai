@@ -17,3 +17,8 @@ submission.csv
 
 # macOS
 .DS_Store
+
+# Build and evaluation outputs
+dist/
+eval/reports/
+debug.jsonl
