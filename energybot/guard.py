@@ -15,6 +15,24 @@ NUMBER = re.compile(r"\d+(?:[    ]\d{3})*(?:[.,]\d+)?")
 SENTENCE = re.compile(r"(?<=[.!?])\s+")
 MAX_WORDS = 110  # эталоны жюри — 25–52 слова; длиннее этого ответ стоит сжать
 
+# Число с единицей измерения: «30 лет», «25 000 ₽», «750 кВт». Голая проверка числа
+# пропускала галлюцинации вроде «срок службы шифера 30 лет», если в материалах было
+# другое число 30 (например «30 дней»). Поэтому проверяем пару число+единица.
+NUM_UNIT = re.compile(r"(\d+(?:[\s]?\d{3})*(?:[.,]\d+)?)\s*([A-Za-zА-Яа-яЁё%₽]+)")
+UNITS = {"лет", "год", "года", "квт", "мвт", "руб", "₽", "%", "процент", "процентов", "квтч",
+         "прибор", "приборов", "счётчик", "счётчиков", "дней", "месяцев", "месяц", "час", "часов"}
+
+
+def _unit_pairs(text: str) -> set:
+    """Пары (число, первые 4 буквы единицы) из текста."""
+    pairs = set()
+    for n, u in NUM_UNIT.findall(text):
+        value = re.sub(r"\s", "", n).replace(",", ".")
+        if value.endswith(".0"):
+            value = value[:-2]
+        pairs.add((value, u.lower()[:4]))
+    return pairs
+
 
 def numbers(text: str) -> set:
     found = set()
@@ -27,11 +45,27 @@ def numbers(text: str) -> set:
 
 
 def unknown_numbers(answer: str, *sources: str) -> list:
-    """Числа ответа, которых нет в источниках. 1 и 2 не проверяются: «одна смена», «в 2 раза»."""
+    """Числа ответа, которых нет в источниках. 1 и 2 не проверяются: «одна смена», «в 2 раза».
+
+    Если после числа стоит единица из UNITS, требуем совпадения пары «число + единица»:
+    «25 лет» не подтверждается материалом «25 000 ₽».
+    """
     allowed = set()
+    allowed_pairs = set()
     for text in sources:
         allowed |= numbers(text)
-    return sorted(n for n in numbers(answer) - allowed if not (n.isdigit() and int(n) <= 2))
+        allowed_pairs |= _unit_pairs(text)
+    bad = sorted(n for n in numbers(answer) - allowed if not (n.isdigit() and int(n) <= 2))
+    for n, u in NUM_UNIT.findall(answer):
+        value = re.sub(r"\s", "", n).replace(",", ".")
+        if value.endswith(".0"):
+            value = value[:-2]
+        if value.isdigit() and int(value) <= 2:
+            continue
+        unit = u.lower()
+        if unit in UNITS and (value, unit[:4]) not in allowed_pairs and value not in bad:
+            bad.append(f"{value} {unit}")
+    return bad
 
 
 def word_count(text: str) -> int:
@@ -39,8 +73,10 @@ def word_count(text: str) -> int:
 
 
 def strip_sentences(answer: str, bad: list) -> str:
-    """Убирает предложения с непроверенными числами; остальное оставляет как есть."""
-    keep = [s for s in SENTENCE.split(answer.strip()) if not (numbers(s) & set(bad))]
+    """Убирает предложения с непроверенными числами; остальное оставляет как есть.
+    bad может содержать пары «число единица» — сравниваем по числу."""
+    bad_nums = {b.split()[0] for b in bad}
+    keep = [s for s in SENTENCE.split(answer.strip()) if not (numbers(s) & bad_nums)]
     return " ".join(keep).strip()
 
 

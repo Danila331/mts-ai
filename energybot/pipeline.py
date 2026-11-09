@@ -75,7 +75,7 @@ class Consultant:
         self.top_k = env_num("EB_TOP_K", 10, 1, 30)
         self.n_candidates = env_num("EB_N_CANDIDATES", 20, 5, 60)
         self.expand_docs = env_num("EB_EXPAND_DOCS", 1, 0, 3)
-        self.context_chars = env_num("EB_CONTEXT_CHARS", 18000, 2000, 60000)
+        self.context_chars = env_num("EB_CONTEXT_CHARS", 10000, 2000, 60000)
         print(
             f"[consultant] фрагментов: {len(self.kb.chunks)}, dense: {self.dense}, "
             f"загрузка {time.perf_counter() - t0:.1f} c",
