@@ -34,6 +34,9 @@ concurrency:
 env:
   EVAL_SET: ${{ inputs.eval_set || 'all' }}
   PACKETS: ${{ inputs.packets || '12' }}
+  # Модель Codex для ревью регламента и судьи; переопределяется переменными репозитория.
+  CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-6.1-sol' }}
+  CODEX_EFFORT: ${{ vars.CODEX_REASONING_EFFORT || 'xhigh' }}
 
 jobs:
   guard:
@@ -98,11 +101,9 @@ jobs:
           auth-json: ${{ secrets.CODEX_AUTH_JSON }}
           api-key: ${{ secrets.OPENAI_API_KEY }}
       - name: Ревью Codex
-        env:
-          CODEX_MODEL: ${{ vars.CODEX_MODEL }}
         run: |
           codex exec --sandbox read-only --skip-git-repo-check -C "$RUNNER_TEMP/review" \
-            ${CODEX_MODEL:+--model "$CODEX_MODEL"} \
+            --model "$CODEX_MODEL" -c "model_reasoning_effort=\"$CODEX_EFFORT\"" \
             --output-schema "$GITHUB_WORKSPACE/.github/codex/regulation-schema.json" \
             -o "$RUNNER_TEMP/verdict.json" \
             "$(cat .github/codex/regulation-prompt.md)" 2> "$RUNNER_TEMP/codex.log"
@@ -127,8 +128,19 @@ jobs:
                   print(f"| {x['severity']} | {x['rule']} | {x['evidence']} |")
           open("regulation.ok", "w").write("1" if ok else "0")
           PY
-          cat regulation.md >> "$GITHUB_STEP_SUMMARY"
+          cat regulation.md | tee -a "$GITHUB_STEP_SUMMARY"
+          cp "$RUNNER_TEMP/verdict.json" regulation-verdict.json
           echo "ok=$(cat regulation.ok)" >> "$GITHUB_OUTPUT"
+      - name: Вердикт — артефакт
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regulation-review
+          path: |
+            regulation.md
+            regulation-verdict.json
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Комментарий в PR
         if: github.event_name == 'pull_request'
         env:
@@ -207,8 +219,6 @@ jobs:
           auth-json: ${{ secrets.CODEX_AUTH_JSON }}
           api-key: ${{ secrets.OPENAI_API_KEY }}
       - name: Судейство по пакетам (последовательно)
-        env:
-          CODEX_MODEL: ${{ vars.CODEX_MODEL }}
         run: |
           set -uo pipefail
           mkdir -p verdicts
@@ -218,7 +228,8 @@ jobs:
             prompt=$(sed -e "s/{{PACKET}}/packet-$n.md/g" -e "s/{{VERDICTS}}/verdicts-$n.jsonl/g" .github/codex/judge-prompt.md)
             for attempt in 1 2; do
               codex exec --sandbox workspace-write --skip-git-repo-check -C "$work" \
-                ${CODEX_MODEL:+--model "$CODEX_MODEL"} "$prompt" > "$work/out.txt" 2> "$work/log.txt"
+                --model "$CODEX_MODEL" -c "model_reasoning_effort=\"$CODEX_EFFORT\"" \
+                "$prompt" > "$work/out.txt" 2> "$work/log.txt"
               if python3 - "$work/packet-$n.md" "$work/verdicts-$n.jsonl" <<'PY'
           import json, re, sys
           pids = set(re.findall(r"^## pid (\w+)", open(sys.argv[1], encoding="utf-8").read(), re.M))

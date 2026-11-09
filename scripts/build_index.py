@@ -22,7 +22,7 @@ from energybot.retrieval import Retriever  # noqa: E402
 def main():
     api = Api()
     if not (api.emb_url and api.emb_key):
-        sys.exit("Задайте LLM_BASE_URL и LLM_API_KEY (или EMBEDDER_BASE_URL/EMBEDDER_API_KEY)")
+        sys.exit("Задайте LLM_BASE_URL и LLM_API_KEY (или EB_EMBEDDER_BASE_URL/EMBEDDER_API_KEY)")
     kb = KnowledgeBase.load(ROOT / "knowledge-base")
     retriever = Retriever(kb, api, index_dir=None, dense=True)
     if retriever.vectors is None:
