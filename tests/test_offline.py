@@ -137,6 +137,31 @@ class JudgeMetricsTest(unittest.TestCase):
         self.assertEqual(score, 1.0)
 
 
+class BlindJudgeTest(unittest.TestCase):
+    def test_export_hides_side_and_score_matches_platform(self):
+        import json as _json
+        import blind_judge
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            for side, text in (("bot", "ответ бота"), ("baseline", "ответ бейзлайна")):
+                (report / side).mkdir()
+                with open(report / side / "submission.csv", "w", encoding="utf-8", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["id", "answer"])
+                    w.writerows([("demo-1", f"{text} 1"), ("demo-2", f"{text} 2")])
+            blind_judge.export(report, parts=2, seed=1)
+            packets = "".join(p.read_text(encoding="utf-8") for p in (report / "blind").glob("packet-*.md"))
+            self.assertNotIn("demo-1", packets)  # в пакетах нет идентификаторов кейсов
+            key = _json.loads((report / "blind" / "key.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted(k["round"] for k in key.values()), [1, 1, 2, 2])
+            verdicts = [_json.dumps({"pid": p, "verdict": "B_better" if k["team"] == "B" else "A_better"})
+                        for p, k in key.items()]
+            (report / "blind" / "verdicts-01.jsonl").write_text("\n".join(verdicts), encoding="utf-8")
+            blind_judge.score(report)
+            text = (report / "blind" / "report.md").read_text(encoding="utf-8")
+        self.assertIn("Score = 0.825", text)  # «немного лучше» везде: 0,7·0,75 + 0,3·1
+
+
 class DeadlineTest(unittest.TestCase):
     def test_no_requests_after_deadline(self):
         import time as _time
