@@ -128,7 +128,7 @@ jobs:
                   print(f"| {x['severity']} | {x['rule']} | {x['evidence']} |")
           open("regulation.ok", "w").write("1" if ok else "0")
           PY
-          cat regulation.md | tee -a "$GITHUB_STEP_SUMMARY"
+          tee -a "$GITHUB_STEP_SUMMARY" < regulation.md
           cp "$RUNNER_TEMP/verdict.json" regulation-verdict.json
           echo "ok=$(cat regulation.ok)" >> "$GITHUB_OUTPUT"
       - name: Вердикт — артефакт
