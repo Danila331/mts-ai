@@ -1,21 +1,23 @@
 """Локальный стенд оценки: прогон как на платформе + стиль + проверки + LLM-судья.
 
 Что делает:
-1. Собирает папку данных как на платформе: questions.csv (демо + проверочные вопросы)
+1. Собирает папку данных как на платформе: questions.csv (выборка и/или демо жюри)
    и knowledge-base.zip — и запускает solution.py отдельным процессом.
 2. Опционально так же прогоняет учебный бейзлайн (--baseline), чтобы сравнивать с ним,
    как это делает судья платформы.
 3. Считает стиль ответов против эталона: длина, вопрос в конце, markdown.
-4. Проверяет обязательные/запрещённые факты из eval/checks.json (без LLM).
-5. Если задан ключ, LLM-судья оценивает демо-ответы против эталона (0–10)
-   и попарно против бейзлайна.
+4. Проверяет обязательные/запрещённые факты (must/must_not) без LLM.
+5. Если задан ключ, LLM-судья оценивает ответы против эталона (0–10) с разбивкой
+   по категориям, областям и типам, и попарно против бейзлайна.
 
-    python eval/run_eval.py                 # бот + стиль + проверки (+ судья, если есть ключ)
-    python eval/run_eval.py --baseline      # плюс бейзлайн для сравнения
-    python eval/run_eval.py --only-demo     # без проверочных вопросов
-    python eval/run_eval.py --pred путь.csv # оценить готовый файл ответов без прогона
+    python eval/run_eval.py                       # рабочая часть выборки (dev)
+    python eval/run_eval.py --with-demo --baseline # dev + 18 вопросов жюри, плюс бейзлайн
+    python eval/run_eval.py --set demo            # только демо жюри
+    python eval/run_eval.py --set holdout         # отложенная часть — запускать редко
+    python eval/run_eval.py --filter 'trap|out-of' --limit 50
+    python eval/run_eval.py --pred путь.csv       # оценить готовый файл ответов без прогона
 
-Отчёт: eval/reports/<время>/report.md (+ predictions.csv, details.jsonl).
+Отчёт: eval/reports/<время>/report.md (+ answers.md, predictions.csv, details.jsonl).
 """
 
 from __future__ import annotations
@@ -36,8 +38,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "eval"))
 
 from energybot.llm import Api, env  # noqa: E402
+from validate_dataset import violates  # noqa: E402
 
 JUDGE_PROMPT = """Ты — строгий эксперт, проверяющий ответы ИИ-консультанта МТС EnergyTool (энергетика для бизнеса).
 Сравни ОТВЕТ БОТА с ЭТАЛОННЫМ ОТВЕТОМ на тот же вопрос клиента. Эталон опирается на базу знаний компании и считается верным.
@@ -104,7 +108,7 @@ def run_checks(cases: list, answers: dict) -> list:
     for c in cases:
         a = answers.get(c["id"], "")
         missing = [p for p in c.get("must", []) if not re.search(p, a, re.I)]
-        forbidden = [p for p in c.get("must_not", []) if re.search(p, a, re.I | re.M)]
+        forbidden = [p for p in c.get("must_not", []) if violates(p, a)]
         results.append({"id": c["id"], "category": c["category"], "ok": not missing and not forbidden,
                         "missing": missing, "forbidden": forbidden, "answer": a})
     return results
@@ -149,33 +153,73 @@ def judge_pair(api, question, reference, a, b):
         return None, f"ошибка судьи: {exc}"
 
 
+def load_items(args) -> list:
+    """Демо жюри + расширенная выборка: у каждого кейса свой эталон и проверки."""
+    items = []
+    if args.set in ("demo", "all"):
+        reference = read_csv(Path(args.reference)) if Path(args.reference).is_file() else {}
+        with open(args.questions, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                qid = r["id"].strip()
+                items.append({"id": f"demo-{qid}", "question": r["question"], "reference": reference.get(qid, ""),
+                              "category": "demo", "area": "demo", "type": "dialog" if "Ассистент:" in r["question"] else "single",
+                              "must": [], "must_not": []})
+    if args.set in ("dev", "holdout", "all") and Path(args.dataset).is_file():
+        for line in Path(args.dataset).read_text(encoding="utf-8").splitlines():
+            c = json.loads(line)
+            if args.set == "all" or c.get("split") == args.set:
+                items.append(c)
+    if args.filter:
+        items = [i for i in items if re.search(args.filter, f"{i['id']} {i['category']} {i.get('area', '')}")]
+    if args.limit and len(items) > args.limit:
+        # Равномерный срез по всему списку, а не первые N: так в быстрый прогон попадают все области.
+        step = len(items) / args.limit
+        items = [items[int(i * step)] for i in range(args.limit)]
+    return items
+
+
+def breakdown(values: list, key: str, items: dict) -> list:
+    groups = {}
+    for qid, v in values:
+        if v is not None:
+            groups.setdefault(items[qid].get(key, "?"), []).append(v)
+    return [f"| {g} | {len(v)} | {statistics.mean(v):.2f} |" for g, v in sorted(groups.items())]
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--set", choices=["demo", "dev", "holdout", "all"], default="dev",
+                    help="demo — 18 вопросов жюри; dev — демо не входит, рабочая часть выборки; all — всё")
+    ap.add_argument("--with-demo", action="store_true", help="добавить демо к dev/holdout")
+    ap.add_argument("--dataset", default=str(ROOT / "eval" / "dataset" / "cases.jsonl"))
     ap.add_argument("--questions", default=str(ROOT / "demo_questions.csv"))
     ap.add_argument("--reference", default=str(ROOT / "demo_output.csv"))
-    ap.add_argument("--checks", default=str(ROOT / "eval" / "checks.json"))
+    ap.add_argument("--filter", help="regex по id/категории/области, например 'trap|out-of'")
+    ap.add_argument("--limit", type=int, help="взять N кейсов равномерно по всему набору")
     ap.add_argument("--kb", default=str(ROOT / "knowledge-base"))
     ap.add_argument("--solution", default=str(ROOT / "solution.py"))
     ap.add_argument("--baseline", action="store_true", help="прогнать и учебный бейзлайн")
     ap.add_argument("--pred", help="готовый CSV с ответами вместо прогона")
-    ap.add_argument("--only-demo", action="store_true")
     ap.add_argument("--no-judge", action="store_true")
     args = ap.parse_args()
 
-    with open(args.questions, encoding="utf-8-sig", newline="") as f:
-        demo = [{"id": r["id"].strip(), "question": r["question"]} for r in csv.DictReader(f)]
-    reference = read_csv(Path(args.reference)) if Path(args.reference).is_file() else {}
-    cases = [] if args.only_demo else json.loads(Path(args.checks).read_text(encoding="utf-8"))["cases"]
-    items = demo + [{"id": c["id"], "question": c["question"]} for c in cases]
-    questions = {i["id"]: i["question"] for i in items}
+    items_list = load_items(args)
+    if args.with_demo and args.set in ("dev", "holdout"):
+        demo_args = argparse.Namespace(**{**vars(args), "set": "demo", "filter": None, "limit": None})
+        items_list = load_items(demo_args) + items_list
+    if not items_list:
+        sys.exit("Нет кейсов: проверьте --set/--filter и наличие eval/dataset/cases.jsonl (python eval/build_dataset.py)")
+    items = {i["id"]: i for i in items_list}
+    ids = list(items)
 
     report_dir = ROOT / "eval" / "reports" / time.strftime("%Y%m%d-%H%M%S")
     report_dir.mkdir(parents=True, exist_ok=True)
-    lines = [f"# Отчёт стенда {report_dir.name}\n"]
+    lines = [f"# Отчёт стенда {report_dir.name}\n", f"Набор: {args.set}{' + демо' if args.with_demo else ''}"
+             f"{f', фильтр {args.filter}' if args.filter else ''}; кейсов: {len(ids)}\n"]
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp) / "data"
-        build_data_dir(items, Path(args.kb), data_dir)
+        build_data_dir(items_list, Path(args.kb), data_dir)
         if args.pred:
             answers, elapsed = read_csv(Path(args.pred)), None
         else:
@@ -189,57 +233,60 @@ def main():
     if elapsed is not None:
         lines.append(f"Бот: {len(answers)} ответов за {elapsed:.0f} c "
                      f"({elapsed / max(1, len(answers)):.1f} c на вопрос при параллельной обработке)\n")
-    fallbacks = sum("в моих материалах нет, поэтому не буду гадать" in a for a in answers.values())
+    fallbacks = sum("в моих материалах нет, поэтому не буду гадать" in answers.get(i, "") for i in ids)
     lines.append(f"Запасных ответов (сбой LLM): {fallbacks}\n")
 
     # Стиль
-    demo_ids = [i["id"] for i in demo]
-    lines.append("## Стиль (демо-вопросы)\n")
-    cols = {"бот": style([answers.get(i, "") for i in demo_ids])}
-    if reference:
-        cols["эталон"] = style([reference[i] for i in demo_ids if i in reference])
+    lines.append("## Стиль\n")
+    cols = {"бот": style([answers.get(i, "") for i in ids]),
+            "эталон": style([items[i]["reference"] for i in ids if items[i].get("reference")])}
     if baseline:
-        cols["бейзлайн"] = style([baseline.get(i, "") for i in demo_ids])
-    keys = list(next(iter(cols.values())).keys())
+        cols["бейзлайн"] = style([baseline.get(i, "") for i in ids])
+    keys = list(cols["бот"].keys())
     lines.append("| метрика | " + " | ".join(cols) + " |")
     lines.append("|---|" + "---|" * len(cols))
     for k in keys:
         lines.append(f"| {k} | " + " | ".join(str(c[k]) for c in cols.values()) + " |")
     lines.append("")
 
-    # Проверки фактов
+    # Детерминированные проверки must / must_not
     details = []
-    if cases:
-        res = run_checks(cases, answers)
+    checked = [items[i] for i in ids if items[i].get("must") or items[i].get("must_not")]
+    if checked:
+        res = run_checks(checked, answers)
         ok = sum(r["ok"] for r in res)
-        lines.append(f"## Проверки фактов и ловушек: {ok}/{len(res)}\n")
+        lines.append(f"## Проверки фактов и ловушек: {ok}/{len(res)} ({100 * ok // len(res)}%)\n")
+        lines.append("| категория | пройдено |")
+        lines.append("|---|---|")
         by_cat = {}
         for r in res:
             by_cat.setdefault(r["category"], []).append(r["ok"])
-        lines.append(", ".join(f"{k}: {sum(v)}/{len(v)}" for k, v in sorted(by_cat.items())) + "\n")
+        lines += [f"| {k} | {sum(v)}/{len(v)} |" for k, v in sorted(by_cat.items())]
+        lines.append("")
         for r in res:
             if not r["ok"]:
                 lines.append(f"- ❌ `{r['id']}` нет: {r['missing']} запрещено: {r['forbidden']}\n  > {r['answer']}")
         lines.append("")
-        details += [{"type": "check", **r} for r in res]
+        details += [{"kind": "check", **r} for r in res]
 
-    # LLM-судья
+    # LLM-судья против эталона (и попарно против бейзлайна)
     api = None if args.no_judge else judge_api()
-    if api and reference:
+    judged = [i for i in ids if items[i].get("reference")]
+    if api and judged:
         lines.append(f"## LLM-судья ({api.llm_model}) против эталона\n")
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            scores = list(pool.map(lambda i: judge_one(api, questions[i], reference[i], answers.get(i, "")),
-                                   [i for i in demo_ids if i in reference]))
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            scores = list(pool.map(lambda i: judge_one(api, items[i]["question"], items[i]["reference"],
+                                                       answers.get(i, "")), judged))
             pairs = []
             if baseline:
-                pairs = list(pool.map(lambda i: judge_pair(api, questions[i], reference[i], answers.get(i, ""),
-                                                           baseline.get(i, "")),
-                                      [i for i in demo_ids if i in reference]))
+                pairs = list(pool.map(lambda i: judge_pair(api, items[i]["question"], items[i]["reference"],
+                                                           answers.get(i, ""), baseline.get(i, "")), judged))
         valid = [s for s, _ in scores if s is not None]
         if len(valid) < len(scores):
             lines.append(f"Сбоев судьи: {len(scores) - len(valid)} — эти вопросы не учтены в среднем\n")
         if valid:
-            lines.append(f"Средний балл: **{statistics.mean(valid):.2f} / 10** (n={len(valid)})\n")
+            lines.append(f"Средний балл: **{statistics.mean(valid):.2f} / 10** (n={len(valid)}), "
+                         f"доля ≥8: {100 * sum(v >= 8 for v in valid) // len(valid)}%\n")
         if pairs:
             wins = sum(w == "A" for w, _ in pairs)
             ties = sum(w == "tie" for w, _ in pairs)
@@ -247,35 +294,44 @@ def main():
             failed = sum(w is None for w, _ in pairs)
             lines.append(f"Против бейзлайна: побед {wins}, ничьих {ties}, поражений {losses}"
                          f"{f', сбоев судьи {failed}' if failed else ''}\n")
-        lines.append("| id | балл | вердикт |")
-        lines.append("|---|---|---|")
-        for i, (s, v) in zip([i for i in demo_ids if i in reference], scores):
-            lines.append(f"| {i} | {s} | {v} |")
-            details.append({"type": "judge", "id": i, "score": s, "verdict": v, "answer": answers.get(i, "")})
+        pairs_scores = [(i, s) for i, (s, _) in zip(judged, scores)]
+        for key, title in (("category", "категория"), ("area", "область"), ("type", "тип")):
+            lines.append(f"| {title} | n | средний балл |")
+            lines.append("|---|---|---|")
+            lines += breakdown(pairs_scores, key, items)
+            lines.append("")
+        worst = sorted([(s, i, v) for i, (s, v) in zip(judged, scores) if s is not None])[:15]
+        lines.append("### Худшие ответы\n")
+        for s, i, v in worst:
+            lines.append(f"- **{i}** ({s}): {v}\n  - вопрос: {items[i]['question']}\n  - бот: {answers.get(i, '')}"
+                         f"\n  - эталон: {items[i]['reference']}")
         lines.append("")
+        for i, (s, v) in zip(judged, scores):
+            details.append({"kind": "judge", "id": i, "score": s, "verdict": v})
     elif not args.no_judge:
         lines.append("## LLM-судья\nПропущен: нет ключа (LLM_BASE_URL/LLM_API_KEY или JUDGE_*).\n")
 
-    # Все ответы
-    lines.append("## Ответы\n")
-    for i in demo_ids + [c["id"] for c in cases]:
-        lines.append(f"**{i}.** {questions[i]}\n\n- бот: {answers.get(i, '')}")
-        if i in reference:
-            lines.append(f"- эталон: {reference[i]}")
+    # Все ответы — отдельным файлом, чтобы отчёт оставался читаемым
+    full = []
+    for i in ids:
+        full.append(f"**{i}** [{items[i].get('category')}] {items[i]['question']}\n\n- бот: {answers.get(i, '')}")
+        if items[i].get("reference"):
+            full.append(f"- эталон: {items[i]['reference']}")
         if i in baseline:
-            lines.append(f"- бейзлайн: {baseline[i]}")
-        lines.append("")
+            full.append(f"- бейзлайн: {baseline[i]}")
+        full.append("")
+    (report_dir / "answers.md").write_text("\n".join(full), encoding="utf-8")
 
     with open(report_dir / "predictions.csv", "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, quoting=csv.QUOTE_ALL)
         w.writerow(["id", "answer"])
-        w.writerows((i, answers.get(i, "")) for i in questions)
+        w.writerows((i, answers.get(i, "")) for i in ids)
     with open(report_dir / "details.jsonl", "w", encoding="utf-8") as f:
         for d in details:
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
     (report_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
-    print("\n".join(lines[: lines.index("## Ответы\n")]))
-    print(f"\nПолный отчёт: {report_dir / 'report.md'}")
+    print("\n".join(lines))
+    print(f"\nОтчёт: {report_dir / 'report.md'}; все ответы: {report_dir / 'answers.md'}")
 
 
 if __name__ == "__main__":

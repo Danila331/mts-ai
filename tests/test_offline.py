@@ -24,6 +24,9 @@ from energybot.llm import strip_thinking  # noqa: E402
 from energybot.pipeline import tidy  # noqa: E402
 from mock_api import MockApi  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "eval"))
+from validate_dataset import load_cases, validate, violates  # noqa: E402
+
 KB_DIR = ROOT / "knowledge-base"
 
 
@@ -81,6 +84,24 @@ class PostprocessTest(unittest.TestCase):
 
     def test_tidy_removes_markdown(self):
         self.assertEqual(tidy("Консультант: **Да**, можно:\n- раз\n- два\nВопрос?"), "Да, можно: раз два Вопрос?")
+
+
+class DatasetTest(unittest.TestCase):
+    def test_dataset_is_valid_and_split(self):
+        path = ROOT / "eval" / "dataset" / "cases.jsonl"
+        cases = load_cases([path])
+        errors, _ = validate(cases, KnowledgeBase.load(KB_DIR))
+        self.assertEqual(errors, [])
+        self.assertGreaterEqual(len(cases), 450)
+        holdout = sum(c["split"] == "holdout" for c in cases) / len(cases)
+        self.assertTrue(0.25 <= holdout <= 0.35, holdout)
+
+    def test_must_not_respects_negation(self):
+        self.assertFalse(violates("гарантируем", "Мы не гарантируем экономию."))
+        self.assertTrue(violates("гарантируем", "Гарантируем 15% экономии."))
+        self.assertFalse(violates("50\\s?%", "Скидку 50% пообещать не могу."))
+        self.assertTrue(violates("^да\\b", "Да, конечно."))
+        self.assertTrue(violates("не обрабатыва", "Нельзя утверждать, что не обрабатывает."))
 
 
 class SolutionEndToEndTest(unittest.TestCase):
