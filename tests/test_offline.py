@@ -81,6 +81,22 @@ class DialogTest(unittest.TestCase):
         turns = parse("Пользователь: Привет\nАссистент: Чем помочь?")
         self.assertEqual(turns[-1]["role"], "user")
 
+    def test_lexical_window_limits_old_history(self):
+        """Смена темы: ранние реплики не должны размывать лексический запрос."""
+        q = ("Пользователь: Расскажите про солнечные панели на кровле.\n"
+             "Ассистент: Уточню.\n"
+             "Пользователь: Регион Татарстан.\n"
+             "Ассистент: Понял.\n"
+             "Пользователь: Кровля плоская.\n"
+             "Ассистент: Хорошо.\n"
+             "Пользователь: Мощность 100 кВт.\n"
+             "Ассистент: Принял.\n"
+             "Пользователь: А теперь про тарифы: что выгоднее, третья или четвёртая категория?")
+        lexical, semantic, last = search_queries(parse(q))
+        self.assertIn("тарифы", lexical)
+        self.assertIn("Мощность 100 кВт", lexical)
+        self.assertNotIn("солнечные панели на кровле", lexical)  # первая тема за пределами окна
+
 
 class PostprocessTest(unittest.TestCase):
     def test_strip_thinking(self):

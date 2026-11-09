@@ -35,11 +35,17 @@ def parse(question: str) -> list:
 
 
 def search_queries(turns: list) -> tuple:
-    """Запросы для поиска: лексический (весь контекст, последний вопрос с весом) и смысловой."""
+    """Запросы для поиска: лексический (последний вопрос с весом, ограниченное окно истории)
+    и смысловой (связный текст ситуации клиента).
+
+    Окно — последние три реплики пользователя: вся история в лексическом запросе
+    размывает поиск при смене темы (клиент перешёл с солнечной станции на учёт,
+    а старые термины продолжают тянуть чанки про панели).
+    """
     last = turns[-1]["content"]
     users = [t["content"] for t in turns[:-1] if t["role"] == "user"]
     prev_assistant = next((t["content"] for t in reversed(turns[:-1]) if t["role"] == "assistant"), "")
-    lexical = " ".join([last, last] + users + [prev_assistant])
+    lexical = " ".join([last, last] + users[-3:] + [prev_assistant])
     # Для эмбеддинга и реранкера — связный текст ситуации клиента.
     semantic = " ".join(users[-2:] + ([prev_assistant] if prev_assistant else []) + [last])
     return lexical, semantic, last
