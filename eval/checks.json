@@ -1,0 +1,363 @@
+{
+  "_comment": "Проверочные вопросы сверх демо-набора. must — каждый regex должен найтись в ответе; must_not — ни один не должен. Регистр не важен. docs — где ответ в базе (для оценки поиска). Факты сверены с базой знаний; ловушки 'site' взяты с energytool.mts.ru, где данные расходятся с базой.",
+  "cases": [
+    {
+      "id": "trap-solar-range",
+      "category": "trap-site",
+      "question": "На сайте видел, что вы ставите солнечные станции от 5 кВт до сотен МВт. Нам нужна на 8 кВт, сделаете?",
+      "must": [
+        "15"
+      ],
+      "must_not": [
+        "сотен (мвт|мегаватт)"
+      ],
+      "docs": [
+        "23-solar.md"
+      ]
+    },
+    {
+      "id": "trap-askue-count",
+      "category": "trap-site",
+      "question": "Сколько приборов учёта уже подключено к вашей облачной платформе?",
+      "must": [
+        "90 ?000|90 тыс"
+      ],
+      "must_not": [
+        "24 ?000"
+      ],
+      "docs": [
+        "22-askue.md",
+        "01-numbers-and-indicators.md",
+        "20-portfolio.md"
+      ]
+    },
+    {
+      "id": "trap-export-limit",
+      "category": "trap-prior",
+      "question": "Сколько мощности юрлицо может отдавать в сеть от своей солнечной станции?",
+      "must": [
+        "150 ?кВт"
+      ],
+      "docs": [
+        "15-microgeneration.md",
+        "23-solar.md"
+      ]
+    },
+    {
+      "id": "trap-mining",
+      "category": "out-of-kb",
+      "question": "Вы умеете выявлять майнинговые фермы в нашей сети?",
+      "must": [
+        "специалист|в материалах нет|нет информации|не могу"
+      ],
+      "docs": []
+    },
+    {
+      "id": "trap-vodokanal",
+      "category": "out-of-kb",
+      "question": "Расскажите подробнее про ваш продукт «Цифровой водоканал» и датчики давления.",
+      "must": [
+        "специалист|в материалах нет|нет информации|не могу"
+      ],
+      "docs": []
+    },
+    {
+      "id": "trap-termokontur",
+      "category": "out-of-kb",
+      "question": "Что умеет ваш Термоконтур для мониторинга температуры на складе?",
+      "must": [
+        "специалист|в материалах нет|нет информации|не могу"
+      ],
+      "docs": []
+    },
+    {
+      "id": "oos-uspd",
+      "category": "out-of-scope",
+      "question": "Как настроить УСПД, чтобы он опрашивал счётчики раз в час?",
+      "must": [
+        "специалист|не входит|вне"
+      ],
+      "docs": [
+        "02-product-scope-and-limits.md",
+        "22-askue.md"
+      ]
+    },
+    {
+      "id": "oos-weather",
+      "category": "out-of-scope",
+      "question": "Какая завтра будет погода в Москве?",
+      "must": [
+        "energytool|не могу|вне|не относится|только"
+      ],
+      "docs": []
+    },
+    {
+      "id": "orem-500kw",
+      "category": "fact",
+      "question": "У нас завод на 500 кВт присоединённой мощности. Можно выйти на оптовый рынок?",
+      "must": [
+        "750"
+      ],
+      "must_not": [
+        "^да\\b"
+      ],
+      "docs": [
+        "21-orem.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "orem-direct",
+      "category": "fact",
+      "question": "У нас 30 МВт. Мы можем стать прямым участником оптового рынка?",
+      "must": [
+        "20 ?МВт"
+      ],
+      "docs": [
+        "21-orem.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "orem-kamchatka",
+      "category": "fact",
+      "question": "Предприятие на Камчатке, мощность 3 МВт. Поможете выйти на оптовый рынок?",
+      "must": [
+        "камчат|изолирован|не (функционирует|работает)"
+      ],
+      "must_not": [
+        "^да\\b"
+      ],
+      "docs": [
+        "21-orem.md",
+        "02-product-scope-and-limits.md",
+        "10-market.md"
+      ]
+    },
+    {
+      "id": "solar-price-15",
+      "category": "fact",
+      "question": "Сколько примерно стоит солнечная станция на 15 кВт?",
+      "must": [
+        "1 млн|миллион",
+        "ориентир|индикатив|обследован|предваритель"
+      ],
+      "docs": [
+        "23-solar.md",
+        "01-numbers-and-indicators.md"
+      ]
+    },
+    {
+      "id": "solar-payback",
+      "category": "fact",
+      "question": "За сколько лет окупится солнечная станция?",
+      "must": [
+        "7.{0,3}9",
+        "4.{0,3}6"
+      ],
+      "docs": [
+        "23-solar.md",
+        "01-numbers-and-indicators.md"
+      ]
+    },
+    {
+      "id": "solar-blackout",
+      "category": "fact",
+      "question": "Если у нас отключат электричество, обычная сетевая солнечная станция продолжит питать объект?",
+      "must": [
+        "нет|не (работает|обеспечивает|будет)|отключается",
+        "гибридн|накопител"
+      ],
+      "docs": [
+        "23-solar.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "solar-sell",
+      "category": "fact",
+      "question": "Хотим зарабатывать на продаже излишков в сеть. Под это построите станцию?",
+      "must": [
+        "не (стоит|следует|должн|рекоменд)|основ"
+      ],
+      "docs": [
+        "15-microgeneration.md",
+        "23-solar.md"
+      ]
+    },
+    {
+      "id": "solar-home",
+      "category": "fact",
+      "question": "Хочу солнечные панели на свой частный дом. Сделаете?",
+      "must": [
+        "бизнес|частн"
+      ],
+      "docs": [
+        "23-solar.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "solar-brand",
+      "category": "fact",
+      "question": "Панели какого производителя вы ставите?",
+      "must": [
+        "grade a|не (называ|раскрыва)|специалист"
+      ],
+      "docs": [
+        "23-solar.md"
+      ]
+    },
+    {
+      "id": "photo-gas",
+      "category": "fact",
+      "question": "Ваше распознавание по фото работает с газовыми счётчиками?",
+      "must": [
+        "электроэнерг|вод",
+        "доработ|отдельн|не (указан|поддерж)"
+      ],
+      "docs": [
+        "25-meter-reading.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "photo-water-acc",
+      "category": "fact",
+      "question": "С какой точностью сервис распознаёт показания счётчиков воды?",
+      "must": [
+        "90"
+      ],
+      "docs": [
+        "25-meter-reading.md",
+        "01-numbers-and-indicators.md"
+      ]
+    },
+    {
+      "id": "sell-power",
+      "category": "fact",
+      "question": "Вы продаёте электроэнергию дешевле, чем наш сбыт?",
+      "must": [
+        "не (продаём|продает|продаёт|являемся|является)"
+      ],
+      "docs": [
+        "20-portfolio.md",
+        "26-general.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "losses-proof",
+      "category": "fact",
+      "question": "Ваша система поиска потерь сама докажет, что абонент ворует электричество?",
+      "must": [
+        "вероятност|выездн|провер"
+      ],
+      "docs": [
+        "24-losses.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "losses-onprem",
+      "category": "fact",
+      "question": "Можно развернуть поиск коммерческих потерь на наших серверах?",
+      "must": [
+        "инфраструктур|не предусмотр|облак|мтс"
+      ],
+      "docs": [
+        "24-losses.md",
+        "02-product-scope-and-limits.md",
+        "26-general.md"
+      ]
+    },
+    {
+      "id": "losses-pd",
+      "category": "fact",
+      "question": "Для поиска потерь нужно передавать вам персональные данные абонентов?",
+      "must": [
+        "не (требу|нужн)|обезлич"
+      ],
+      "docs": [
+        "24-losses.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "askue-billing",
+      "category": "fact",
+      "question": "Ваша платформа будет выставлять счета нашим абонентам?",
+      "must": [
+        "не (выставля|рассчит|формир)"
+      ],
+      "docs": [
+        "22-askue.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "askue-price",
+      "category": "fact",
+      "question": "Сколько стоит облачная платформа учёта?",
+      "must": [
+        "25 ?000|25 тыс"
+      ],
+      "docs": [
+        "22-askue.md",
+        "01-numbers-and-indicators.md"
+      ]
+    },
+    {
+      "id": "clients",
+      "category": "fact",
+      "question": "Назовите ваших клиентов, которые уже поставили солнечные станции.",
+      "must": [
+        "не (раскрыва|называ|можем|могу)"
+      ],
+      "docs": [
+        "23-solar.md",
+        "02-product-scope-and-limits.md"
+      ]
+    },
+    {
+      "id": "dlg-snt",
+      "category": "dialog",
+      "question": "Пользователь: Мы СНТ, 120 участков, счётчики стоят не у всех.\nАссистент: Что для вас сейчас важнее: наладить учёт или работать с должниками?\nПользователь: Сначала учёт. Что вы можете предложить?",
+      "must": [
+        "платформ|учёт|учет"
+      ],
+      "docs": [
+        "20-portfolio.md",
+        "22-askue.md"
+      ]
+    },
+    {
+      "id": "dlg-sbyt-losses",
+      "category": "dialog",
+      "question": "Пользователь: Мы энергосбытовая компания, своих сетей у нас нет.\nАссистент: Какую задачу хотите решить?\nПользователь: Искать хищения электроэнергии. Ваш сервис нам подойдёт?",
+      "must": [
+        "сетев"
+      ],
+      "docs": [
+        "24-losses.md",
+        "02-product-scope-and-limits.md",
+        "20-portfolio.md"
+      ]
+    },
+    {
+      "id": "dlg-orem-small",
+      "category": "dialog",
+      "question": "Пользователь: Хотим снизить затраты на электроэнергию.\nАссистент: Какая у вас присоединённая мощность?\nПользователь: Около 300 кВт, потребляем примерно 150 тысяч кВт·ч в месяц. Оптовый рынок нам поможет?",
+      "must": [
+        "750"
+      ],
+      "must_not": [
+        "^да\\b"
+      ],
+      "docs": [
+        "21-orem.md",
+        "02-product-scope-and-limits.md"
+      ]
+    }
+  ]
+}

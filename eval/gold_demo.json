@@ -1,0 +1,21 @@
+{
+  "_comment": "Документы базы, на которых построен эталонный ответ demo_output.csv. Первый — главный.",
+  "1": ["23-solar.md"],
+  "2": ["23-solar.md"],
+  "3": ["23-solar.md", "26-general.md"],
+  "4": ["23-solar.md", "02-product-scope-and-limits.md"],
+  "5": ["22-askue.md"],
+  "6": ["22-askue.md", "20-portfolio.md"],
+  "7": ["22-askue.md", "20-portfolio.md"],
+  "8": ["25-meter-reading.md"],
+  "9": ["25-meter-reading.md"],
+  "10": ["14-tariffs.md", "11-price-categories.md"],
+  "11": ["17-faq.md", "12-power-thresholds.md", "01-numbers-and-indicators.md"],
+  "12": ["21-orem.md", "02-product-scope-and-limits.md"],
+  "13": ["26-general.md", "03-calculation-and-requests.md", "20-portfolio.md", "21-orem.md"],
+  "14": ["23-solar.md"],
+  "15": ["22-askue.md", "25-meter-reading.md", "03-calculation-and-requests.md"],
+  "16": ["24-losses.md", "03-calculation-and-requests.md"],
+  "17": ["14-tariffs.md", "11-price-categories.md"],
+  "18": ["03-calculation-and-requests.md", "22-askue.md", "26-general.md"]
+}
