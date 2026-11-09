@@ -238,18 +238,22 @@ class Consultant:
             return draft_a
 
     def check(self, text: str, messages: list, materials: str, turns: list, fast: bool) -> tuple:
-        """Числа — только из материалов и диалога, длина — в разумных пределах."""
+        """Числа — только из материалов и диалога, длина — в разумных пределах,
+        на вопрос «да/нет» — прямой ответ первым словом (скелет эталона жюри)."""
         dialog = "\n".join(t["content"] for t in turns)
         bad = unknown_numbers(text, materials, dialog)
         too_long = word_count(text) > MAX_WORDS
-        if not bad and not too_long:
+        not_direct = self._expects_direct(turns) and not re.match(
+            r"^(да|нет|можно|нельзя|пока нет|начать|начни|конечно|не совсем|не обязательно)\b",
+            text.lower())
+        if not bad and not too_long and not not_direct:
             return text, {}
-        guard = {"unknown_numbers": bad, "too_long": too_long}
+        guard = {"unknown_numbers": bad, "too_long": too_long, "not_direct": not_direct}
         if not fast:
             try:
                 fixed = tidy(self.api.chat(messages + [
                     {"role": "assistant", "content": text},
-                    {"role": "user", "content": repair_instruction(bad, too_long)},
+                    {"role": "user", "content": repair_instruction(bad, too_long, not_direct)},
                 ]))
                 if fixed:
                     text, guard["repaired"] = fixed, True
@@ -261,3 +265,10 @@ class Consultant:
             if word_count(stripped) >= 8:
                 text, guard["stripped"] = stripped, still_bad
         return text, guard
+
+    @staticmethod
+    def _expects_direct(turns: list) -> bool:
+        """Последняя реплика — вопрос, предполагающий «да/нет»."""
+        last = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
+        return bool(re.search(r"(можно|стоит ли|подойд|подходит|подходим|выгодн|хватит|есть ли|сможете|"
+                              r"предлагаете|разбер[её]т|проверите|переносится|работает|\bли\b)", last.lower()))

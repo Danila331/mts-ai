@@ -102,10 +102,14 @@ class Retriever:
     def candidates(self, query: str, query_vec=None, n: int = 20) -> list:
         lex = self.bm25.scores(tokens(query, expand=True))
         ranks = [np.argsort(-lex)]
-        if self.vectors is not None and query_vec is not None:
+        # Несовпадение размерности = индекс посчитан другой моделью: работаем на BM25.
+        if self.vectors is not None and query_vec is not None \
+                and len(query_vec) == self.vectors.shape[1]:
             q = np.asarray(query_vec, dtype=np.float32)
             q /= np.linalg.norm(q) + 1e-9
-            ranks.append(np.argsort(-(self.vectors @ q)))
+            with np.errstate(all="ignore"):
+                sims = np.nan_to_num(self.vectors @ q, nan=0.0, posinf=0.0, neginf=0.0)
+            ranks.append(np.argsort(-sims))
         # Reciprocal Rank Fusion.
         fused = Counter()
         for order in ranks:

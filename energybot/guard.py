@@ -93,7 +93,7 @@ def strip_sentences(answer: str, bad: list) -> str:
     return " ".join(keep).strip()
 
 
-def repair_instruction(bad: list, too_long: bool) -> str:
+def repair_instruction(bad: list, too_long: bool, not_direct: bool = False) -> str:
     parts = ["[Служебная проверка ответа.]"]
     if bad:
         parts.append(
@@ -103,5 +103,7 @@ def repair_instruction(bad: list, too_long: bool) -> str:
         )
     if too_long:
         parts.append("Ответ слишком длинный: сократи до 2–4 предложений, примерно 40–60 слов, сохранив главное.")
+    if not_direct:
+        parts.append("Вопрос клиента предполагает «да/нет»: начни с прямого ответа («Да, …», «Нет, …», «Пока нет: …»), затем факт из материалов.")
     parts.append("Сохрани стиль и смысл ответа. Выведи только исправленный ответ клиенту, без пояснений.")
     return " ".join(parts)
