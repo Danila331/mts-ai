@@ -7,11 +7,14 @@
    как это делает судья платформы.
 3. Считает стиль ответов против эталона: длина, вопрос в конце, markdown.
 4. Проверяет обязательные/запрещённые факты (must/must_not) без LLM.
-5. Если задан ключ, LLM-судья оценивает ответы против эталона (0–10) с разбивкой
-   по категориям, областям и типам, и попарно против бейзлайна.
+5. Если задан ключ, работает LLM-судья. С ответами бейзлайна — по методике платформы
+   (docs/tech-regulations.md, раздел 8): два раунда с перестановкой, Score = 0,7·Match Rate +
+   0,3·Win Rate. Без бейзлайна — абсолютная оценка 0–10 против эталона. Разбивка по
+   категориям, областям и типам.
 
     python eval/run_eval.py                       # рабочая часть выборки (dev)
-    python eval/run_eval.py --with-demo --baseline # dev + 18 вопросов жюри, плюс бейзлайн
+    python eval/run_eval.py --with-demo --baseline # dev + демо жюри, Score как на платформе
+    python eval/run_eval.py --baseline-pred eval/reports/<время>/baseline/submission.csv  # бейзлайн из кэша
     python eval/run_eval.py --set demo            # только демо жюри
     python eval/run_eval.py --set holdout         # отложенная часть — запускать редко
     python eval/run_eval.py --filter 'trap|out-of' --limit 50
@@ -55,9 +58,27 @@ JUDGE_PROMPT = """Ты — строгий эксперт, проверяющий
 
 Верни строго JSON: {"score": <0-10>, "verdict": "<одна фраза: главное отличие от эталона>"}"""
 
-PAIR_PROMPT = """Ты — эксперт, сравнивающий два ответа ИИ-консультанта МТС EnergyTool с эталоном.
-Какой ответ ближе к эталону по сути (вывод, факты, оговорки), без выдумок и в стиле краткого консультанта?
-Верни строго JSON: {"winner": "A" | "B" | "tie", "reason": "<одна фраза>"}"""
+# Попарное сравнение по методике платформы (docs/tech-regulations.md, раздел 8):
+# ответ команды сравнивается с бейзлайном, ориентир — эталонный ответ (golden).
+PAIR_PROMPT = """Ты — судья, сравнивающий два ответа ИИ-консультанта МТС EnergyTool (энергетика для бизнеса) на один вопрос клиента.
+Ориентируйся на ЭТАЛОННЫЙ ОТВЕТ: он опирается на базу знаний компании и считается верным.
+
+Чем лучше ответ:
+- совпадает с эталоном по сути: тот же вывод (да/нет/что делать), ключевые факты, цифры и оговорки;
+- не содержит выдуманных фактов, цифр, обещаний и противоречий эталону;
+- отвечает именно на последний вопрос клиента с учётом истории диалога;
+- краток и понятен, как консультант; уместно уточняет данные клиента.
+
+Сравни ОТВЕТ B с ОТВЕТОМ A и выбери ровно один вердикт:
+- "B_much_better" — B значительно лучше A;
+- "B_better" — B немного лучше A;
+- "equal" — сопоставимы по качеству;
+- "A_better" — B немного хуже A;
+- "A_much_better" — B значительно хуже A.
+
+Верни строго JSON: {"verdict": "<вердикт>", "reason": "<одна фраза>"}"""
+
+VERDICT_SCORE = {"B_much_better": 1.0, "B_better": 0.75, "equal": 0.5, "A_better": 0.25, "A_much_better": 0.0}
 
 
 def read_csv(path: Path, key: str = "answer") -> dict:
@@ -142,15 +163,39 @@ def judge_one(api, question, reference, answer):
         return None, f"ошибка судьи: {exc}"
 
 
-def judge_pair(api, question, reference, a, b):
-    msg = f"ВОПРОС:\n{question}\n\nЭТАЛОН:\n{reference}\n\nОТВЕТ A:\n{a}\n\nОТВЕТ B:\n{b}"
+def judge_round(api, question, reference, a, b):
+    """Один раунд: оценка ответа B относительно A (1.0 … 0.0) или None при ошибке судьи."""
+    msg = f"ВОПРОС КЛИЕНТА:\n{question}\n\nЭТАЛОННЫЙ ОТВЕТ:\n{reference}\n\nОТВЕТ A:\n{a}\n\nОТВЕТ B:\n{b}"
     try:
         out = parse_json(api.chat([{"role": "system", "content": PAIR_PROMPT}, {"role": "user", "content": msg}]))
-        if out.get("winner") not in ("A", "B", "tie"):
-            return None, "судья вернул ответ не в формате JSON"
-        return out["winner"], out.get("reason", "")
     except Exception as exc:  # noqa: BLE001
         return None, f"ошибка судьи: {exc}"
+    if out.get("verdict") not in VERDICT_SCORE:
+        return None, "судья вернул ответ не в формате JSON"
+    return VERDICT_SCORE[out["verdict"]], out.get("reason", "")
+
+
+def judge_vs_baseline(api, question, reference, team, baseline):
+    """Два раунда с перестановкой, как на платформе. Балл команды за вопрос — 0…1 или None."""
+    s1, r1 = judge_round(api, question, reference, baseline, team)  # A — baseline, B — команда
+    s2, r2 = judge_round(api, question, reference, team, baseline)  # A — команда, B — baseline
+    if s1 is None or s2 is None:
+        return None, r1 if s1 is None else r2
+    return (s1 + (1 - s2)) / 2, f"R1: {r1} | R2: {r2}"
+
+
+def platform_metrics(scores: list) -> dict:
+    """Match Rate, Win Rate и итоговый Score по формуле регламента (ошибки судьи исключены)."""
+    valid = [s for s in scores if s is not None]
+    if not valid:
+        return {"n": 0, "match_rate": None, "win_rate": None, "score": None, "wins": 0, "losses": 0, "ties": 0}
+    wins = sum(s > 0.5 for s in valid)
+    losses = sum(s < 0.5 for s in valid)
+    match_rate = sum(valid) / len(valid)
+    win_rate = wins / (wins + losses) if wins + losses else 0.5
+    return {"n": len(valid), "match_rate": match_rate, "win_rate": win_rate,
+            "score": 0.7 * match_rate + 0.3 * win_rate, "wins": wins, "losses": losses,
+            "ties": len(valid) - wins - losses}
 
 
 def load_items(args) -> list:
@@ -199,6 +244,8 @@ def main():
     ap.add_argument("--kb", default=str(ROOT / "knowledge-base"))
     ap.add_argument("--solution", default=str(ROOT / "solution.py"))
     ap.add_argument("--baseline", action="store_true", help="прогнать и учебный бейзлайн")
+    ap.add_argument("--baseline-pred", help="готовые ответы бейзлайна (CSV) вместо прогона, например "
+                                            "eval/reports/<время>/baseline/submission.csv")
     ap.add_argument("--pred", help="готовый CSV с ответами вместо прогона")
     ap.add_argument("--no-judge", action="store_true")
     args = ap.parse_args()
@@ -224,8 +271,8 @@ def main():
             answers, elapsed = read_csv(Path(args.pred)), None
         else:
             answers, elapsed = run_solution(Path(args.solution), data_dir, report_dir / "bot", debug=True)
-        baseline = {}
-        if args.baseline:
+        baseline = read_csv(Path(args.baseline_pred)) if args.baseline_pred else {}
+        if args.baseline and not baseline:
             baseline, b_elapsed = run_solution(ROOT / "sample_submission" / "solution.py", data_dir,
                                                report_dir / "baseline", debug=False)
             lines.append(f"Бейзлайн: {len(baseline)} ответов за {b_elapsed:.0f} c\n")
@@ -269,45 +316,59 @@ def main():
         lines.append("")
         details += [{"kind": "check", **r} for r in res]
 
-    # LLM-судья против эталона (и попарно против бейзлайна)
+    # LLM-судья. С ответами бейзлайна — ровно методика платформы (2 раунда, Match/Win Rate, Score),
+    # без них — абсолютная оценка 0–10 против эталона.
     api = None if args.no_judge else judge_api()
     judged = [i for i in ids if items[i].get("reference")]
     if api and judged:
-        lines.append(f"## LLM-судья ({api.llm_model}) против эталона\n")
+        platform_mode = bool(baseline)
+        missing = [i for i in judged if not baseline.get(i)] if platform_mode else []
+        if missing:
+            lines.append(f"⚠️ Нет ответов бейзлайна для {len(missing)} вопросов (например {missing[:3]}) — "
+                         f"пересоберите кэш бейзлайна на этом наборе (--baseline).\n")
         with ThreadPoolExecutor(max_workers=6) as pool:
-            scores = list(pool.map(lambda i: judge_one(api, items[i]["question"], items[i]["reference"],
-                                                       answers.get(i, "")), judged))
-            pairs = []
-            if baseline:
-                pairs = list(pool.map(lambda i: judge_pair(api, items[i]["question"], items[i]["reference"],
-                                                           answers.get(i, ""), baseline.get(i, "")), judged))
-        valid = [s for s, _ in scores if s is not None]
-        if len(valid) < len(scores):
-            lines.append(f"Сбоев судьи: {len(scores) - len(valid)} — эти вопросы не учтены в среднем\n")
-        if valid:
-            lines.append(f"Средний балл: **{statistics.mean(valid):.2f} / 10** (n={len(valid)}), "
-                         f"доля ≥8: {100 * sum(v >= 8 for v in valid) // len(valid)}%\n")
-        if pairs:
-            wins = sum(w == "A" for w, _ in pairs)
-            ties = sum(w == "tie" for w, _ in pairs)
-            losses = sum(w == "B" for w, _ in pairs)
-            failed = sum(w is None for w, _ in pairs)
-            lines.append(f"Против бейзлайна: побед {wins}, ничьих {ties}, поражений {losses}"
-                         f"{f', сбоев судьи {failed}' if failed else ''}\n")
-        pairs_scores = [(i, s) for i, (s, _) in zip(judged, scores)]
+            if platform_mode:
+                scores = list(pool.map(lambda i: judge_vs_baseline(api, items[i]["question"], items[i]["reference"],
+                                                                   answers.get(i, ""), baseline.get(i, "")), judged))
+            else:
+                scores = list(pool.map(lambda i: judge_one(api, items[i]["question"], items[i]["reference"],
+                                                           answers.get(i, "")), judged))
+        failed = sum(s is None for s, _ in scores)
+        if platform_mode:
+            m = platform_metrics([s for s, _ in scores])
+            lines.append(f"## LLM-судья ({api.llm_model}) по методике платформы: против бейзлайна, ориентир — эталон\n")
+            if m["n"]:
+                lines.append(f"**Score = {m['score']:.3f}** (0,7 × Match Rate {m['match_rate']:.3f} + "
+                             f"0,3 × Win Rate {m['win_rate']:.3f}); побед {m['wins']}, ничьих {m['ties']}, "
+                             f"поражений {m['losses']}, n={m['n']}\n")
+            unit = "средний балл (0–1, 0,5 = как бейзлайн)"
+        else:
+            valid = [s for s, _ in scores if s is not None]
+            lines.append(f"## LLM-судья ({api.llm_model}) против эталона, 0–10\n")
+            lines.append("Ответов бейзлайна нет — это не метрика платформы. Для неё запустите с --baseline "
+                         "или --baseline-pred.\n")
+            if valid:
+                lines.append(f"Средний балл: **{statistics.mean(valid):.2f} / 10** (n={len(valid)}), "
+                             f"доля ≥8: {100 * sum(v >= 8 for v in valid) // len(valid)}%\n")
+            unit = "средний балл (0–10)"
+        if failed:
+            lines.append(f"Сбоев судьи: {failed} — эти вопросы исключены из расчёта, как на платформе\n")
+        per_question = [(i, s) for i, (s, _) in zip(judged, scores)]
         for key, title in (("category", "категория"), ("area", "область"), ("type", "тип")):
-            lines.append(f"| {title} | n | средний балл |")
+            lines.append(f"| {title} | n | {unit} |")
             lines.append("|---|---|---|")
-            lines += breakdown(pairs_scores, key, items)
+            lines += breakdown(per_question, key, items)
             lines.append("")
         worst = sorted([(s, i, v) for i, (s, v) in zip(judged, scores) if s is not None])[:15]
         lines.append("### Худшие ответы\n")
         for s, i, v in worst:
-            lines.append(f"- **{i}** ({s}): {v}\n  - вопрос: {items[i]['question']}\n  - бот: {answers.get(i, '')}"
-                         f"\n  - эталон: {items[i]['reference']}")
+            lines.append(f"- **{i}** ({s:.2f}): {v}\n  - вопрос: {items[i]['question']}\n  - бот: {answers.get(i, '')}"
+                         + (f"\n  - бейзлайн: {baseline.get(i, '')}" if platform_mode else "")
+                         + f"\n  - эталон: {items[i]['reference']}")
         lines.append("")
         for i, (s, v) in zip(judged, scores):
-            details.append({"kind": "judge", "id": i, "score": s, "verdict": v})
+            details.append({"kind": "judge", "mode": "platform" if platform_mode else "absolute",
+                            "id": i, "score": s, "verdict": v})
     elif not args.no_judge:
         lines.append("## LLM-судья\nПропущен: нет ключа (LLM_BASE_URL/LLM_API_KEY или JUDGE_*).\n")
 

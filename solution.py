@@ -17,12 +17,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from energybot.dialog import parse, search_queries  # noqa: E402
-from energybot.llm import env, env_num  # noqa: E402
+from energybot.llm import Api, env, env_num  # noqa: E402
 from energybot.pipeline import FALLBACK, Consultant  # noqa: E402
 
 DATA_DIR = Path(env("DATA_DIR", "data"))
 OUTPUT = Path(env("OUTPUT_PATH", "submission.csv"))
-MAX_WORKERS = env_num("MAX_WORKERS", 4, 1, 16)
+# MAX_WORKERS платформы отражает лимиты сервиса (регламент, раздел 6) — уважаем его.
+MAX_WORKERS = env_num("EB_MAX_WORKERS", 0, 0, 16) or env_num("MAX_WORKERS", 4, 1, 16)
+# Лимит прогона на платформе — 20 минут; оставляем запас на запись файла.
+DEADLINE_SEC = env_num("EB_DEADLINE_SEC", 1050.0, 30.0, 3600.0, float)
+MAX_ANSWER_CHARS = 9000  # предел платформы — 10 000 символов
 
 
 def find(*names) -> Path:
@@ -48,7 +52,8 @@ def write_answers(path: Path, rows: list):
         writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator="\n")
         writer.writerow(["id", "answer"])
         for qid, answer in rows:
-            writer.writerow([qid, " ".join(answer.split())])
+            text = " ".join(answer.split())[:MAX_ANSWER_CHARS] or FALLBACK
+            writer.writerow([qid, text])
 
 
 def main():
@@ -59,7 +64,9 @@ def main():
     # Файл с запасными ответами пишем сразу: даже при падении сабмит будет валидным.
     write_answers(OUTPUT, [(qid, a) for (qid, _), a in zip(questions, answers)])
 
-    bot = Consultant(kb_path, index_dir=HERE / "index")
+    api = Api()
+    api.deadline = started + DEADLINE_SEC
+    bot = Consultant(kb_path, index_dir=HERE / "index", api=api)
     turns = [parse(q) for _, q in questions]
     vectors = bot.embed_queries([search_queries(t)[1] for t in turns])
     print(f"Вопросов: {len(questions)}; потоков: {MAX_WORKERS}", file=sys.stderr, flush=True)
@@ -69,6 +76,8 @@ def main():
 
     def work(i):
         qid = questions[i][0]
+        if time.perf_counter() - started > DEADLINE_SEC:
+            return qid, FALLBACK, {"id": qid, "error": "лимит времени прогона"}
         try:
             result = bot.answer(turns[i], mode="eval", query_vec=vectors[i])
         except Exception as exc:  # noqa: BLE001

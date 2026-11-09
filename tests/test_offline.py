@@ -26,6 +26,10 @@ from mock_api import MockApi  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "eval"))
 from validate_dataset import load_cases, validate, violates  # noqa: E402
+from run_eval import judge_vs_baseline, platform_metrics  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "scripts"))
+from build_submission import build as build_zip  # noqa: E402
 
 KB_DIR = ROOT / "knowledge-base"
 
@@ -104,8 +108,47 @@ class DatasetTest(unittest.TestCase):
         self.assertTrue(violates("не обрабатыва", "Нельзя утверждать, что не обрабатывает."))
 
 
+class JudgeMetricsTest(unittest.TestCase):
+    def test_platform_formula(self):
+        m = platform_metrics([1.0, 0.75, 0.5, 0.25, None])
+        self.assertEqual((m["n"], m["wins"], m["losses"], m["ties"]), (4, 2, 1, 1))
+        self.assertAlmostEqual(m["match_rate"], 0.625)
+        self.assertAlmostEqual(m["win_rate"], 2 / 3)
+        self.assertAlmostEqual(m["score"], 0.7 * 0.625 + 0.3 * 2 / 3)
+        self.assertEqual(platform_metrics([0.5, 0.5])["win_rate"], 0.5)
+
+    def test_position_bias_cancels_out(self):
+        class AlwaysB:
+            def chat(self, messages):
+                return '{"verdict": "B_better", "reason": "B"}'
+
+        score, _ = judge_vs_baseline(AlwaysB(), "вопрос", "эталон", "команда", "бейзлайн")
+        self.assertEqual(score, 0.5)
+
+    def test_team_clearly_better(self):
+        class PrefersTeam:
+            def chat(self, messages):
+                text = messages[-1]["content"]
+                b_is_team = text.rstrip().endswith("команда")
+                return '{"verdict": "%s"}' % ("B_much_better" if b_is_team else "A_much_better")
+
+        score, _ = judge_vs_baseline(PrefersTeam(), "вопрос", "эталон", "команда", "бейзлайн")
+        self.assertEqual(score, 1.0)
+
+
+class DeadlineTest(unittest.TestCase):
+    def test_no_requests_after_deadline(self):
+        import time as _time
+        from energybot.llm import Api, DeadlineExceeded
+        api = Api()
+        api.base_url, api.llm_key = "http://127.0.0.1:9", "k"
+        api.deadline = _time.perf_counter() - 1
+        with self.assertRaises(DeadlineExceeded):
+            api.chat([{"role": "user", "content": "x"}])
+
+
 class SolutionEndToEndTest(unittest.TestCase):
-    def _run(self, mock: MockApi, questions: list) -> tuple:
+    def _run(self, mock: MockApi, questions: list, script: Path = ROOT / "solution.py") -> tuple:
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp) / "data"
             data.mkdir()
@@ -118,7 +161,8 @@ class SolutionEndToEndTest(unittest.TestCase):
                     z.write(p, p.relative_to(KB_DIR).as_posix())
             env = {k: v for k, v in os.environ.items() if not k.startswith(("LLM_", "OPENAI_", "JUDGE_"))}
             env.update(DATA_DIR=str(data), LLM_BASE_URL=mock.url, LLM_API_KEY="test-key", MAX_WORKERS="3")
-            proc = subprocess.run([sys.executable, str(ROOT / "solution.py")], cwd=tmp, env=env,
+            env.pop("PYTHONPATH", None)
+            proc = subprocess.run([sys.executable, str(script)], cwd=tmp, env=env,
                                   capture_output=True, text=True, timeout=300)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             with open(Path(tmp) / "submission.csv", encoding="utf-8", newline="") as f:
@@ -145,6 +189,22 @@ class SolutionEndToEndTest(unittest.TestCase):
         with MockApi(reject_template_kwargs=False) as mock:
             self._run(mock, [("1", "Пользователь: Мы СНТ.\nАссистент: Какая задача?\nПользователь: Учёт.")])
         self.assertEqual([m["role"] for m in mock.last_messages], ["system", "user", "assistant", "user"])
+
+    def test_flat_zip_runs_like_on_platform(self):
+        """Сабмит из распакованного ZIP: только корневые .py и requirements.txt, без energybot/."""
+        with tempfile.TemporaryDirectory() as unpacked:
+            archive = Path(unpacked) / "submission.zip"
+            names = build_zip(archive)
+            self.assertTrue(all("/" not in n for n in names))
+            self.assertNotIn("index", " ".join(names))
+            with zipfile.ZipFile(archive) as z:
+                z.extractall(Path(unpacked) / "app")
+            questions = [("1", "Сколько стоит платформа учёта?"),
+                         ("2", "Пользователь: Мы СНТ.\nАссистент: Какая задача?\nПользователь: Учёт. Подойдёт?")]
+            with MockApi(reject_template_kwargs=False) as mock:
+                rows, log = self._run(mock, questions, script=Path(unpacked) / "app" / "solution.py")
+        self.assertEqual([r["id"] for r in rows], ["1", "2"])
+        self.assertTrue(all(r["answer"].startswith("Да, это возможно") for r in rows), log)
 
     def test_llm_outage_still_gives_valid_submission(self):
         with MockApi(fail_chat=True) as mock:
