@@ -42,6 +42,7 @@ eval/                       локальный стенд оценки
   retrieval_eval.py         качество поиска (работает без ключей)
   run_eval.py               прогон как на платформе + стиль + проверки + LLM-судья по методике платформы
   blind_judge.py            слепое судейство (человек или ИИ-агенты): пакеты без указания авторства, ключ отдельно
+  codex_judge.py            слепой судья Codex одной командой: ответы → пакеты → Codex → Score
 tests/                      офлайн-тесты, включая полный прогон на заглушке API
 scripts/build_index.py      предрасчёт эмбеддингов базы в index/ — только для локальной работы, в сабмит не идёт
 scripts/build_submission.py сборка плоского dist/submission.zip по регламенту
@@ -72,7 +73,8 @@ scripts/simulate_budget.py  бюджет времени: расчётная та
 - `release-gate.yml` — на PR `dev → main`: Codex сверяет ZIP с регламентом, бот отвечает на 518 вопросов,
   Codex-судья вслепую сравнивает с бейзлайном (кэш `eval/baseline/answers.csv`), Score — комментарием в PR.
 
-Секреты, вход Codex по подписке ChatGPT и настройка защиты `main` — в [`docs/ci.md`](docs/ci.md).
+Слепой судья Codex локально — `python eval/codex_judge.py --set demo --packets 3`.
+Секреты, вход Codex по подписке ChatGPT, запуск судьи другим разработчиком и настройка защиты `main` — в [`docs/ci.md`](docs/ci.md).
 
 ## Быстрый старт
 
