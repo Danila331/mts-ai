@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -136,6 +137,31 @@ class JudgeMetricsTest(unittest.TestCase):
         self.assertEqual(score, 1.0)
 
 
+class BlindJudgeTest(unittest.TestCase):
+    def test_export_hides_side_and_score_matches_platform(self):
+        import json as _json
+        import blind_judge
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp)
+            for side, text in (("bot", "ответ бота"), ("baseline", "ответ бейзлайна")):
+                (report / side).mkdir()
+                with open(report / side / "submission.csv", "w", encoding="utf-8", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["id", "answer"])
+                    w.writerows([("demo-1", f"{text} 1"), ("demo-2", f"{text} 2")])
+            blind_judge.export(report, parts=2, seed=1)
+            packets = "".join(p.read_text(encoding="utf-8") for p in (report / "blind").glob("packet-*.md"))
+            self.assertNotIn("demo-1", packets)  # в пакетах нет идентификаторов кейсов
+            key = _json.loads((report / "blind" / "key.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted(k["round"] for k in key.values()), [1, 1, 2, 2])
+            verdicts = [_json.dumps({"pid": p, "verdict": "B_better" if k["team"] == "B" else "A_better"})
+                        for p, k in key.items()]
+            (report / "blind" / "verdicts-01.jsonl").write_text("\n".join(verdicts), encoding="utf-8")
+            blind_judge.score(report)
+            text = (report / "blind" / "report.md").read_text(encoding="utf-8")
+        self.assertIn("Score = 0.825", text)  # «немного лучше» везде: 0,7·0,75 + 0,3·1
+
+
 class DeadlineTest(unittest.TestCase):
     def test_no_requests_after_deadline(self):
         import time as _time
@@ -147,8 +173,58 @@ class DeadlineTest(unittest.TestCase):
             api.chat([{"role": "user", "content": "x"}])
 
 
+def _consultant(mock):
+    from energybot.llm import Api
+    from energybot.pipeline import Consultant
+    old = {k: os.environ.get(k) for k in ("LLM_BASE_URL", "LLM_API_KEY")}
+    os.environ.update(LLM_BASE_URL=mock.url, LLM_API_KEY="test-key")
+    try:
+        return Consultant(KB_DIR, api=Api())
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+
+
+class GuardTest(unittest.TestCase):
+    QUESTION = "Сколько будет стоить платформа учёта на 150 приборов?"
+    BAD = "Ориентир — 25 000 руб в год за прибор. Итого проект обойдётся в 3 750 000 рублей. Сколько у вас объектов?"
+    GOOD = "Ориентир — 25 000 руб в год за прибор, на объёмных внедрениях стоимость считается отдельно. Сколько у вас объектов?"
+
+    def test_invented_number_triggers_repair(self):
+        def responder(messages):
+            return self.GOOD if messages[-1]["content"].startswith("[Служебная") else self.BAD
+
+        with MockApi(reject_template_kwargs=False, responder=responder) as mock:
+            result = _consultant(mock).answer(self.QUESTION)
+        self.assertEqual(result.text, self.GOOD)
+        self.assertEqual(result.guard["unknown_numbers"], ["3750000"])
+        self.assertTrue(result.guard["repaired"])
+
+    def test_stubborn_model_gets_sentence_stripped(self):
+        with MockApi(reject_template_kwargs=False, responder=lambda m: self.BAD) as mock:
+            result = _consultant(mock).answer(self.QUESTION)
+        self.assertNotIn("3 750 000", result.text)
+        self.assertIn("25 000", result.text)
+        self.assertEqual(result.guard["stripped"], ["3750000"])
+
+    def test_clean_answer_is_untouched(self):
+        with MockApi(reject_template_kwargs=False, responder=lambda m: self.GOOD) as mock:
+            result = _consultant(mock).answer(self.QUESTION)
+            calls = mock.calls["chat"]
+        self.assertEqual((result.text, result.guard, calls), (self.GOOD, {}, 1))
+
+
+class EmbeddingBatchTest(unittest.TestCase):
+    def test_batch_shrinks_on_provider_limit(self):
+        with MockApi(reject_template_kwargs=False, max_embed_batch=5) as mock:
+            bot = _consultant(mock)
+        self.assertTrue(bot.dense)
+        self.assertLessEqual(bot.api.embed_batch, 5)
+
+
 class SolutionEndToEndTest(unittest.TestCase):
-    def _run(self, mock: MockApi, questions: list, script: Path = ROOT / "solution.py") -> tuple:
+    def _run(self, mock: MockApi, questions: list, script: Path = ROOT / "solution.py",
+             extra_env: dict | None = None) -> tuple:
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp) / "data"
             data.mkdir()
@@ -161,6 +237,7 @@ class SolutionEndToEndTest(unittest.TestCase):
                     z.write(p, p.relative_to(KB_DIR).as_posix())
             env = {k: v for k, v in os.environ.items() if not k.startswith(("LLM_", "OPENAI_", "JUDGE_"))}
             env.update(DATA_DIR=str(data), LLM_BASE_URL=mock.url, LLM_API_KEY="test-key", MAX_WORKERS="3")
+            env.update(extra_env or {})
             env.pop("PYTHONPATH", None)
             proc = subprocess.run([sys.executable, str(script)], cwd=tmp, env=env,
                                   capture_output=True, text=True, timeout=300)
@@ -205,6 +282,18 @@ class SolutionEndToEndTest(unittest.TestCase):
                 rows, log = self._run(mock, questions, script=Path(unpacked) / "app" / "solution.py")
         self.assertEqual([r["id"] for r in rows], ["1", "2"])
         self.assertTrue(all(r["answer"].startswith("Да, это возможно") for r in rows), log)
+
+    def test_budget_switches_to_fast_and_meets_deadline(self):
+        """Медленный сервис и короткий дедлайн: все ответы непустые, есть быстрый режим, укладываемся в лимит."""
+        questions = [(str(i), f"Вопрос номер {i} про солнечные станции и платформу учёта?") for i in range(70)]
+        started = time.perf_counter()
+        with MockApi(reject_template_kwargs=False, chat_delay=1.0, rerank_delay=0.5) as mock:
+            rows, log = self._run(mock, questions, extra_env={"EB_DEADLINE_SEC": "30", "MAX_WORKERS": "2"})
+        elapsed = time.perf_counter() - started
+        self.assertEqual(len(rows), 70)
+        self.assertTrue(all(r["answer"].strip() for r in rows))
+        self.assertIn("быстрый режим", log)
+        self.assertLess(elapsed, 45, log[-500:])
 
     def test_llm_outage_still_gives_valid_submission(self):
         with MockApi(fail_chat=True) as mock:

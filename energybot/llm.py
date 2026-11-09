@@ -52,10 +52,16 @@ class Api:
         self.max_tokens = env_num("EB_MAX_TOKENS", 700, 128, 8192)
         self.temperature = env_num("EB_TEMPERATURE", 0.0, 0.0, 2.0, float)
         self.timeout = env_num("EB_REQUEST_TIMEOUT", 60.0, 5.0, 600.0, float)
+        self.embed_batch = env_num("EB_EMBED_BATCH", 16, 1, 256)
         self.use_embeddings = env("EB_USE_EMBEDDINGS", "1") != "0"
         self.can_rerank = env("EB_USE_RERANKER", "1") != "0"
         # Qwen3 — гибридная модель; режим размышлений отключаем ради скорости и чистого ответа.
         self.disable_thinking = env("EB_DISABLE_THINKING", "1") != "0"
+        # chat_template_kwargs — vLLM (вероятно, прокси платформы); reasoning — OpenRouter;
+        # enable_thinking — DashScope; none — ничего не слать.
+        self.thinking_param = env("EB_THINKING_PARAM", "chat_template_kwargs")
+        self.thinking_budget = env_num("EB_THINKING_BUDGET", 3000, 500, 16000)
+        self.thinking_overflows = 0
         self._thinking_param_ok = True
         self.deadline = None  # абсолютное time.perf_counter(), после которого запросы не делаем
         self.client = httpx.Client(timeout=self.timeout)
@@ -90,15 +96,26 @@ class Api:
         raise last
 
     # ---------- эмбеддинги ----------
-    def embed(self, texts: list, batch: int = 32) -> list:
+    def embed(self, texts: list, batch: int | None = None) -> list:
+        """Эмбеддинги пачками. Лимит размера пачки у провайдеров разный (бывает 20, 10…):
+        при ответе 400 пачка уменьшается вдвое, и дальше используется уже меньший размер."""
+        batch = batch or self.embed_batch
         out = []
-        for i in range(0, len(texts), batch):
+        i = 0
+        while i < len(texts):
             part = texts[i:i + batch]
-            data = self._post(self.emb_url + "/embeddings", self.emb_key, {"model": self.emb_model, "input": part})
+            try:
+                data = self._post(self.emb_url + "/embeddings", self.emb_key, {"model": self.emb_model, "input": part})
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 400 and batch > 1:
+                    batch = self.embed_batch = max(1, batch // 2)
+                    continue
+                raise
             items = sorted(data["data"], key=lambda d: d.get("index", 0))
             if len(items) != len(part):
                 raise ValueError("Получены не все эмбеддинги")
             out.extend([float(x) for x in it["embedding"]] for it in items)
+            i += len(part)
         return out
 
     # ---------- реранкер ----------
@@ -114,25 +131,55 @@ class Api:
         return scores
 
     # ---------- генерация ----------
+    def _thinking_fields(self) -> dict:
+        """Как отключить размышления: у разных серверов разный параметр (EB_THINKING_PARAM)."""
+        if not self.disable_thinking or not self._thinking_param_ok:
+            return {}
+        return {
+            "chat_template_kwargs": {"chat_template_kwargs": {"enable_thinking": False}},  # vLLM / SGLang
+            # OpenRouter: только провайдеры, которые поддерживают параметр, — иначе часть из них его
+            # игнорирует или отклоняет, и модель думает (медленно, иногда пустой ответ).
+            "reasoning": {"reasoning": {"enabled": False}, "provider": {"require_parameters": True}},
+            "enable_thinking": {"enable_thinking": False},  # Alibaba DashScope
+        }.get(self.thinking_param, {})
+
     def chat(self, messages: list, max_tokens: int | None = None, temperature: float | None = None) -> str:
         body = {
             "model": self.llm_model,
             "messages": messages,
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": self.temperature if temperature is None else temperature,
+            **self._thinking_fields(),
         }
-        if self.disable_thinking and self._thinking_param_ok:
-            body["chat_template_kwargs"] = {"enable_thinking": False}
         try:
             data = self._post(self.base_url + "/chat/completions", self.llm_key, body)
         except httpx.HTTPStatusError as exc:
-            # Если сервер не знает chat_template_kwargs — больше его не шлём.
-            if "chat_template_kwargs" in body and exc.response is not None and exc.response.status_code in (400, 422):
-                print("[llm] сервер отклонил chat_template_kwargs, отправляем без него", file=sys.stderr)
+            # Сервер не знает параметр отключения размышлений — больше его не шлём.
+            extra = set(self._thinking_fields())
+            if extra and exc.response is not None and exc.response.status_code in (400, 422):
+                print(f"[llm] сервер отклонил {sorted(extra)}, отправляем без него", file=sys.stderr)
                 self._thinking_param_ok = False
-                body.pop("chat_template_kwargs")
+                for key in extra:
+                    body.pop(key, None)
                 data = self._post(self.base_url + "/chat/completions", self.llm_key, body)
             else:
                 raise
-        message = data["choices"][0]["message"]
-        return strip_thinking(message.get("content") or "")
+        choice = data["choices"][0]
+        text = strip_thinking(choice["message"].get("content") or "")
+        if not text and self._ran_out_thinking(choice, data):
+            # Сервер проигнорировал отключение размышлений, и модель потратила весь лимит на них.
+            # Один повтор с запасом токенов: медленнее, но без пустого ответа.
+            self.thinking_overflows += 1
+            body["max_tokens"] = max(self.thinking_budget, 3 * body["max_tokens"])
+            data = self._post(self.base_url + "/chat/completions", self.llm_key, body)
+            text = strip_thinking(data["choices"][0]["message"].get("content") or "")
+        return text
+
+    @staticmethod
+    def _ran_out_thinking(choice: dict, data: dict) -> bool:
+        message = choice.get("message") or {}
+        details = (data.get("usage") or {}).get("completion_tokens_details") or {}
+        return (choice.get("finish_reason") == "length"
+                or bool(message.get("reasoning") or message.get("reasoning_content"))
+                or bool(details.get("reasoning_tokens"))
+                or "<think>" in (message.get("content") or ""))

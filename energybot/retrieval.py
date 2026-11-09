@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import math
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,6 +61,7 @@ class Retriever:
         self.api = api
         # Путь и заголовок документа повторяются, чтобы вопросы FAQ в заголовках весили больше.
         self.bm25 = BM25([tokens(f"{c.path} {c.path} {c.title} {c.text}") for c in kb.chunks])
+        self.order = {c.id: i for i, c in enumerate(kb.chunks)}
         self.vectors = None
         if api is not None and dense:
             self.vectors = self._load_or_build_vectors(index_dir)
@@ -108,36 +109,64 @@ class Retriever:
         return [Hit(self.kb.chunks[i], s, "rrf") for i, s in fused.most_common(n)]
 
     def search(self, query: str, query_vec=None, rerank_query: str | None = None,
-               n_candidates: int = 20, top_k: int = 6) -> list:
+               n_candidates: int = 20, rerank: bool = True) -> list:
+        """Кандидаты, упорядоченные по релевантности (после реранкера, если он доступен)."""
         hits = self.candidates(query, query_vec, n_candidates)
-        if self.api is not None and self.api.can_rerank and hits:
+        if rerank and self.api is not None and self.api.can_rerank and hits:
             try:
                 scores = self.api.rerank(rerank_query or query, [h.chunk.render() for h in hits])
                 hits = [Hit(h.chunk, scores[i], "rerank") for i, h in enumerate(hits)]
                 hits.sort(key=lambda h: -h.score)
             except Exception as exc:  # noqa: BLE001
                 print(f"[retrieval] реранкер недоступен: {exc}", file=sys.stderr)
-        return hits[:top_k]
+        return hits
 
-    def context(self, hits: list, max_guard_docs: int = 2) -> list:
-        """Найденные фрагменты + «можно/нельзя утверждать» по главным продуктам + общие границы."""
-        chosen = [h.chunk for h in hits]
-        seen = {c.id for c in chosen}
+    def context(self, ranked: list, top_k: int = 10, expand_docs: int = 1, char_budget: int = 18000,
+                max_guard_docs: int = 2) -> list:
+        """Контекст для модели.
 
-        def add(chunk):
+        Обязательная часть (бюджетом не урезается): top_k лучших фрагментов, разделы
+        «Факты, которые можно утверждать» / «Чего утверждать нельзя» по найденным продуктам
+        и общие границы консультации. Дополнительно — другие разделы самых релевантных
+        документов, пока помещаются в char_budget: эталон часто опирается на соседние
+        разделы того же документа (на рабочей части выборки это подняло долю найденных
+        разделов с 0,53 до ~0,76).
+        """
+        main = [h.chunk for h in ranked[:top_k]]
+        seen = {c.id for c in main}
+        rules = []
+
+        def add(target, chunk):
             if chunk.id not in seen:
-                chosen.append(chunk)
+                target.append(chunk)
                 seen.add(chunk.id)
 
         product_docs = []
-        for c in chosen:
+        for c in main:
             if c.doc.startswith("20-products/") and c.doc not in product_docs:
                 product_docs.append(c.doc)
         for doc in product_docs[:max_guard_docs]:
             for g in self.kb.guards(doc):
                 if g.path.lower().startswith(("факты", "чего утверждать")):
-                    add(g)
+                    add(rules, g)
         for c in self.kb.chunks:
             if c.doc.endswith(ALWAYS_DOC) and c.path in ALWAYS_SECTIONS:
-                add(c)
-        return chosen
+                add(rules, c)
+
+        extra = []
+        if expand_docs > 0:
+            doc_score = defaultdict(float)
+            for h in ranked[:20]:
+                if math.isfinite(h.score):
+                    doc_score[h.chunk.doc] += max(0.0, float(h.score))
+            top_docs = [d for d, _ in sorted(doc_score.items(), key=lambda x: -x[1])[:expand_docs]]
+            rank_pos = {h.chunk.id: i for i, h in enumerate(ranked)}
+            pool = [c for c in self.kb.chunks if c.doc in top_docs and c.id not in seen]
+            pool.sort(key=lambda c: rank_pos.get(c.id, len(ranked) + self.order[c.id]))
+            size = sum(len(c.render()) for c in main + rules)
+            for c in pool:
+                length = len(c.render())
+                if size + length <= char_budget:
+                    add(extra, c)
+                    size += length
+        return main + extra + rules
