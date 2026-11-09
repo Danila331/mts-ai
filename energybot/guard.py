@@ -19,6 +19,8 @@ MAX_WORDS = 110  # эталоны жюри — 25–52 слова; длинне�
 # пропускала галлюцинации вроде «срок службы шифера 30 лет», если в материалах было
 # другое число 30 (например «30 дней»). Поэтому проверяем пару число+единица.
 NUM_UNIT = re.compile(r"(\d+(?:[\s]?\d{3})*(?:[.,]\d+)?)\s*([A-Za-zА-Яа-яЁё%₽]+)")
+# Диапазон с единицей: «5–10 лет» — обе границы должны встречаться с этой единицей.
+RANGE_UNIT = re.compile(r"(\d+(?:[.,]\d+)?)\s*[–—-]\s*(\d+(?:[.,]\d+)?)\s*([A-Za-zА-Яа-яЁё%₽]+)")
 UNITS = {"лет", "год", "года", "квт", "мвт", "руб", "₽", "%", "процент", "процентов", "квтч",
          "прибор", "приборов", "счётчик", "счётчиков", "дней", "месяцев", "месяц", "час", "часов"}
 
@@ -56,6 +58,17 @@ def unknown_numbers(answer: str, *sources: str) -> list:
         allowed |= numbers(text)
         allowed_pairs |= _unit_pairs(text)
     bad = sorted(n for n in numbers(answer) - allowed if not (n.isdigit() and int(n) <= 2))
+    for m in RANGE_UNIT.finditer(answer):
+        unit = m.group(3).lower()
+        if unit not in UNITS:
+            continue
+        for edge in (m.group(1), m.group(2)):
+            v = edge.replace(",", ".")
+            if v.isdigit() and int(v) <= 2:
+                continue
+            if (v, unit[:4]) not in allowed_pairs:
+                bad.append(f"{m.group(1)}–{m.group(2)} {unit}")
+                break
     for n, u in NUM_UNIT.findall(answer):
         value = re.sub(r"\s", "", n).replace(",", ".")
         if value.endswith(".0"):
