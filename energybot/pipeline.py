@@ -45,8 +45,8 @@ class Consultant:
         self.retriever = Retriever(self.kb, self.api if self.api.configured else None, index_dir,
                                    dense=self.api.use_embeddings)
         self.dense = self.retriever.vectors is not None
-        self.top_k = env_num("TOP_K", 6, 1, 20)
-        self.n_candidates = env_num("N_CANDIDATES", 20, 5, 60)
+        self.top_k = env_num("EB_TOP_K", 6, 1, 20)
+        self.n_candidates = env_num("EB_N_CANDIDATES", 20, 5, 60)
         print(
             f"[consultant] фрагментов: {len(self.kb.chunks)}, dense: {self.dense}, "
             f"загрузка {time.perf_counter() - t0:.1f} c",

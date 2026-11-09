@@ -22,6 +22,10 @@ def env_num(name: str, default, lower, upper, kind=int):
         return default
 
 
+class DeadlineExceeded(RuntimeError):
+    """Общий лимит времени прогона исчерпан — новых запросов не делаем."""
+
+
 THINK = re.compile(r"<think>.*?</think>", re.S)
 
 
@@ -43,15 +47,21 @@ class Api:
         self.llm_model = env("LLM_MODEL") or env("GEN_MODEL") or env("OPENAI_MODEL", "qwen/qwen3.8-27b")
         self.emb_model = env("EMB_MODEL", "baai/bge-m3")
         self.rerank_model = env("RERANKER_MODEL", "qwen/qwen3-reranker-8b")
-        self.max_tokens = env_num("MAX_TOKENS", 700, 128, 8192)
-        self.temperature = env_num("TEMPERATURE", 0.0, 0.0, 2.0, float)
-        self.timeout = env_num("REQUEST_TIMEOUT", 60.0, 5.0, 600.0, float)
-        self.use_embeddings = env("USE_EMBEDDINGS", "1") != "0"
-        self.can_rerank = env("USE_RERANKER", "1") != "0"
+        # Свои имена (EB_*): платформа передаёт TOP_K, MAX_TOKENS, TEMPERATURE под бейзлайн,
+        # и они не должны молча перебивать настройки нашего решения.
+        self.max_tokens = env_num("EB_MAX_TOKENS", 700, 128, 8192)
+        self.temperature = env_num("EB_TEMPERATURE", 0.0, 0.0, 2.0, float)
+        self.timeout = env_num("EB_REQUEST_TIMEOUT", 60.0, 5.0, 600.0, float)
+        self.use_embeddings = env("EB_USE_EMBEDDINGS", "1") != "0"
+        self.can_rerank = env("EB_USE_RERANKER", "1") != "0"
         # Qwen3 — гибридная модель; режим размышлений отключаем ради скорости и чистого ответа.
-        self.disable_thinking = env("DISABLE_THINKING", "1") != "0"
+        self.disable_thinking = env("EB_DISABLE_THINKING", "1") != "0"
         self._thinking_param_ok = True
+        self.deadline = None  # абсолютное time.perf_counter(), после которого запросы не делаем
         self.client = httpx.Client(timeout=self.timeout)
+
+    def _remaining(self):
+        return None if self.deadline is None else self.deadline - time.perf_counter()
 
     @property
     def configured(self) -> bool:
@@ -60,8 +70,12 @@ class Api:
     def _post(self, url: str, key: str, body: dict, attempts: int = 3) -> dict:
         last = None
         for attempt in range(attempts):
+            remaining = self._remaining()
+            if remaining is not None and remaining < 3:
+                raise DeadlineExceeded("исчерпан общий лимит времени прогона")
+            timeout = self.timeout if remaining is None else min(self.timeout, remaining - 1)
             try:
-                r = self.client.post(url, headers={"Authorization": f"Bearer {key}"}, json=body)
+                r = self.client.post(url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=timeout)
                 if r.status_code in (429, 500, 502, 503, 504):
                     raise httpx.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
                 r.raise_for_status()
