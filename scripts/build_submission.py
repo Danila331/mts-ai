@@ -37,9 +37,9 @@ def rewrite_imports(source: str) -> str:
 
 
 def check_requirements(path: Path) -> str:
-    allowed = {l.strip().lower() for l in (ROOT / "requirements.txt").read_text().splitlines() if l.strip()}
-    lines = [l.strip() for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")]
-    bad = [l for l in lines if l.lower() not in allowed]
+    allowed = {x.strip().lower() for x in (ROOT / "requirements.txt").read_text().splitlines() if x.strip()}
+    lines = [x.strip() for x in path.read_text().splitlines() if x.strip() and not x.startswith("#")]
+    bad = [x for x in lines if x.lower() not in allowed]
     if bad:
         raise SystemExit(f"Зависимости вне разрешённого набора requirements.txt организаторов: {bad}")
     return "\n".join(lines) + "\n"

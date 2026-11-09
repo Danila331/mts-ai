@@ -19,15 +19,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from mock_api import MockApi  # noqa: E402
+
 from energybot.dialog import parse, search_queries  # noqa: E402
 from energybot.kb import KnowledgeBase, normalize_tables  # noqa: E402
 from energybot.llm import strip_thinking  # noqa: E402
 from energybot.pipeline import tidy  # noqa: E402
-from mock_api import MockApi  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "eval"))
-from validate_dataset import load_cases, validate, violates  # noqa: E402
 from run_eval import judge_vs_baseline, platform_metrics  # noqa: E402
+from validate_dataset import load_cases, validate, violates  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_submission import build as build_zip  # noqa: E402
@@ -140,6 +141,7 @@ class JudgeMetricsTest(unittest.TestCase):
 class BlindJudgeTest(unittest.TestCase):
     def test_export_hides_side_and_score_matches_platform(self):
         import json as _json
+
         import blind_judge
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp)
@@ -165,6 +167,7 @@ class BlindJudgeTest(unittest.TestCase):
 class DeadlineTest(unittest.TestCase):
     def test_no_requests_after_deadline(self):
         import time as _time
+
         from energybot.llm import Api, DeadlineExceeded
         api = Api()
         api.base_url, api.llm_key = "http://127.0.0.1:9", "k"

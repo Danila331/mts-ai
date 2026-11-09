@@ -45,7 +45,7 @@ def table():
 
 
 def simulate(args):
-    cases = [json.loads(l) for l in (ROOT / "eval/dataset/cases.jsonl").read_text(encoding="utf-8").splitlines()]
+    cases = [json.loads(line) for line in (ROOT / "eval/dataset/cases.jsonl").read_text(encoding="utf-8").splitlines()]
     questions = [(str(i), cases[i % len(cases)]["question"]) for i in range(args.questions)]
     with tempfile.TemporaryDirectory() as tmp:
         data = Path(tmp) / "data"
@@ -68,7 +68,7 @@ def simulate(args):
             elapsed = time.perf_counter() - t0
             with open(Path(tmp) / "submission.csv", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
-    summary = [l for l in proc.stderr.splitlines() if l.startswith(("Готово", "[budget]"))]
+    summary = [line for line in proc.stderr.splitlines() if line.startswith(("Готово", "[budget]"))]
     print(f"Симуляция: {args.questions} вопросов, ответ модели {args.chat_delay} c, реранкер {args.rerank_delay} c, "
           f"MAX_WORKERS={args.workers}, дедлайн {args.deadline} c")
     for line in summary:

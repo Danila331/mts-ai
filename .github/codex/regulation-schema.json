@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "compliant": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rule": {"type": "string"},
+          "evidence": {"type": "string"},
+          "severity": {"type": "string", "enum": ["blocker", "warning"]}
+        },
+        "required": ["rule", "evidence", "severity"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["compliant", "summary", "violations"],
+  "additionalProperties": false
+}

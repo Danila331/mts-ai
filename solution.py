@@ -137,7 +137,7 @@ def main():
         return qid, result.text, info
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for i, (qid, text, info) in enumerate(pool.map(work, range(len(questions)))):
+        for i, (_qid, text, info) in enumerate(pool.map(work, range(len(questions)))):
             answers[i] = text
             debug.append(info)
 

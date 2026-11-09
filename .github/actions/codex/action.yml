@@ -1,0 +1,73 @@
+name: Codex — авторизация
+description: >
+  Ставит Codex CLI и восстанавливает авторизацию: подписка ChatGPT (auth.json из секрета) или
+  API-ключ. В режиме persist сохраняет обновлённый auth.json обратно в секрет репозитория —
+  так требует официальная схема для эфемерных раннеров (docs/ci.md).
+
+inputs:
+  mode:
+    description: restore | persist
+    required: true
+  auth-json:
+    description: содержимое ~/.codex/auth.json (секрет CODEX_AUTH_JSON)
+    required: false
+  api-key:
+    description: OPENAI_API_KEY — альтернатива подписке
+    required: false
+  secrets-token:
+    description: PAT с правом Secrets read/write — чтобы сохранить обновлённый auth.json
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Codex CLI
+      if: inputs.mode == 'restore'
+      shell: bash
+      run: |
+        npm install -g @openai/codex >/dev/null
+        codex --version
+        echo "CODEX_HOME=${RUNNER_TEMP}/codex" >> "$GITHUB_ENV"
+
+    - name: Авторизация
+      if: inputs.mode == 'restore'
+      shell: bash
+      env:
+        AUTH_JSON: ${{ inputs.auth-json }}
+        API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$CODEX_HOME"
+        printf 'cli_auth_credentials_store = "file"\n' > "$CODEX_HOME/config.toml"
+        if [ -n "$API_KEY" ]; then
+          echo "::add-mask::$API_KEY"
+          echo "CODEX_API_KEY=$API_KEY" >> "$GITHUB_ENV"
+          echo "Codex: вход по API-ключу" >> "$GITHUB_STEP_SUMMARY"
+        elif [ -n "$AUTH_JSON" ]; then
+          umask 077
+          printf '%s' "$AUTH_JSON" > "$CODEX_HOME/auth.json"
+          python3 -c "import json,os,sys; d=json.load(open(os.path.join(os.environ['CODEX_HOME'],'auth.json'))); m=d.get('auth_mode'); print('auth_mode:', m); sys.exit(0 if m=='chatgpt' else 'auth.json не от входа через ChatGPT (auth_mode != chatgpt)')"
+          sha256sum "$CODEX_HOME/auth.json" | cut -d' ' -f1 > "$RUNNER_TEMP/codex-auth.sha"
+          echo "Codex: вход по подписке ChatGPT (auth.json)" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "::error::Нет ни секрета CODEX_AUTH_JSON, ни OPENAI_API_KEY — см. docs/ci.md"; exit 1
+        fi
+
+    - name: Сохранить обновлённый auth.json
+      if: inputs.mode == 'persist'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.secrets-token }}
+      run: |
+        set -euo pipefail
+        f="$CODEX_HOME/auth.json"
+        [ -f "$f" ] || { echo "auth.json нет (вход по API-ключу) — сохранять нечего"; exit 0; }
+        if [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$(cat "$RUNNER_TEMP/codex-auth.sha" 2>/dev/null)" ]; then
+          echo "auth.json не изменился"; exit 0
+        fi
+        if [ -z "$GH_TOKEN" ]; then
+          echo "::warning::Codex обновил токены, но секрета CODEX_SECRETS_TOKEN нет — обновлённый auth.json не сохранён. Через ~8 дней вход может перестать работать (docs/ci.md)."
+          exit 0
+        fi
+        gh secret set CODEX_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$f"
+        echo "Обновлённый auth.json сохранён в секрет CODEX_AUTH_JSON"
