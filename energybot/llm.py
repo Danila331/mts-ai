@@ -38,12 +38,16 @@ def strip_thinking(text: str) -> str:
 
 class Api:
     def __init__(self):
-        self.base_url = (env("LLM_BASE_URL") or env("BASE_URL") or env("OPENAI_BASE_URL")).rstrip("/")
+        # Регламент (раздел 6–7): генерация, эмбеддинги и реранкер — через один прокси платформы,
+        # адрес и ключ — LLM_* или OPENAI_*. BASE_URL — запасное имя из примера организаторов, ниже по приоритету.
+        self.base_url = (env("LLM_BASE_URL") or env("OPENAI_BASE_URL") or env("BASE_URL")).rstrip("/")
         self.llm_key = env("LLM_API_KEY") or env("OPENAI_API_KEY")
+        # Отдельные ключи — как в примере сабмита организаторов (при их наличии).
         self.emb_key = env("EMBEDDER_API_KEY") or self.llm_key
         self.rerank_key = env("RERANKER_API_KEY") or self.llm_key
-        self.emb_url = (env("EMBEDDER_BASE_URL") or self.base_url).rstrip("/")
-        self.rerank_url = (env("RERANKER_BASE_URL") or self.base_url).rstrip("/")
+        # Отдельные адреса — только для локальной разработки (наш префикс EB_, платформа их не задаёт).
+        self.emb_url = (env("EB_EMBEDDER_BASE_URL") or self.base_url).rstrip("/")
+        self.rerank_url = (env("EB_RERANKER_BASE_URL") or self.base_url).rstrip("/")
         self.llm_model = env("LLM_MODEL") or env("GEN_MODEL") or env("OPENAI_MODEL", "qwen/qwen3.8-27b")
         self.emb_model = env("EMB_MODEL", "baai/bge-m3")
         self.rerank_model = env("RERANKER_MODEL", "qwen/qwen3-reranker-8b")

@@ -34,8 +34,10 @@ gh secret set OPENROUTER_API_KEY --repo Danila331/mts-ai
 | `CODEX_SECRETS_TOKEN` | сохранять обновлённый `auth.json` обратно в секрет (раздел 2, шаг 5) |
 | `OPENAI_API_KEY` | необязательно: вместо подписки — обычный API-ключ OpenAI; если задан, используется он |
 
-Необязательные переменные (вкладка *Variables*): `CODEX_MODEL` — модель Codex (по умолчанию — модель
-подписки), `EVAL_MIN_SCORE` — порог Score, ниже которого задание падает (например `0.80`).
+Модель Codex для ревью регламента и слепого судьи — `gpt-6.1-sol` с усилием рассуждений `xhigh`
+(задано в `release-gate.yml`). Необязательные переменные (вкладка *Variables*): `CODEX_MODEL`,
+`CODEX_REASONING_EFFORT` — переопределить модель и усилие; `EVAL_MIN_SCORE` — порог Score, ниже которого
+задание падает (например `0.80`).
 
 ## 2. Вход Codex по подписке ChatGPT
 

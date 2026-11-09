@@ -126,7 +126,8 @@ class Consultant:
             timings["guard"] = time.perf_counter() - t2
         timings["total"] = time.perf_counter() - t0
         if not text:
-            return Answer(extractive(chunks) or FALLBACK, sources, timings, error or "пустой ответ", guard)
+            reason = "ответ отброшен проверкой цифр" if guard.get("dropped") else (error or "пустой ответ")
+            return Answer(extractive(chunks) or FALLBACK, sources, timings, reason, guard)
         return Answer(text, sources, timings, "", guard)
 
     def check(self, text: str, messages: list, materials: str, turns: list, fast: bool) -> tuple:
@@ -152,4 +153,8 @@ class Consultant:
             stripped = strip_sentences(text, still_bad)
             if word_count(stripped) >= 8:
                 text, guard["stripped"] = stripped, still_bad
+            else:
+                # Без непроверенных чисел ответа почти не осталось — не отдаём выдумку,
+                # вызывающий подставит выдержку из базы.
+                text, guard["dropped"] = "", still_bad
         return text, guard

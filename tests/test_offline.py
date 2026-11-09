@@ -210,6 +210,14 @@ class GuardTest(unittest.TestCase):
         self.assertIn("25 000", result.text)
         self.assertEqual(result.guard["stripped"], ["3750000"])
 
+    def test_unverifiable_short_answer_is_replaced(self):
+        """Если без непроверенных чисел ответа почти не остаётся — выдержка из базы, а не выдумка."""
+        with MockApi(reject_template_kwargs=False, responder=lambda m: "Стоимость составит 999 999 рублей.") as mock:
+            result = _consultant(mock).answer(self.QUESTION)
+        self.assertNotIn("999", result.text)
+        self.assertEqual(result.guard["dropped"], ["999999"])
+        self.assertTrue(result.text.strip())
+
     def test_clean_answer_is_untouched(self):
         with MockApi(reject_template_kwargs=False, responder=lambda m: self.GOOD) as mock:
             result = _consultant(mock).answer(self.QUESTION)
@@ -297,6 +305,25 @@ class SolutionEndToEndTest(unittest.TestCase):
         self.assertTrue(all(r["answer"].strip() for r in rows))
         self.assertIn("быстрый режим", log)
         self.assertLess(elapsed, 45, log[-500:])
+
+    def test_ids_are_kept_exactly(self):
+        questions = [(" a ", "Вопрос один?"), ("b", "Вопрос два?"), ("007", "Вопрос три?")]
+        with MockApi(reject_template_kwargs=False) as mock:
+            rows, _ = self._run(mock, questions)
+        self.assertEqual([r["id"] for r in rows], [" a ", "b", "007"])
+
+    def test_hard_deadline_with_dripping_response(self):
+        """Ответ «капает» быстрее тайм-аута чтения, но бесконечно долго — файл всё равно пишется вовремя."""
+        questions = [(str(i), f"Вопрос {i} про платформу учёта?") for i in range(4)]
+        started = time.perf_counter()
+        with MockApi(reject_template_kwargs=False, chat_drip=0.5) as mock:
+            rows, log = self._run(mock, questions, extra_env={
+                "EB_DEADLINE_SEC": "5", "EB_HARD_DEADLINE_SEC": "12", "MAX_WORKERS": "2"})
+        elapsed = time.perf_counter() - started
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r["answer"].strip() for r in rows))
+        self.assertIn("жёсткий дедлайн", log)
+        self.assertLess(elapsed, 30, log[-400:])
 
     def test_llm_outage_still_gives_valid_submission(self):
         with MockApi(fail_chat=True) as mock:

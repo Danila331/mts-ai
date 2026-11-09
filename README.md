@@ -135,7 +135,8 @@ set -a; source .env; set +a
 | `EB_USE_EMBEDDINGS`, `EB_USE_RERANKER`, `EB_DISABLE_THINKING` | включение ступеней (`0` — выключить) | `1` |
 | `EB_MAX_WORKERS` | переопределить параллельность | `MAX_WORKERS` |
 | `EB_DEADLINE_SEC` | общий лимит прогона | `1050` |
-| `EMBEDDER_BASE_URL/API_KEY`, `RERANKER_BASE_URL/API_KEY` | только локально: отдельные адреса и ключи | как у LLM |
+| `EMBEDDER_API_KEY`, `RERANKER_API_KEY` | отдельные ключи (как в примере организаторов) | ключ LLM |
+| `EB_EMBEDDER_BASE_URL`, `EB_RERANKER_BASE_URL` | только локально: отдельные адреса эмбеддингов и реранкера | адрес LLM |
 | `JUDGE_BASE_URL`, `JUDGE_API_KEY`, `JUDGE_MODEL` | отдельная модель для LLM-судьи стенда | как у LLM |
 | `DEBUG_JSONL` | путь для источников и времени ответа по каждому вопросу | выключено |
 
