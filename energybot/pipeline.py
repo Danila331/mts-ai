@@ -101,7 +101,8 @@ class Consultant:
         ranked = self.retriever.search(lexical, query_vec, rerank_query=semantic, n_candidates=self.n_candidates,
                                        rerank=not fast)
         context = self.retriever.context(ranked, top_k=self.top_k, expand_docs=self.expand_docs,
-                                         char_budget=self.context_chars)
+                                         char_budget=self.context_chars,
+                                         ref_query=lexical if env("EB_REF_MIX", "1") != "0" else "")
         return ranked[: self.top_k], context
 
     def answer(self, question, mode: str = "eval", query_vec=None, fast: bool = False,
