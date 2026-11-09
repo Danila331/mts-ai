@@ -51,7 +51,8 @@
 
 ## Проверки перед pull request
 
-- Всегда: `.venv/bin/python -m unittest discover -s tests`.
+- Всегда: `.venv/bin/ruff check .` и `.venv/bin/python -m unittest discover -s tests`; CI (`ci.yml`) должен быть зелёным.
+- Сабмит: `.venv/bin/python scripts/check_submission.py` — 0 непройденных проверок.
 - Изменил поиск, нарезку базы или промпт — прогони `eval/retrieval_eval.py --split dev` (главная метрика — доля разделов эталона в контексте) и, если есть ключ, `eval/run_eval.py --with-demo --baseline`; приложи метрики «до/после» в описание PR.
 - Изменил число вызовов модели, контекст или параллельность — прогони `scripts/simulate_budget.py`: прогон обязан укладываться в 20 минут без пустых ответов.
 - Не ослабляй проверку ответа (`energybot/guard.py`) без замера: на эталонах выборки она не должна срабатывать против всей базы.

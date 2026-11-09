@@ -18,7 +18,6 @@ import numpy as np
 from .kb import Chunk, KnowledgeBase
 from .text import tokens
 
-
 # Общие правила консультации нужны в любом ответе.
 ALWAYS_DOC = "02-product-scope-and-limits.md"
 ALWAYS_SECTIONS = ("Общие границы", "Когда требуется специалист")
