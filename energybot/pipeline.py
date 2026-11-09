@@ -31,6 +31,8 @@ VERIFY_INSTRUCTION = """[Служебная проверка.] Выше — мо
 Черновик А:
 {draft_a}{draft_b_block}"""
 
+FACTS_INSTRUCTION = """[Служебное.] Не отвечая клиенту, выпиши из раздела МАТЕРИАЛЫ 3–5 самых важных для ответа на последнюю реплику фактов, цифр и оговорок — дословно или близко к тексту. Каждый факт с новой строки, начиная с «- «. Только факты из материалов, ничего от себя."""
+
 
 @dataclass
 class Answer:
@@ -111,16 +113,27 @@ class Consultant:
         turns = parse(question) if isinstance(question, str) else question
         hits, chunks = self.retrieve(turns, query_vec, fast=fast or offline)
         timings["retrieval"] = time.perf_counter() - t0
+        # Эксперимент 3: LLM-отбор фрагментов перед генерацией (EB_LLM_SELECT=1).
+        if not fast and not offline and env("EB_LLM_SELECT") == "1":
+            chunks = self.select_chunks(chunks, turns)
         sources = [(h.chunk.doc, h.chunk.path, round(float(h.score), 4)) for h in hits]
         sources += [(c.doc, c.path, None) for c in chunks[len(hits):]]
         materials = "\n\n".join(c.render() for c in chunks)
+        # Эксперимент 2: реранкер по предложениям топ-чанков (EB_SENT_RERANK=1).
+        if not fast and not offline and env("EB_SENT_RERANK") == "1":
+            materials = self.add_key_sentences(materials, chunks, turns)
         if offline:
             timings["total"] = time.perf_counter() - t0
             return Answer(extractive(chunks) or FALLBACK, sources, timings, "без модели: лимит времени")
         messages = [{"role": "system", "content": system_prompt(materials, mode)}] + turns
         t1 = time.perf_counter()
         text, error = "", ""
+        if not fast and env("EB_FACTS_COMPOSE") == "1":
+            # Эксперимент 4: ответ собирается из извлечённых фактов, без полного контекста.
+            text, error = self.compose_from_facts(turns, mode, materials)
         for attempt in range(1 if fast else 2):
+            if text:
+                break
             try:
                 text = tidy(self.api.chat(messages))
                 if text:
@@ -143,6 +156,61 @@ class Consultant:
         if not text:
             return Answer(extractive(chunks) or FALLBACK, sources, timings, error or "пустой ответ", guard)
         return Answer(text, sources, timings, "", guard)
+
+    def select_chunks(self, chunks: list, turns: list) -> list:
+        """Эксперимент 3: LLM выбирает, какие фрагменты нужны для ответа. Сбой → все."""
+        from .dialog import search_queries
+        last = search_queries(turns)[2]
+        listing = "\n".join(f"{i + 1}. {c.doc.split('/')[-1]} · {c.path}: {c.text[:150]}" for i, c in enumerate(chunks))
+        try:
+            out = self.api.chat([
+                {"role": "system", "content": "Ты отбираешь фрагменты базы знаний для ответа на вопрос."},
+                {"role": "user", "content": f"Вопрос клиента: {last}\n\nФрагменты:\n{listing}\n\n"
+                                            "Верни только номера нужных фрагментов через запятую (1–5 штук)."},
+            ], max_tokens=100)
+            picked = [int(x) for x in re.findall(r"\d+", out)]
+            chosen = [chunks[i - 1] for i in picked if 1 <= i <= len(chunks)]
+            if chosen:
+                return chosen
+        except Exception as exc:  # noqa: BLE001
+            print(f"[consultant] LLM-отбор фрагментов не удался: {exc}", file=sys.stderr)
+        return chunks
+
+    def add_key_sentences(self, materials: str, chunks: list, turns: list) -> str:
+        """Эксперимент 2: реранкер по предложениям — в начало материалов добавляются
+        5 предложений, самых релевантных вопросу. Сбой → материалы как были."""
+        from .dialog import search_queries
+        from .guard import SENTENCE
+        sents = []
+        for c in chunks[:5]:
+            for s in SENTENCE.split(" ".join(c.text.split())):
+                s = s.strip("- ").strip()
+                if len(s) > 30:
+                    sents.append(s)
+        if not sents or not self.api.configured or not self.api.can_rerank:
+            return materials
+        try:
+            scores = self.api.rerank(search_queries(turns)[1], sents[:40])
+            top = sorted(zip(scores, sents), key=lambda x: -x[0])[:5]
+            block = "\n".join(f"- {s}" for _, s in top)
+            return f"КЛЮЧЕВЫЕ ПРЕДЛОЖЕНИЯ (самое важное по вопросу):\n{block}\n\nПОЛНЫЕ РАЗДЕЛЫ:\n{materials}"
+        except Exception as exc:  # noqa: BLE001
+            print(f"[consultant] реранк предложений не удался: {exc}", file=sys.stderr)
+            return materials
+
+    def compose_from_facts(self, turns: list, mode: str, materials: str) -> tuple:
+        """Эксперимент 4: сначала извлечение фактов из материалов, затем ответ ТОЛЬКО из них."""
+        try:
+            facts = tidy(self.api.chat(
+                [{"role": "system", "content": system_prompt(materials, mode)}] + turns +
+                [{"role": "user", "content": FACTS_INSTRUCTION}], max_tokens=400))
+            if not facts:
+                return "", "пустое извлечение фактов"
+            gen_messages = [{"role": "system", "content": system_prompt(
+                f"КЛЮЧЕВЫЕ ФАКТЫ (единственный источник ответа):\n{facts}", mode)}] + turns
+            return tidy(self.api.chat(gen_messages)), ""
+        except Exception as exc:  # noqa: BLE001
+            return "", f"{type(exc).__name__}: {exc}"
 
     def verify(self, messages: list, draft_a: str, ensemble: bool = True) -> str:
         """Второй проход: при наличии времени — второй черновик при другой температуре,
