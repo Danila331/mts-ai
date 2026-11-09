@@ -192,7 +192,8 @@ class GuardTest(unittest.TestCase):
 
     def test_invented_number_triggers_repair(self):
         def responder(messages):
-            return self.GOOD if messages[-1]["content"].startswith("[Служебная") else self.BAD
+            # Хороший ответ отдаём только на ремонт guard'а; черновики и проверка — плохие.
+            return self.GOOD if "Не называй их" in messages[-1]["content"] else self.BAD
 
         with MockApi(reject_template_kwargs=False, responder=responder) as mock:
             result = _consultant(mock).answer(self.QUESTION)
@@ -211,7 +212,8 @@ class GuardTest(unittest.TestCase):
         with MockApi(reject_template_kwargs=False, responder=lambda m: self.GOOD) as mock:
             result = _consultant(mock).answer(self.QUESTION)
             calls = mock.calls["chat"]
-        self.assertEqual((result.text, result.guard, calls), (self.GOOD, {}, 1))
+        self.assertEqual((result.text, result.guard), (self.GOOD, {}))
+        self.assertEqual(calls, 3)  # черновик + ансамбль + самопроверка
 
 
 class EmbeddingBatchTest(unittest.TestCase):
@@ -265,7 +267,12 @@ class SolutionEndToEndTest(unittest.TestCase):
     def test_dialog_history_is_passed_as_turns(self):
         with MockApi(reject_template_kwargs=False) as mock:
             self._run(mock, [("1", "Пользователь: Мы СНТ.\nАссистент: Какая задача?\nПользователь: Учёт.")])
-        self.assertEqual([m["role"] for m in mock.last_messages], ["system", "user", "assistant", "user"])
+        # Исходные реплики идут первыми и в том же порядке; дальше могут следовать
+        # сообщения второго прохода (черновик + проверка).
+        roles = [m["role"] for m in mock.last_messages]
+        self.assertEqual(roles[:4], ["system", "user", "assistant", "user"])
+        self.assertEqual(mock.last_messages[1]["content"], "Мы СНТ.")
+        self.assertEqual(mock.last_messages[3]["content"], "Учёт.")
 
     def test_flat_zip_runs_like_on_platform(self):
         """Сабмит из распакованного ZIP: только корневые .py и requirements.txt, без energybot/."""

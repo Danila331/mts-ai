@@ -11,7 +11,7 @@ from pathlib import Path
 from .dialog import parse, search_queries
 from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
 from .kb import KnowledgeBase
-from .llm import Api, env_num
+from .llm import Api, env, env_num
 from .prompts import system_prompt
 from .retrieval import Retriever
 
@@ -19,6 +19,16 @@ FALLBACK = (
     "Точного ответа на этот вопрос в моих материалах нет, поэтому не буду гадать. "
     "Его лучше уточнить у специалиста МТС EnergyTool — он разберёт вашу ситуацию предметно."
 )
+
+VERIFY_INSTRUCTION = """[Служебная проверка.] Выше — мой черновик ответа клиенту{second}.
+Проверь его по МАТЕРИАЛАМ и правилам:
+1. Каждое число и факт в ответе должны быть из МАТЕРИАЛОВ, с их оговорками.
+2. Ответ должен прямо отвечать на ПОСЛЕДНЮЮ реплику клиента; если в ней несколько вопросов — закрыть все.
+3. 25–50 слов, обычный текст, один уточняющий вопрос в конце, если уместен.
+Выбери более точный черновик или объедини их, исправь найденные ошибки и выведи только итоговый ответ клиенту, без пояснений.
+
+Черновик А:
+{draft_a}{draft_b_block}"""
 
 
 @dataclass
@@ -118,6 +128,10 @@ class Consultant:
             except Exception as exc:  # noqa: BLE001 — на выходе всегда должен быть ответ
                 error = f"{type(exc).__name__}: {exc}"
                 print(f"[consultant] LLM, попытка {attempt + 1}: {error}", file=sys.stderr)
+        # Второй проход: ансамбль (черновик Б при другой температуре) + самопроверка по материалам.
+        # Только в нормальном режиме — в fast на это нет времени.
+        if text and not fast and env("EB_VERIFY", "1") != "0":
+            text = self.verify(messages, text, ensemble=env("EB_ENSEMBLE", "1") != "0")
         timings["generation"] = time.perf_counter() - t1
         guard = {}
         if text:
@@ -128,6 +142,30 @@ class Consultant:
         if not text:
             return Answer(extractive(chunks) or FALLBACK, sources, timings, error or "пустой ответ", guard)
         return Answer(text, sources, timings, "", guard)
+
+    def verify(self, messages: list, draft_a: str, ensemble: bool = True) -> str:
+        """Второй проход: при наличии времени — второй черновик при другой температуре,
+        затем один вызов, который сверяет черновики с материалами и выдаёт итог.
+        Любой сбой — возвращаем исходный черновик."""
+        draft_b = ""
+        if ensemble:
+            try:
+                draft_b = tidy(self.api.chat(messages, temperature=0.5))
+            except Exception:  # noqa: BLE001
+                draft_b = ""
+        try:
+            instruction = VERIFY_INSTRUCTION.format(
+                second=" и второй черновик" if draft_b else "",
+                draft_a=draft_a,
+                draft_b_block=f"\n\nЧерновик Б:\n{draft_b}" if draft_b else "")
+            checked = tidy(self.api.chat(messages + [
+                {"role": "assistant", "content": draft_a},
+                {"role": "user", "content": instruction},
+            ]))
+            return checked or draft_a
+        except Exception as exc:  # noqa: BLE001
+            print(f"[consultant] самопроверка не удалась: {exc}", file=sys.stderr)
+            return draft_a
 
     def check(self, text: str, messages: list, materials: str, turns: list, fast: bool) -> tuple:
         """Числа — только из материалов и диалога, длина — в разумных пределах."""
