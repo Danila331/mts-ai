@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -27,6 +28,47 @@ MAX_WORKERS = env_num("EB_MAX_WORKERS", 0, 0, 16) or env_num("MAX_WORKERS", 4, 1
 # Лимит прогона на платформе — 20 минут; оставляем запас на запись файла.
 DEADLINE_SEC = env_num("EB_DEADLINE_SEC", 1050.0, 30.0, 3600.0, float)
 MAX_ANSWER_CHARS = 9000  # предел платформы — 10 000 символов
+OFFLINE_MARGIN_SEC = 20.0  # верхняя граница запаса до дедлайна, после которого модель уже не вызываем
+
+
+class Budget:
+    """Следит, успеваем ли ответить на все вопросы до дедлайна.
+
+    По средней длительности уже обработанных вопросов прогнозирует, хватит ли времени на
+    оставшиеся. Если нет — включает быстрый режим (без реранкера и повторной генерации)
+    и не выключает его. Когда до дедлайна остаётся меньше, чем нужно на один ответ
+    (1,5 средней длительности, от 5 до OFFLINE_MARGIN_SEC секунд), модель больше не вызывается.
+    """
+
+    def __init__(self, total: int, started: float, deadline_sec: float, workers: int):
+        self.total, self.started, self.deadline_sec, self.workers = total, started, deadline_sec, workers
+        self.lock = threading.Lock()
+        self.dispatched = self.done = 0
+        self.spent = 0.0
+        self.fast = False
+        self.fast_from = None
+
+    def take(self) -> str:
+        with self.lock:
+            self.dispatched += 1
+            left = self.deadline_sec - (time.perf_counter() - self.started)
+            avg = self.spent / self.done if self.done else None
+            margin = OFFLINE_MARGIN_SEC if avg is None else min(OFFLINE_MARGIN_SEC, max(5.0, 1.5 * avg))
+            if left < margin:
+                return "offline"
+            if not self.fast and self.done >= self.workers:
+                remaining = self.total - self.dispatched + 1
+                projected = remaining * avg / self.workers
+                if projected > 0.85 * left:
+                    self.fast, self.fast_from = True, self.dispatched
+                    print(f"[budget] не успеваем: осталось {remaining} вопросов, прогноз {projected:.0f} c "
+                          f"при {left:.0f} c — быстрый режим", file=sys.stderr, flush=True)
+            return "fast" if self.fast else "normal"
+
+    def record(self, seconds: float):
+        with self.lock:
+            self.done += 1
+            self.spent += seconds
 
 
 def find(*names) -> Path:
@@ -73,18 +115,25 @@ def main():
 
     debug_path = env("DEBUG_JSONL")
     debug = []
+    budget = Budget(len(questions), started, DEADLINE_SEC, MAX_WORKERS)
 
     def work(i):
         qid = questions[i][0]
-        if time.perf_counter() - started > DEADLINE_SEC:
-            return qid, FALLBACK, {"id": qid, "error": "лимит времени прогона"}
+        mode = budget.take()
+        t0 = time.perf_counter()
         try:
-            result = bot.answer(turns[i], mode="eval", query_vec=vectors[i])
+            result = bot.answer(turns[i], mode="eval", query_vec=vectors[i],
+                                fast=mode == "fast", offline=mode == "offline")
         except Exception as exc:  # noqa: BLE001
             print(f"[{qid}] {type(exc).__name__}: {exc}", file=sys.stderr)
-            return qid, FALLBACK, {"error": str(exc)}
-        info = {"id": qid, "sources": result.sources, "timings": result.timings, "error": result.error}
-        print(f"[{qid}] {result.timings.get('total', 0):.1f} c", file=sys.stderr, flush=True)
+            return qid, FALLBACK, {"id": qid, "error": str(exc), "mode": mode}
+        finally:
+            if mode != "offline":
+                budget.record(time.perf_counter() - t0)
+        info = {"id": qid, "mode": mode, "sources": result.sources, "timings": result.timings,
+                "error": result.error, "guard": result.guard}
+        print(f"[{qid}] {mode} {result.timings.get('total', 0):.1f} c"
+              f"{' guard=' + ','.join(result.guard) if result.guard else ''}", file=sys.stderr, flush=True)
         return qid, result.text, info
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
@@ -98,8 +147,10 @@ def main():
             for row in debug:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     fails = sum(1 for a in answers if a == FALLBACK)
-    print(f"Готово: {OUTPUT} ({len(questions)} ответов, запасных: {fails}) "
-          f"за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
+    modes = {m: sum(1 for d in debug if d.get("mode") == m) for m in ("normal", "fast", "offline")}
+    guarded = sum(1 for d in debug if d.get("guard"))
+    print(f"Готово: {OUTPUT} ({len(questions)} ответов, запасных: {fails}, режимы: {modes}, "
+          f"исправлено проверкой: {guarded}) за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
