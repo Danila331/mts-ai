@@ -167,7 +167,7 @@ jobs:
           python eval/run_eval.py --set "$EVAL_SET" --baseline-pred eval/baseline/answers.csv --no-judge | tee run.md
       - name: Слепые пакеты для судьи
         run: |
-          REPORT=$(ls -td eval/reports/*/ | head -1)
+          REPORT="$(find eval/reports -mindepth 1 -maxdepth 1 -type d | sort | tail -1)/"
           echo "REPORT=$REPORT" >> "$GITHUB_ENV"
           python eval/blind_judge.py export "$REPORT" --parts "$PACKETS" \
             --baseline-pred eval/baseline/answers.csv --out packets --key private/key.json
@@ -234,7 +234,7 @@ jobs:
               else echo "::warning::пакет $n, попытка $attempt: вердикты неполные"; fi
             done
           done
-          echo "Пакетов с вердиктами: $(ls verdicts | wc -l) из $(ls packets/packet-*.md | wc -l)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Пакетов с вердиктами: $(find verdicts -name 'verdicts-*.jsonl' | wc -l) из $(find packets -name 'packet-*.md' | wc -l)" >> "$GITHUB_STEP_SUMMARY"
       - uses: ./.github/actions/codex
         if: always()
         with:
