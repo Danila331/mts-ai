@@ -189,6 +189,14 @@ class GuardTest(unittest.TestCase):
         self.assertEqual((result.text, result.guard, calls), (self.GOOD, {}, 1))
 
 
+class EmbeddingBatchTest(unittest.TestCase):
+    def test_batch_shrinks_on_provider_limit(self):
+        with MockApi(reject_template_kwargs=False, max_embed_batch=5) as mock:
+            bot = _consultant(mock)
+        self.assertTrue(bot.dense)
+        self.assertLessEqual(bot.api.embed_batch, 5)
+
+
 class SolutionEndToEndTest(unittest.TestCase):
     def _run(self, mock: MockApi, questions: list, script: Path = ROOT / "solution.py",
              extra_env: dict | None = None) -> tuple:

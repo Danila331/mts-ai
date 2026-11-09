@@ -52,6 +52,7 @@ class Api:
         self.max_tokens = env_num("EB_MAX_TOKENS", 700, 128, 8192)
         self.temperature = env_num("EB_TEMPERATURE", 0.0, 0.0, 2.0, float)
         self.timeout = env_num("EB_REQUEST_TIMEOUT", 60.0, 5.0, 600.0, float)
+        self.embed_batch = env_num("EB_EMBED_BATCH", 16, 1, 256)
         self.use_embeddings = env("EB_USE_EMBEDDINGS", "1") != "0"
         self.can_rerank = env("EB_USE_RERANKER", "1") != "0"
         # Qwen3 — гибридная модель; режим размышлений отключаем ради скорости и чистого ответа.
@@ -90,15 +91,26 @@ class Api:
         raise last
 
     # ---------- эмбеддинги ----------
-    def embed(self, texts: list, batch: int = 32) -> list:
+    def embed(self, texts: list, batch: int | None = None) -> list:
+        """Эмбеддинги пачками. Лимит размера пачки у провайдеров разный (бывает 20, 10…):
+        при ответе 400 пачка уменьшается вдвое, и дальше используется уже меньший размер."""
+        batch = batch or self.embed_batch
         out = []
-        for i in range(0, len(texts), batch):
+        i = 0
+        while i < len(texts):
             part = texts[i:i + batch]
-            data = self._post(self.emb_url + "/embeddings", self.emb_key, {"model": self.emb_model, "input": part})
+            try:
+                data = self._post(self.emb_url + "/embeddings", self.emb_key, {"model": self.emb_model, "input": part})
+            except httpx.HTTPStatusError as exc:
+                if exc.response is not None and exc.response.status_code == 400 and batch > 1:
+                    batch = self.embed_batch = max(1, batch // 2)
+                    continue
+                raise
             items = sorted(data["data"], key=lambda d: d.get("index", 0))
             if len(items) != len(part):
                 raise ValueError("Получены не все эмбеддинги")
             out.extend([float(x) for x in it["embedding"]] for it in items)
+            i += len(part)
         return out
 
     # ---------- реранкер ----------
