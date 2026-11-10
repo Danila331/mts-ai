@@ -79,8 +79,11 @@ class DialogTest(unittest.TestCase):
         self.assertIn("Какая мощность", semantic)
 
     def test_dialog_ending_with_assistant(self):
-        turns = parse("Пользователь: Привет\nАссистент: Чем помочь?")
-        self.assertEqual(turns[-1]["role"], "user")
+        """Отвечаем на последнюю реплику пользователя (регламент, раздел 3): реплику за клиента не выдумываем."""
+        turns = parse("Пользователь: Сколько служат панели?\nАссистент: Уточняю данные по вашему вопросу.")
+        self.assertEqual(turns, [{"role": "user", "content": "Сколько служат панели?"}])
+        self.assertEqual(search_queries(turns)[2], "Сколько служат панели?")
+        self.assertEqual(parse("Ассистент: Чем помочь?"), [{"role": "user", "content": "Ассистент: Чем помочь?"}])
 
 
 class PostprocessTest(unittest.TestCase):
@@ -117,13 +120,13 @@ class PostprocessTest(unittest.TestCase):
     def test_tidy_removes_markdown(self):
         self.assertEqual(tidy("Консультант: **Да**, можно:\n- раз\n- два\nВопрос?"), "Да, можно: раз два Вопрос?")
 
-    def test_fallback_refuses_off_topic(self):
-        """Запасной ответ без модели не отдаёт посторонний фрагмент: вопрос не по базе — отказ (регламент, раздел 7)."""
-        from energybot.pipeline import extractive
-        solar = next(c for c in KnowledgeBase.load(KB_DIR).chunks if "солнечн" in c.text.lower())
-        self.assertEqual(extractive([solar], "Как приготовить борщ?"), "")
-        answer = extractive([solar], "Сколько вырабатывает солнечная станция?")
-        self.assertTrue(answer.endswith("подскажет специалист."))
+    def test_no_model_answer_is_refusal(self):
+        """Без модели нельзя проверить, есть ли в разделе ответ, поэтому — корректный отказ (регламент, раздел 7),
+        а не выдержка: на «срок поставки» выдержка отдала бы срок службы панелей."""
+        from energybot.pipeline import FALLBACK, Consultant
+        bot = Consultant(KB_DIR, api=None)
+        for q in ("Как приготовить борщ?", "Каков точный срок поставки солнечной станции?"):
+            self.assertEqual(bot.answer(parse(q), mode="eval", offline=True).text, FALLBACK)
 
 
 class DatasetTest(unittest.TestCase):
