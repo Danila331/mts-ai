@@ -58,6 +58,7 @@ New → Database → **PostgreSQL**. Служба называется `Postgres
 |---|---|
 | `EB_CORE_HOST` | `::` — приватная сеть Railway адресует по IPv6 |
 | `EB_CORE_PORT` | `8788` |
+| `PORT` | `8788` — обязательно: Railway сам задаёт службе `PORT=8080`, ядро слушает `PORT` раньше своего `EB_CORE_PORT`, и без этой строки `api` стучится на 8788 в закрытый порт |
 | `EB_CORE_TOKEN` | длинная случайная строка (`openssl rand -hex 32`) — общая с `api` |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMB_MODEL`, … | как в `.env` (см. `.env.example`) |
 
