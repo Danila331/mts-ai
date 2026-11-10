@@ -1,8 +1,7 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { type KbIndex, kbHref } from "@/hooks/use-kb";
 import { DocView } from "./doc-view";
@@ -26,25 +25,27 @@ export function ChunkSheet({
 
   return (
     <Sheet open={!!chunkId} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="w-full gap-0 p-0 data-[side=right]:w-[min(720px,92vw)] data-[side=right]:sm:max-w-none">
-        <SheetHeader className="border-b pr-12">
-          <SheetTitle className="text-sm">База знаний</SheetTitle>
-          <SheetDescription className="flex items-center gap-2 text-xs">
-            Тот же раздел, что видела модель
-            {chunkId && (
-              <Button
-                variant="link"
-                size="xs"
-                className="h-auto p-0 text-brand"
-                nativeButton={false}
-                render={<a href={kbHref(chunkId)} target="_blank" rel="noreferrer" />}
-              >
-                открыть во вкладке <ExternalLink />
-              </Button>
-            )}
-          </SheetDescription>
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 data-[side=right]:w-[min(720px,100vw)] data-[side=right]:sm:max-w-none"
+      >
+        <SheetHeader className="h-14 shrink-0 flex-row items-center gap-3 border-b px-5 py-0 pr-14">
+          <div className="min-w-0 flex-1">
+            <SheetTitle className="text-[15px] leading-tight">База знаний</SheetTitle>
+            <SheetDescription className="text-xs">Тот же раздел, что видела модель</SheetDescription>
+          </div>
+          {chunkId && (
+            <a
+              href={kbHref(chunkId)}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              В новой вкладке <ArrowUpRight className="size-3.5" />
+            </a>
+          )}
         </SheetHeader>
-        <div ref={setRoot} className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+        <div ref={setRoot} className="min-h-0 flex-1 overflow-y-auto px-6 pt-6 pb-16 sm:px-10">
           {doc && kb ? (
             <DocView
               doc={doc}
@@ -55,7 +56,7 @@ export function ChunkSheet({
               scrollRoot={root}
             />
           ) : (
-            <div className="text-sm text-muted-foreground">Раздел не найден в базе ({chunkId})</div>
+            <div className="text-[14px] text-muted-foreground">Раздел не найден в базе ({chunkId})</div>
           )}
         </div>
       </SheetContent>

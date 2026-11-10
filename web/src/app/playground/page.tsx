@@ -1,14 +1,13 @@
 import type { Metadata } from "next";
-import { AppHeader } from "@/components/app-header";
+import { Suspense } from "react";
 import { Playground } from "./playground";
 
 export const metadata: Metadata = { title: "Чат и отладка — EnergyTool AI" };
 
 export default function Page() {
   return (
-    <div className="flex h-dvh flex-col">
-      <AppHeader />
+    <Suspense fallback={<div className="h-dvh" />}>
       <Playground />
-    </div>
+    </Suspense>
   );
 }

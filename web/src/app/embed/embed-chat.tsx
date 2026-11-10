@@ -1,15 +1,15 @@
 "use client";
 
-import { MessageSquarePlus, UserRound, X } from "lucide-react";
+import { ArrowLeft, Headset, SquarePen, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChatView } from "@/components/chat/chat-view";
-import { LeadDialog } from "@/components/chat/lead-dialog";
+import { LeadPanel } from "@/components/chat/lead-dialog";
 import { BotAvatar } from "@/components/chat/message-item";
-import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
 import { kbHref, useKb } from "@/hooks/use-kb";
+import { cn } from "@/lib/utils";
 
 const HEX = /^#[0-9a-f]{3,8}$/i;
 
@@ -17,7 +17,7 @@ const HEX = /^#[0-9a-f]{3,8}$/i;
 export function EmbedChat() {
   const params = useSearchParams();
   const title = params.get("title") || "Консультант EnergyTool";
-  const subtitle = params.get("subtitle") || "ИИ-помощник · отвечает по базе знаний МТС";
+  const subtitle = params.get("subtitle") || "Отвечает по базе знаний МТС";
   const greeting = params.get("greeting") || undefined;
   const color = HEX.test(params.get("color") ?? "") ? params.get("color")! : undefined;
   const parent = params.get("parent");
@@ -79,80 +79,110 @@ export function EmbedChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answers]);
 
-  const style = color ? ({ "--brand": color } as React.CSSProperties) : undefined;
+  const style = color
+    ? ({
+        "--brand": color,
+        "--primary": color,
+        "--brand-text": color,
+      } as React.CSSProperties)
+    : undefined;
+
+  const headerButton =
+    "flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-[18px]";
 
   return (
     <div className="flex h-dvh flex-col bg-background" style={style}>
-      <header className="flex shrink-0 items-center gap-2.5 bg-[#1d2023] px-3.5 py-3 text-white">
-        <BotAvatar className="size-9 text-xs" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{title}</div>
-          <div className="flex items-center gap-1.5 truncate text-[11px] text-white/60">
-            <span className="size-1.5 rounded-full bg-emerald-400" />
-            {subtitle}
-          </div>
+      <header className="flex h-16 shrink-0 items-center gap-3 border-b px-4">
+        {leadOpen ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setLeadOpen(false)}
+              className={cn(headerButton, "-ml-1.5")}
+              aria-label="Назад к чату"
+            >
+              <ArrowLeft />
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[15px] leading-tight font-semibold">Передать запрос менеджеру</div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">Менеджер МТС EnergyTool получит резюме разговора</div>
+            </div>
+          </>
+        ) : (
+          <>
+            <BotAvatar className="size-9" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[15px] leading-tight font-semibold">{title}</div>
+              <div className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                <span className="relative flex size-1.5 shrink-0">
+                  <span className="absolute inset-0 animate-ping rounded-full bg-success motion-reduce:hidden" />
+                  <span className="relative size-1.5 rounded-full bg-success" />
+                </span>
+                <span className="truncate">{subtitle}</span>
+              </div>
+            </div>
+          </>
+        )}
+        <div className="-mr-1.5 flex items-center">
+          {!leadOpen && (
+            <>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={() => setLeadOpen(true)}
+                      className={headerButton}
+                      aria-label="Связаться с менеджером"
+                    />
+                  }
+                >
+                  <Headset />
+                </TooltipTrigger>
+                <TooltipContent>Связаться с менеджером</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button type="button" onClick={() => chat.create()} className={headerButton} aria-label="Новый диалог" />
+                  }
+                >
+                  <SquarePen />
+                </TooltipTrigger>
+                <TooltipContent>Новый диалог</TooltipContent>
+              </Tooltip>
+            </>
+          )}
+          {embedded && (
+            <button type="button" onClick={() => notify("eb:close")} className={headerButton} aria-label="Свернуть">
+              <X />
+            </button>
+          )}
         </div>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setLeadOpen(true)}
-                className="text-white/80 hover:bg-white/10 hover:text-white"
-                aria-label="Связаться с менеджером"
-              />
-            }
-          >
-            <UserRound />
-          </TooltipTrigger>
-          <TooltipContent>Связаться с менеджером</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => chat.create()}
-                className="text-white/80 hover:bg-white/10 hover:text-white"
-                aria-label="Новый диалог"
-              />
-            }
-          >
-            <MessageSquarePlus />
-          </TooltipTrigger>
-          <TooltipContent>Новый диалог</TooltipContent>
-        </Tooltip>
-        {embedded && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => notify("eb:close")}
-            className="text-white/80 hover:bg-white/10 hover:text-white"
-            aria-label="Свернуть"
-          >
-            <X />
-          </Button>
-        )}
       </header>
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
         {chat.ready && (
-          <ChatView
-            chat={chat}
-            kb={kb}
-            compact
-            greeting={greeting}
-            onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
-            onLead={() => setLeadOpen(true)}
-          />
+          <div className={cn("h-full", leadOpen && "invisible")} aria-hidden={leadOpen}>
+            <ChatView
+              chat={chat}
+              kb={kb}
+              compact
+              greeting={greeting}
+              onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
+              onLead={() => setLeadOpen(true)}
+            />
+          </div>
+        )}
+        {leadOpen && chat.active && (
+          <div className="msg-in absolute inset-0 bg-background">
+            <LeadPanel session={chat.active} onDone={(l) => chat.setLead(l)} onClose={() => setLeadOpen(false)} />
+          </div>
         )}
       </div>
-      <div className="shrink-0 pb-2 text-center text-[10px] text-muted-foreground">
-        ИИ может ошибаться · точные цифры по объекту подтвердит специалист МТС
-      </div>
-      {chat.active && (
-        <LeadDialog session={chat.active} open={leadOpen} onOpenChange={setLeadOpen} onDone={(l) => chat.setLead(l)} />
+      {!leadOpen && (
+        <div className="shrink-0 px-4 pb-2.5 text-center text-[11px] leading-snug text-muted-foreground">
+          ИИ может ошибаться — цифры по вашему объекту подтвердит специалист МТС
+        </div>
       )}
     </div>
   );

@@ -1,40 +1,24 @@
 "use client";
 
-import {
-  AlertTriangle,
-  Bug,
-  Check,
-  Copy,
-  RotateCcw,
-  ShieldAlert,
-  ThumbsDown,
-  ThumbsUp,
-} from "lucide-react";
+import { AlertCircle, Check, Copy, PanelRight, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KbIndex } from "@/hooks/use-kb";
 import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { AnswerText } from "./answer-text";
+import { BrandMark } from "@/components/brand";
+import { AnswerText, SourcesRow } from "./answer-text";
 
 export function BotAvatar({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn(
-        "flex size-7 shrink-0 items-center justify-center rounded-full bg-brand text-[11px] font-bold text-white",
-        className,
-      )}
-      aria-hidden
-    >
-      ET
-    </div>
-  );
+  return <BrandMark round className={className} />;
 }
 
-function IconAction({ label, onClick, children, active }: {
+function IconAction({
+  label,
+  onClick,
+  children,
+  active,
+}: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
@@ -44,12 +28,15 @@ function IconAction({ label, onClick, children, active }: {
     <Tooltip>
       <TooltipTrigger
         render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
+          <button
+            type="button"
             onClick={onClick}
             aria-label={label}
-            className={cn("text-muted-foreground", active && "bg-muted text-foreground")}
+            aria-pressed={active}
+            className={cn(
+              "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-4",
+              active && "text-foreground",
+            )}
           />
         }
       >
@@ -60,25 +47,39 @@ function IconAction({ label, onClick, children, active }: {
   );
 }
 
-function Pending({ message }: { message: Message }) {
-  const found = message.retrieval?.hits.filter((h) => h.in_context).length;
-  const label =
-    message.stage === "generation"
-      ? `Нашёл ${found ?? "нужные"} разделов в базе · формулирую ответ…`
-      : message.stage === "retrieval"
-        ? `Нашёл ${found} разделов в базе знаний…`
-        : "Ищу в базе знаний…";
+function Tag({ tone, children }: { tone: "warning" | "danger" | "neutral"; children: React.ReactNode }) {
   return (
-    <div className="space-y-2 py-1">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="relative flex size-2">
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-brand/60" />
-          <span className="relative inline-flex size-2 rounded-full bg-brand" />
+    <span
+      className={cn(
+        "inline-flex h-5 items-center rounded-md px-1.5 text-[11px] font-medium",
+        tone === "warning" && "bg-tone-warning text-white",
+        tone === "danger" && "bg-tone-danger text-white",
+        tone === "neutral" && "bg-muted text-muted-foreground",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Pending({ message, compact }: { message: Message; compact?: boolean }) {
+  const found = message.retrieval?.hits.filter((h) => h.in_context).length;
+  const searching = message.stage !== "generation";
+  return (
+    <div className="flex min-h-7 items-center gap-2.5 text-[14px] text-muted-foreground" role="status" aria-live="polite">
+      <span className="dot-wave flex items-center gap-1" aria-hidden>
+        <span className="size-1.5 rounded-full bg-brand" />
+        <span className="size-1.5 rounded-full bg-brand" />
+        <span className="size-1.5 rounded-full bg-brand" />
+      </span>
+      {searching ? (
+        <span>{found ? `Нашёл ${found} разделов в базе знаний` : "Ищу в базе знаний"}</span>
+      ) : (
+        <span>
+          {!compact && found ? `${found} разделов из базы · ` : ""}
+          Формулирую ответ
         </span>
-        {label}
-      </div>
-      <Skeleton className="h-3 w-64" />
-      <Skeleton className="h-3 w-48" />
+      )}
     </div>
   );
 }
@@ -103,14 +104,16 @@ export function MessageItem({
   compact?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  // Анимация только у новых сообщений: история при открытии чата появляется сразу.
+  const [fresh] = useState(() => Date.now() - message.createdAt < 4000);
 
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
+      <div className={cn("flex justify-end", fresh && "msg-in")}>
         <div
           className={cn(
-            "max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-primary-foreground",
-            compact ? "text-sm" : "text-[15px]",
+            "max-w-[min(85%,36rem)] rounded-3xl bg-muted px-4 py-2.5 leading-relaxed text-foreground dark:bg-accent",
+            compact ? "text-[14px]" : "text-[15px]",
           )}
         >
           <p className="whitespace-pre-wrap">{message.content}</p>
@@ -130,91 +133,87 @@ export function MessageItem({
   return (
     <div
       className={cn(
-        "group flex gap-2.5 rounded-xl transition-colors",
-        onDebug && "-mx-2 cursor-pointer px-2 py-1.5 hover:bg-muted/50",
-        selected && "bg-muted/70 hover:bg-muted/70",
+        "group relative",
+        fresh && "msg-in",
+        onDebug && "-mx-3 rounded-2xl px-3 py-2 transition-colors",
+        onDebug && !message.pending && "hover:bg-surface",
       )}
       onClick={(e) => {
         if (!onDebug || (e.target as HTMLElement).closest("button,a")) return;
+        if (window.getSelection()?.toString()) return;
         onDebug();
       }}
     >
-      <BotAvatar className={compact ? "size-6 text-[10px]" : undefined} />
-      <div className="min-w-0 flex-1">
-        {message.pending ? (
-          <Pending message={message} />
-        ) : message.error ? (
-          <div className="flex items-center gap-2 py-1 text-sm text-destructive">
-            <AlertTriangle className="size-4" />
+      {message.pending ? (
+        <Pending message={message} compact={compact} />
+      ) : message.error ? (
+        <div className="flex flex-wrap items-center gap-2 text-[14px]">
+          <span className="flex items-center gap-1.5 text-destructive">
+            <AlertCircle className="size-4" />
             {message.error}
+          </span>
+          {onRegenerate && (
+            <button
+              type="button"
+              onClick={onRegenerate}
+              className="inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[13px] text-foreground transition-colors hover:bg-muted"
+            >
+              <RotateCcw className="size-3.5" /> Повторить
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <AnswerText
+            answer={a}
+            text={message.content}
+            kb={kb}
+            onOpenChunk={onOpenChunk}
+            showCitations={!compact}
+            className={cn("text-foreground", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}
+          />
+          {/* Клиенту в виджете — чистый текст; номера и источники нужны жюри на стенде. */}
+          {!compact && <SourcesRow answer={a} kb={kb} onOpen={onOpenChunk} />}
+          <div
+            className={cn(
+              "mt-2 -ml-2 flex flex-wrap items-center gap-0.5 transition-opacity",
+              !selected && "opacity-70 group-hover:opacity-100 focus-within:opacity-100",
+            )}
+          >
+            <IconAction label={copied ? "Скопировано" : "Копировать"} onClick={copy}>
+              {copied ? <Check /> : <Copy />}
+            </IconAction>
             {onRegenerate && (
-              <Button variant="outline" size="xs" onClick={onRegenerate}>
-                <RotateCcw /> Повторить
-              </Button>
+              <IconAction label="Ответить заново" onClick={onRegenerate}>
+                <RotateCcw />
+              </IconAction>
+            )}
+            {onRate && (
+              <>
+                <IconAction label="Хороший ответ" onClick={() => onRate(1)} active={message.rating === 1}>
+                  <ThumbsUp className={cn(message.rating === 1 && "fill-current")} />
+                </IconAction>
+                <IconAction label="Плохой ответ" onClick={() => onRate(-1)} active={message.rating === -1}>
+                  <ThumbsDown className={cn(message.rating === -1 && "fill-current")} />
+                </IconAction>
+              </>
+            )}
+            {onDebug && (
+              <IconAction label={selected ? "Открыто в отладке" : "Показать в отладке"} onClick={onDebug} active={selected}>
+                <PanelRight className={cn(selected && "text-brand-text")} />
+              </IconAction>
+            )}
+            {!compact && a && (
+              <span className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="tnum">{(a.timings.server_total / 1000).toFixed(1).replace(".", ",")} с</span>
+                {a.fallback && <Tag tone="warning">запасной ответ</Tag>}
+                {guardFired ? <Tag tone="danger">сработала проверка</Tag> : null}
+                {a.mode === "eval" && <Tag tone="neutral">автопроверка</Tag>}
+              </span>
             )}
           </div>
-        ) : (
-          <>
-            <AnswerText
-              answer={a}
-              text={message.content}
-              kb={kb}
-              onOpenChunk={onOpenChunk}
-              className={cn("leading-relaxed", compact ? "text-sm" : "text-[15px]")}
-            />
-            <div
-              className={cn(
-                "mt-1.5 flex flex-wrap items-center gap-0.5",
-                !selected && "opacity-70 transition-opacity group-hover:opacity-100",
-              )}
-            >
-              <IconAction label={copied ? "Скопировано" : "Копировать"} onClick={copy}>
-                {copied ? <Check /> : <Copy />}
-              </IconAction>
-              {onRegenerate && (
-                <IconAction label="Ответить заново" onClick={onRegenerate}>
-                  <RotateCcw />
-                </IconAction>
-              )}
-              {onRate && (
-                <>
-                  <IconAction label="Хороший ответ" onClick={() => onRate(1)} active={message.rating === 1}>
-                    <ThumbsUp />
-                  </IconAction>
-                  <IconAction label="Плохой ответ" onClick={() => onRate(-1)} active={message.rating === -1}>
-                    <ThumbsDown />
-                  </IconAction>
-                </>
-              )}
-              {onDebug && (
-                <IconAction label="Показать отладку" onClick={onDebug} active={selected}>
-                  <Bug />
-                </IconAction>
-              )}
-              {!compact && a && (
-                <span className="ml-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  {(a.timings.server_total / 1000).toFixed(1)} c
-                  {a.fallback && (
-                    <Badge variant="outline" className="h-4 border-amber-300 px-1 text-[10px] text-amber-700">
-                      запасной ответ
-                    </Badge>
-                  )}
-                  {guardFired ? (
-                    <Badge variant="outline" className="h-4 gap-0.5 border-red-300 px-1 text-[10px] text-red-700">
-                      <ShieldAlert className="size-2.5" /> проверка
-                    </Badge>
-                  ) : null}
-                  {a.mode === "eval" && (
-                    <Badge variant="secondary" className="h-4 px-1 text-[10px]">
-                      автопроверка
-                    </Badge>
-                  )}
-                </span>
-              )}
-            </div>
-          </>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

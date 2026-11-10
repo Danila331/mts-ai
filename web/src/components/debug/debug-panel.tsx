@@ -1,185 +1,406 @@
 "use client";
 
-import { AlertTriangle, Bug, CheckCircle2, Copy, FileText, Layers, Search, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  CircleHelp,
+  Copy,
+  FileText,
+  Info,
+  ScanSearch,
+  X,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { citationOrder } from "@/components/chat/answer-text";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { citationOrder, SourceNumber } from "@/components/chat/answer-text";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { KbIndex } from "@/hooks/use-kb";
-import type { AnswerPayload, Hit, Message, Retrieval } from "@/lib/types";
+import type { AnswerPayload, Citation, Hit, Message, Retrieval } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const STAGE_COLORS: Record<string, string> = {
-  retrieval: "bg-sky-500",
-  generation: "bg-brand",
-  refine: "bg-violet-500",
-  guard: "bg-amber-500",
-};
-const STAGE_LABELS: Record<string, string> = {
-  retrieval: "Поиск",
-  generation: "Генерация",
-  refine: "Доработка",
-  guard: "Проверка",
+const STAGES: Record<string, { label: string; color: string }> = {
+  retrieval: { label: "Поиск", color: "bg-chart-1" },
+  generation: { label: "Генерация", color: "bg-chart-2" },
+  refine: { label: "Доработка", color: "bg-chart-3" },
+  guard: { label: "Проверка", color: "bg-chart-4" },
 };
 
-function ChunkLink({ id, kb, onOpen, children }: {
+const fmt = (n: number) => n.toLocaleString("ru");
+const sec = (ms: number) => `${(ms / 1000).toFixed(1).replace(".", ",")} с`;
+
+/** Раздел базы: название раздела и документ отдельной строкой; клик открывает раздел. */
+function ChunkRow({
+  id,
+  kb,
+  onOpen,
+  title,
+  path,
+  aside,
+  sub,
+  dim,
+}: {
   id: string;
   kb: KbIndex | null;
   onOpen: (id: string) => void;
-  children?: React.ReactNode;
+  title?: string;
+  path?: string;
+  aside?: React.ReactNode;
+  sub?: React.ReactNode;
+  dim?: boolean;
 }) {
   const e = kb?.byId.get(id);
+  const section = (path ?? e?.chunk.path ?? id).split(" > ").pop();
+  const doc = title ?? e?.doc.title;
   return (
     <button
       type="button"
       onClick={() => onOpen(id)}
-      className="text-left text-xs leading-snug hover:text-brand hover:underline"
       title={`#${id}`}
-    >
-      {children ?? (
-        <>
-          <span className="text-muted-foreground">{e?.doc.title ?? "?"} › </span>
-          {e?.chunk.path ?? id}
-        </>
+      className={cn(
+        "group/row flex w-full min-w-0 items-start gap-3 text-left transition-opacity",
+        dim && "opacity-55 hover:opacity-100",
       )}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13.5px] leading-snug font-medium decoration-border underline-offset-[3px] group-hover/row:underline">
+          {section}
+        </span>
+        {doc && doc !== section && <span className="mt-0.5 block truncate text-xs text-muted-foreground">{doc}</span>}
+        {sub}
+      </span>
+      {aside}
     </button>
   );
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="px-4 py-10 text-center text-sm text-muted-foreground">{children}</div>;
+  return <div className="px-6 py-12 text-center text-[14px] text-muted-foreground">{children}</div>;
+}
+
+function Section({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-[13px] font-semibold">{title}</h3>
+        {aside && <div className="text-xs text-muted-foreground">{aside}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Footnote({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
+      <Info className="mt-px size-3.5 shrink-0" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+function Note({ tone = "warning", children }: { tone?: "warning" | "danger"; children: React.ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-2 rounded-lg px-3 py-2 text-[13px] leading-snug",
+        tone === "warning" ? "bg-tone-warning text-white" : "bg-tone-danger text-white",
+      )}
+    >
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function Fold({
+  summary,
+  open,
+  children,
+  className,
+}: {
+  summary: React.ReactNode;
+  open?: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <details open={open} className={cn("group/fold rounded-xl border bg-background dark:bg-card", className)}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[13px] [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/fold:rotate-90" />
+        {summary}
+      </summary>
+      <div className="border-t px-3 py-3">{children}</div>
+    </details>
+  );
+}
+
+/** Сколько слов совпало: зелёный — уверенная опора, янтарный — слабая. */
+function Overlap({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  const tone = pct >= 50 ? "bg-success" : pct >= 30 ? "bg-warning" : "bg-dim";
+  return (
+    <span className="flex shrink-0 items-center gap-2 pt-0.5">
+      <span className="h-1.5 w-10 overflow-hidden rounded-full bg-muted">
+        <span className={cn("block h-full rounded-full", tone)} style={{ width: `${Math.max(6, pct)}%` }} />
+      </span>
+      <span className="tnum w-8 text-right font-mono text-[11.5px] text-muted-foreground">{pct}%</span>
+    </span>
+  );
 }
 
 // ---------- Опора ----------
+type Verdict = "strong" | "weak" | "none" | "numbers" | "question";
+
+function verdict(c: Citation): Verdict {
+  if (c.question) return "question";
+  if (c.unsupported_numbers.length) return "numbers";
+  if (!c.support.length) return "none";
+  return Math.max(...c.support.map((s) => s.overlap)) >= 0.5 ? "strong" : "weak";
+}
+
+const VERDICT: Record<Verdict, { label: string; bar: string; icon: React.ReactNode }> = {
+  strong: { label: "опора найдена", bar: "bg-success", icon: <CheckCircle2 className="size-4 text-success" /> },
+  weak: { label: "слабая опора", bar: "bg-warning", icon: <CheckCircle2 className="size-4 text-warning" /> },
+  none: { label: "без опоры", bar: "bg-warning", icon: <AlertTriangle className="size-4 text-warning" /> },
+  numbers: { label: "числа без опоры", bar: "bg-destructive", icon: <AlertTriangle className="size-4 text-destructive" /> },
+  question: {
+    label: "вопрос клиенту",
+    bar: "bg-dim",
+    icon: <CircleHelp className="size-4 text-muted-foreground" />,
+  },
+};
+
 function SupportTab({ a, kb, onOpen }: { a: AnswerPayload; kb: KbIndex | null; onOpen: (id: string) => void }) {
   const order = citationOrder(a);
+  const verdicts = a.citations.map(verdict);
+  const claims = verdicts.filter((v) => v !== "question").length;
+  const grounded = verdicts.filter((v) => v === "strong" || v === "weak").length;
+  const questions = verdicts.length - claims;
+  const loose = a.citations.reduce((n, c) => n + c.unsupported_numbers.length, 0);
+
   return (
-    <div className="space-y-3 p-4">
-      <p className="text-xs text-muted-foreground">
-        Каждое предложение ответа сопоставлено с разделами из контекста модели по совпадению основ слов и чисел.
-        Это эвристика стенда: модель не размечает источники сама (ответ по регламенту — одна строка без разметки).
-      </p>
-      {a.citations.map((c, i) => (
-        <div key={i} className="rounded-lg border p-3">
-          <p className="text-sm leading-relaxed">{c.sentence}</p>
-          {c.question ? (
-            <div className="mt-2 text-xs text-muted-foreground">Уточняющий вопрос клиенту — опора не нужна</div>
-          ) : c.support.length ? (
-            <ul className="mt-2 space-y-1.5">
-              {c.support.map((s) => (
-                <li key={s.id} className="flex items-start gap-2">
-                  <span className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-brand-soft text-[10px] font-semibold text-brand">
-                    {order.indexOf(s.id) + 1}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <ChunkLink id={s.id} kb={kb} onOpen={onOpen} />
-                    <div className="mt-0.5 flex items-center gap-2">
-                      <div className="h-1 w-20 overflow-hidden rounded-full bg-muted">
-                        <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, s.overlap * 100)}%` }} />
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">
-                        совпадение {Math.round(s.overlap * 100)}%
-                        {s.numbers.length ? ` · числа: ${s.numbers.join(", ")}` : ""}
-                      </span>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-              <AlertTriangle className="size-3.5" /> Не нашлось раздела с похожей формулировкой
-            </div>
-          )}
-          {c.unsupported_numbers.length > 0 && (
-            <div className="mt-2 flex items-center gap-1.5 text-xs text-red-600">
-              <AlertTriangle className="size-3.5" /> Числа без опоры в разделах: {c.unsupported_numbers.join(", ")}
-            </div>
-          )}
+    <div className="space-y-5 p-5">
+      <div className="space-y-2.5">
+        <div className="flex items-baseline gap-2">
+          <span className="tnum text-[22px] leading-none font-semibold tracking-tight">
+            {grounded}
+            <span className="text-muted-foreground">/{claims}</span>
+          </span>
+          <span className="text-[13px] text-muted-foreground">утверждений опираются на разделы базы</span>
         </div>
-      ))}
+        <div className="flex h-1.5 gap-1" aria-hidden>
+          {verdicts.map((v, i) => (
+            <span key={i} className={cn("flex-1 rounded-full", VERDICT[v].bar)} />
+          ))}
+        </div>
+        <div className="tnum flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {questions > 0 && <span>вопросов клиенту: {questions}</span>}
+          <span className={cn(loose > 0 && "text-destructive")}>чисел без опоры: {loose}</span>
+          <span>источников: {order.length}</span>
+        </div>
+      </div>
+
+      <ol className="divide-y overflow-hidden rounded-xl border bg-background dark:bg-card">
+        {a.citations.map((c, i) => {
+          const v = verdicts[i];
+          return (
+            <li key={i} className="grid grid-cols-[20px_1fr] gap-x-3 px-4 py-4">
+              <span className="pt-[3px]" title={VERDICT[v].label}>
+                {VERDICT[v].icon}
+              </span>
+              <div className="min-w-0 space-y-3">
+                <p className="text-[14px] leading-relaxed">{c.sentence}</p>
+                {c.question ? (
+                  <p className="text-xs text-muted-foreground">Уточняющий вопрос — опора не нужна</p>
+                ) : c.support.length ? (
+                  <ul className="space-y-2.5">
+                    {c.support.map((s) => (
+                      <li key={s.id} className="flex items-start gap-2.5">
+                        <SourceNumber n={order.indexOf(s.id) + 1} className="mt-px size-[18px]" />
+                        <ChunkRow
+                          id={s.id}
+                          kb={kb}
+                          onOpen={onOpen}
+                          path={s.path}
+                          title={s.title}
+                          aside={<Overlap value={s.overlap} />}
+                          sub={
+                            s.numbers.length > 0 && (
+                              <span className="mt-1.5 flex flex-wrap gap-1">
+                                {s.numbers.map((n) => (
+                                  <span
+                                    key={n}
+                                    className="tnum rounded-md bg-tone-success px-1.5 py-px font-mono text-[11px] text-white"
+                                  >
+                                    {n}
+                                  </span>
+                                ))}
+                              </span>
+                            )
+                          }
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-[13px] text-warning">Не нашлось раздела с похожей формулировкой</p>
+                )}
+                {c.unsupported_numbers.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-[13px] text-destructive">
+                    Числа без опоры:
+                    {c.unsupported_numbers.map((n) => (
+                      <span key={n} className="tnum rounded-md bg-tone-danger px-1.5 py-px font-mono text-[11px] text-white">
+                        {n}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+
+      <Footnote>
+        Эвристика стенда: предложения сопоставлены с разделами контекста по совпадению основ слов и чисел. Модель
+        не размечает источники сама — по регламенту ответ одна строка без разметки.
+      </Footnote>
     </div>
   );
 }
 
 // ---------- Поиск ----------
-function ScoreBar({ hit, max }: { hit: Hit; max: number }) {
+function Score({ hit, max }: { hit: Hit; max: number }) {
   const v = hit.score ?? 0;
-  const pct = max > 0 ? Math.max(4, (v / max) * 100) : 0;
+  const pct = max > 0 ? Math.max(6, (v / max) * 100) : 0;
   return (
-    <div className="flex items-center gap-1.5">
-      <div className="h-1.5 w-14 overflow-hidden rounded-full bg-muted">
-        <div className={cn("h-full", hit.in_context ? "bg-sky-500" : "bg-muted-foreground/40")} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="w-12 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+    <span className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
+      <span className="tnum font-mono text-[11.5px] text-muted-foreground">
         {hit.score === null ? "—" : v < 0.1 ? v.toFixed(4) : v.toFixed(3)}
       </span>
+      <span className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+        <span
+          className={cn("block h-full rounded-full", hit.in_context ? "bg-info" : "bg-dim")}
+          style={{ width: `${pct}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+
+function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string; count: number }[];
+}) {
+  return (
+    <div className="inline-flex rounded-lg bg-muted p-0.5" role="radiogroup">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
+            value === o.value && "bg-background text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-accent",
+          )}
+        >
+          {o.label}
+          <span className="tnum font-mono text-[11px] text-muted-foreground">{o.count}</span>
+        </button>
+      ))}
     </div>
   );
 }
 
 function SearchTab({ r, kb, onOpen }: { r: Retrieval; kb: KbIndex | null; onOpen: (id: string) => void }) {
-  const [onlyContext, setOnlyContext] = useState(false);
-  const hits = onlyContext ? r.hits.filter((h) => h.in_context) : r.hits;
+  const [filter, setFilter] = useState<"all" | "in" | "out">("all");
+  const inContext = r.hits.filter((h) => h.in_context).length;
+  const hits = r.hits.filter((h) => (filter === "all" ? true : filter === "in" ? h.in_context : !h.in_context));
   const max = Math.max(...r.hits.map((h) => h.score ?? 0));
   const stage = r.hits[0]?.stage;
   return (
-    <div className="space-y-3 p-4">
-      <div className="grid gap-2 text-xs">
-        <div>
-          <div className="mb-0.5 font-medium text-muted-foreground">Смысловой запрос (эмбеддинги{stage === "rerank" ? ", реранкер" : ""})</div>
-          <div className="rounded-md bg-muted px-2 py-1.5">{r.queries.semantic}</div>
+    <div className="space-y-5 p-5">
+      <Section title="Запрос к базе" aside={<span className="font-mono">{[stage, r.dense ? "bm25 + эмбеддинги" : "bm25", `схема ${r.arch}`].filter(Boolean).join(" · ")}</span>}>
+        <div className="rounded-xl border bg-background px-3.5 py-3 dark:bg-card">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">Смысловой{stage === "rerank" ? " · реранкер" : ""}</div>
+          <p className="text-[13.5px] leading-relaxed">{r.queries.semantic || "—"}</p>
+          {r.queries.lexical && (
+            <details className="group/lex mt-3 border-t pt-2.5">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="size-3 transition-transform group-open/lex:rotate-90" />
+                Лексический (BM25)
+              </summary>
+              <p className="mt-1.5 font-mono text-[12px] leading-relaxed text-muted-foreground">{r.queries.lexical}</p>
+            </details>
+          )}
         </div>
-        <details>
-          <summary className="cursor-pointer font-medium text-muted-foreground">Лексический запрос (BM25)</summary>
-          <div className="mt-1 rounded-md bg-muted px-2 py-1.5">{r.queries.lexical}</div>
-        </details>
-      </div>
-      <div className="flex items-center justify-between">
-        <div className="flex gap-1.5 text-xs">
-          <Badge variant="secondary">схема {r.arch}</Badge>
-          <Badge variant="secondary">{r.dense ? "BM25 + эмбеддинги" : "только BM25"}</Badge>
-          <Badge variant="secondary">ранжирование: {stage}</Badge>
+      </Section>
+
+      <Section title="Кандидаты">
+        <Segmented
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: "all", label: "Все", count: r.hits.length },
+            { value: "in", label: "В контексте", count: inContext },
+            { value: "out", label: "Отброшены", count: r.hits.length - inContext },
+          ]}
+        />
+        {hits.length ? (
+          <ol className="divide-y overflow-hidden rounded-xl border bg-background dark:bg-card">
+            {hits.map((h) => (
+              <li key={h.id} className="grid grid-cols-[28px_1fr] gap-x-2 px-3 py-3">
+                <span className="flex flex-col items-start gap-1.5 pt-px">
+                  <span className="tnum font-mono text-[11.5px] text-muted-foreground">{String(h.rank).padStart(2, "0")}</span>
+                  <span
+                    className={cn("size-1.5 rounded-full", h.in_context ? "bg-info" : "bg-dim")}
+                    title={h.in_context ? "в контексте" : "отброшен"}
+                  />
+                </span>
+                <ChunkRow
+                  id={h.id}
+                  kb={kb}
+                  onOpen={onOpen}
+                  title={h.title}
+                  path={h.path}
+                  dim={!h.in_context}
+                  aside={<Score hit={h} max={max} />}
+                  sub={<span className="mt-1 line-clamp-1 text-xs text-muted-foreground/80">{h.preview}</span>}
+                />
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="text-[13px] text-muted-foreground">Пусто.</p>
+        )}
+        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <span className="size-1.5 rounded-full bg-info" /> ушёл модели
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="size-1.5 rounded-full bg-dim" /> отброшен
+          </span>
         </div>
-        <button
-          type="button"
-          onClick={() => setOnlyContext((v) => !v)}
-          className={cn("rounded-md px-2 py-0.5 text-xs", onlyContext ? "bg-sky-100 text-sky-800" : "text-muted-foreground hover:bg-muted")}
-        >
-          только в контексте
-        </button>
-      </div>
-      <ol className="divide-y rounded-lg border">
-        {hits.map((h) => (
-          <li key={h.id} className="flex items-start gap-2 px-2.5 py-2">
-            <span className="w-5 shrink-0 pt-0.5 text-right font-mono text-[10px] text-muted-foreground">{h.rank}</span>
-            <div className="min-w-0 flex-1">
-              <ChunkLink id={h.id} kb={kb} onOpen={onOpen}>
-                <span className="text-muted-foreground">{h.title} › </span>
-                {h.path}
-              </ChunkLink>
-              <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{h.preview}</p>
-            </div>
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <ScoreBar hit={h} max={max} />
-              {h.in_context ? (
-                <span className="text-[10px] text-sky-700 dark:text-sky-400">в контексте</span>
-              ) : (
-                <span className="text-[10px] text-muted-foreground/70">отброшен</span>
-              )}
-            </div>
-          </li>
-        ))}
-      </ol>
+      </Section>
     </div>
   );
 }
 
 // ---------- Контекст ----------
-function ContextTab({ a, r, kb, onOpen }: {
+function ContextTab({
+  a,
+  r,
+  kb,
+  onOpen,
+}: {
   a: AnswerPayload;
   r: Retrieval | null;
   kb: KbIndex | null;
@@ -192,70 +413,106 @@ function ContextTab({ a, r, kb, onOpen }: {
       const doc = kb?.byId.get(id)?.doc.doc ?? "?";
       map.set(doc, [...(map.get(doc) ?? []), id]);
     }
-    return [...map.entries()];
+    return [...map.entries()].sort((x, y) => y[1].length - x[1].length);
   }, [ids, kb]);
   const full = new Set(r?.context.full_docs ?? []);
+  const docSources = a.sources.filter((s) => s.kind === "doc");
+  const chunkSources = a.sources.filter((s) => s.kind !== "doc");
+
+  const stats = [
+    { value: fmt(ids.length), label: "разделов" },
+    { value: fmt(full.size), label: "документов целиком" },
+    { value: fmt(r?.context.chars ?? 0), label: "символов" },
+  ];
+
   return (
-    <div className="space-y-3 p-4">
-      <div className="grid grid-cols-3 gap-2">
-        <Stat label="разделов" value={ids.length} />
-        <Stat label="документов целиком" value={full.size} />
-        <Stat label="символов материалов" value={(r?.context.chars ?? 0).toLocaleString("ru")} />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {full.size
-          ? "Самые релевантные документы — целиком (эталон часто опирается на соседние разделы), плюс лучшие фрагменты остальных и справочник: карта продуктов, числа, границы консультации."
-          : "Лучшие фрагменты поиска, соседние разделы главного документа и ограничения («можно / нельзя утверждать») по найденным продуктам."}
-      </p>
-      {a.sources.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="text-xs font-medium">Материалы по вопросу</div>
-          {a.sources.map((s, i) => (
-            <div key={i} className="flex items-center gap-2 text-xs">
-              <Badge variant={s.kind === "doc" ? "default" : "outline"} className="h-4 px-1 text-[10px]">
-                {s.kind === "doc" ? "документ" : "фрагмент"}
-              </Badge>
-              {s.chunk_id ? (
-                <ChunkLink id={s.chunk_id} kb={kb} onOpen={onOpen}>
-                  {s.title}
-                  {s.path && <span className="text-muted-foreground"> › {s.path}</span>}
-                </ChunkLink>
-              ) : (
-                s.title
-              )}
+    <div className="space-y-6 p-5">
+      <div className="space-y-3">
+        <dl className="grid grid-cols-3 divide-x overflow-hidden rounded-xl border bg-background dark:bg-card">
+          {stats.map((s) => (
+            <div key={s.label} className="px-3.5 py-3">
+              <dd className="tnum text-[18px] leading-none font-semibold tracking-tight">{s.value}</dd>
+              <dt className="mt-1.5 text-xs text-muted-foreground">{s.label}</dt>
             </div>
           ))}
-        </div>
-      )}
-      <div className="space-y-2">
-        <div className="text-xs font-medium">Все разделы в промпте</div>
-        {groups.map(([doc, list]) => (
-          <details key={doc} className="rounded-lg border px-3 py-2" open={full.has(doc)}>
-            <summary className="cursor-pointer text-xs">
-              <span className="font-medium">{kb?.byDoc.get(doc)?.title ?? doc}</span>
-              <span className="text-muted-foreground"> · {list.length} разд.{full.has(doc) ? " · целиком" : ""}</span>
-            </summary>
-            <ul className="mt-1.5 space-y-1 pl-1">
-              {list.map((id) => (
-                <li key={id}>
-                  <ChunkLink id={id} kb={kb} onOpen={onOpen}>
-                    {kb?.byId.get(id)?.chunk.path ?? id}
-                  </ChunkLink>
-                </li>
-              ))}
-            </ul>
-          </details>
-        ))}
+        </dl>
+        <Footnote>
+          {full.size
+            ? "Самые релевантные документы уходят целиком (эталон часто опирается на соседние разделы), остальные — лучшими фрагментами, плюс справочник: карта продуктов, числа, границы консультации."
+            : "Лучшие фрагменты поиска, соседние разделы главного документа и ограничения («можно / нельзя утверждать») по найденным продуктам."}
+        </Footnote>
       </div>
-    </div>
-  );
-}
 
-function Stat({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border px-2.5 py-2">
-      <div className="text-base font-semibold tabular-nums">{value}</div>
-      <div className="text-[10px] text-muted-foreground">{label}</div>
+      {docSources.length > 0 && (
+        <Section title="Документы целиком" aside={<span className="tnum">{docSources.length}</span>}>
+          <ul className="divide-y overflow-hidden rounded-xl border bg-background dark:bg-card">
+            {docSources.map((s, i) => (
+              <li key={i} className="flex items-center gap-3 px-3.5 py-2.5">
+                <FileText className="size-4 shrink-0 text-muted-foreground" />
+                {s.chunk_id ? (
+                  <ChunkRow id={s.chunk_id} kb={kb} onOpen={onOpen} path={s.title} />
+                ) : (
+                  <span className="text-[13.5px] font-medium">{s.title}</span>
+                )}
+                <span className="tnum shrink-0 font-mono text-[11.5px] text-muted-foreground">
+                  {kb?.byDoc.get(s.doc)?.chunks.length ?? ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {chunkSources.length > 0 && (
+        <Section title="Отдельные фрагменты" aside={<span className="tnum">{chunkSources.length}</span>}>
+          <ul className="divide-y overflow-hidden rounded-xl border bg-background dark:bg-card">
+            {chunkSources.map((s, i) => (
+              <li key={i} className="px-3.5 py-2.5">
+                {s.chunk_id ? (
+                  <ChunkRow id={s.chunk_id} kb={kb} onOpen={onOpen} title={s.title} path={s.path} />
+                ) : (
+                  <span className="text-[13.5px]">{s.title}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      <Section title="Все разделы в промпте" aside={<span className="tnum">{groups.length} док.</span>}>
+        <div className="space-y-2">
+          {groups.map(([doc, list]) => (
+            <Fold
+              key={doc}
+              summary={
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="truncate font-medium">{kb?.byDoc.get(doc)?.title ?? doc}</span>
+                  {full.has(doc) && (
+                    <span className="shrink-0 rounded-md bg-tone-info px-1.5 py-px text-[11px] font-medium text-white">
+                      целиком
+                    </span>
+                  )}
+                  <span className="tnum ml-auto shrink-0 font-mono text-[11.5px] text-muted-foreground">{list.length}</span>
+                </span>
+              }
+            >
+              <ol className="space-y-1.5">
+                {list.map((id) => (
+                  <li key={id}>
+                    <button
+                      type="button"
+                      onClick={() => onOpen(id)}
+                      className="text-left text-[13px] leading-snug text-foreground/85 decoration-border underline-offset-[3px] hover:text-foreground hover:underline"
+                    >
+                      {kb?.byId.get(id)?.chunk.path.split(" > ").pop() ?? id}
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </Fold>
+          ))}
+        </div>
+      </Section>
     </div>
   );
 }
@@ -265,30 +522,40 @@ function PromptTab({ a }: { a: AnswerPayload }) {
   const [q, setQ] = useState("");
   if (!a.prompt.length) return <Empty>Модель не вызывалась — ответ собран без неё (запасной режим).</Empty>;
   return (
-    <div className="space-y-3 p-4">
-      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Найти в промпте…" className="h-8 text-xs" />
+    <div className="space-y-3 p-5">
+      <label className="flex h-9 items-center gap-2 rounded-lg border bg-background px-3 text-muted-foreground focus-within:border-ring">
+        <ScanSearch className="size-4 shrink-0" />
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Найти в промпте"
+          aria-label="Найти в промпте"
+          className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+        />
+      </label>
       {a.prompt.map((m, i) => {
         const count = q.length > 1 ? m.content.toLowerCase().split(q.toLowerCase()).length - 1 : 0;
         return (
-          <details key={i} className="rounded-lg border" open={i === a.prompt.length - 1}>
-            <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs">
-              <Badge variant="secondary" className="font-mono">{m.role}</Badge>
-              <span className="text-muted-foreground">{m.content.length.toLocaleString("ru")} симв.</span>
-              {count > 0 && <span className="text-brand">· найдено {count}</span>}
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="ml-auto"
+          <details key={i} className="group/fold overflow-hidden rounded-xl border bg-background" open={i === a.prompt.length - 1}>
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[13px] [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/fold:rotate-90" />
+              <span className="font-mono text-xs font-medium">{m.role}</span>
+              <span className="tnum text-muted-foreground">{fmt(m.content.length)} симв.</span>
+              {count > 0 && <span className="text-brand-text">· найдено {count}</span>}
+              <button
+                type="button"
+                className="ml-auto flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Скопировать"
                 onClick={(e) => {
                   e.preventDefault();
                   void navigator.clipboard.writeText(m.content);
                   toast.success("Скопировано");
                 }}
               >
-                <Copy />
-              </Button>
+                <Copy className="size-3.5" />
+              </button>
             </summary>
-            <pre className="max-h-[50vh] overflow-auto border-t bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+            <pre className="max-h-[55vh] overflow-auto border-t bg-surface px-3 py-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">
               {q.length > 1 ? highlight(m.content, q) : m.content}
             </pre>
           </details>
@@ -300,7 +567,15 @@ function PromptTab({ a }: { a: AnswerPayload }) {
 
 function highlight(text: string, q: string) {
   const parts = text.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"));
-  return parts.map((p, i) => (i % 2 ? <mark key={i} className="bg-yellow-200">{p}</mark> : p));
+  return parts.map((p, i) =>
+    i % 2 ? (
+      <mark key={i} className="rounded-sm bg-primary text-white">
+        {p}
+      </mark>
+    ) : (
+      p
+    ),
+  );
 }
 
 // ---------- Проверка ----------
@@ -317,89 +592,91 @@ function GuardTab({ a }: { a: AnswerPayload }) {
     { ok: !g.too_long, label: "Длина ответа в пределах 110 слов" },
   ];
   return (
-    <div className="space-y-4 p-4">
-      <div>
-        <div className="mb-1.5 flex items-baseline justify-between text-xs">
-          <span className="font-medium">Время ответа</span>
-          <span className="tabular-nums text-muted-foreground">{(total / 1000).toFixed(2)} c</span>
-        </div>
-        <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
+    <div className="space-y-6 p-5">
+      <Section title="Время ответа" aside={<span className="tnum">{(total / 1000).toFixed(2).replace(".", ",")} с</span>}>
+        <div className="flex h-2 gap-px overflow-hidden rounded-full bg-muted">
           {stages.map((k) => (
             <div
               key={k}
-              className={STAGE_COLORS[k]}
+              className={STAGES[k].color}
               style={{ width: `${(a.timings[k] / total) * 100}%` }}
-              title={`${STAGE_LABELS[k]}: ${a.timings[k]} мс`}
+              title={`${STAGES[k].label}: ${a.timings[k]} мс`}
             />
           ))}
         </div>
-        <div className="mt-1.5 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           {stages.map((k) => (
-            <span key={k} className="flex items-center gap-1">
-              <span className={cn("size-2 rounded-full", STAGE_COLORS[k])} />
-              {STAGE_LABELS[k]} {a.timings[k]} мс
+            <span key={k} className="tnum flex items-center gap-1.5">
+              <span className={cn("size-2 rounded-full", STAGES[k].color)} />
+              {STAGES[k].label} {fmt(a.timings[k])} мс
             </span>
           ))}
         </div>
-      </div>
-      <div className="space-y-2">
-        <div className="text-xs font-medium">Проверка ответа (energybot/guard.py)</div>
-        {rows.map((r) => (
-          <div key={r.label} className="flex items-start gap-2 text-sm">
-            {r.ok ? (
-              <CheckCircle2 className="mt-0.5 size-4 text-emerald-600" />
-            ) : (
-              <AlertTriangle className="mt-0.5 size-4 text-red-600" />
-            )}
-            <div>
-              {r.label}
-              {r.detail && <div className="text-xs text-red-600">{r.detail}</div>}
-            </div>
-          </div>
-        ))}
+      </Section>
+      <Section title="Проверка ответа" aside={<span className="font-mono">energybot/guard.py</span>}>
+        <ul className="divide-y rounded-xl border bg-background">
+          {rows.map((r) => (
+            <li key={r.label} className="flex items-start gap-2.5 px-3 py-2.5 text-[14px]">
+              {r.ok ? (
+                <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+              ) : (
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+              )}
+              <div>
+                {r.label}
+                {r.detail && <div className="text-[13px] text-destructive">{r.detail}</div>}
+              </div>
+            </li>
+          ))}
+        </ul>
         {g.repaired && <Note>Модель переписала ответ по замечанию проверки.</Note>}
         {g.stripped && <Note>Вырезаны предложения с числами: {g.stripped.join(", ")}</Note>}
-        {g.dropped && <Note>Ответ отброшен целиком — показан запасной ответ из базы.</Note>}
-        {a.error && <Note>Причина запасного ответа: {a.error}</Note>}
-      </div>
+        {g.dropped && <Note tone="danger">Ответ отброшен целиком — показан запасной ответ из базы.</Note>}
+        {a.error && <Note tone="danger">Причина запасного ответа: {a.error}</Note>}
+      </Section>
       {a.llm_calls && a.llm_calls.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="text-xs font-medium">Вызовы модели: {a.llm_calls.length}</div>
-          {a.llm_calls.map((c, i) => (
-            <details key={i} className="rounded-lg border px-3 py-2 text-xs">
-              <summary className="cursor-pointer">
-                <span className="font-medium">{i === 0 ? "Ответ" : `Вызов ${i + 1}`}</span>
-                <span className="text-muted-foreground">
-                  {" "}· {c.ms} мс · промпт {c.prompt_chars.toLocaleString("ru")} симв.
-                </span>
-                {c.error && <span className="text-red-600"> · ошибка</span>}
-              </summary>
-              {c.instruction && (
-                <div className="mt-2">
-                  <div className="text-[10px] text-muted-foreground uppercase">Указание модели</div>
-                  <p className="whitespace-pre-wrap">{c.instruction}</p>
+        <Section title={`Вызовы модели · ${a.llm_calls.length}`}>
+          <div className="space-y-2">
+            {a.llm_calls.map((c, i) => (
+              <Fold
+                key={i}
+                summary={
+                  <span className="tnum min-w-0 flex-1 truncate">
+                    <span className="font-medium">{i === 0 ? "Ответ" : `Вызов ${i + 1}`}</span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {fmt(c.ms)} мс · промпт {fmt(c.prompt_chars)} симв.
+                    </span>
+                    {c.error && <span className="text-destructive"> · ошибка</span>}
+                  </span>
+                }
+              >
+                <div className="space-y-3 text-[13px] leading-relaxed">
+                  {c.instruction && (
+                    <div>
+                      <div className="mb-0.5 text-xs font-medium text-muted-foreground">Указание модели</div>
+                      <p className="whitespace-pre-wrap">{c.instruction}</p>
+                    </div>
+                  )}
+                  <div>
+                    <div className="mb-0.5 text-xs font-medium text-muted-foreground">Ответ модели</div>
+                    <p className="whitespace-pre-wrap">{c.output || c.error || "—"}</p>
+                  </div>
                 </div>
-              )}
-              <div className="mt-2">
-                <div className="text-[10px] text-muted-foreground uppercase">Ответ модели</div>
-                <p className="whitespace-pre-wrap">{c.output || c.error || "—"}</p>
-              </div>
-            </details>
-          ))}
-        </div>
+              </Fold>
+            ))}
+          </div>
+        </Section>
       )}
       {a.trace && (
-        <div className="space-y-1">
-          <div className="text-xs font-medium">Фактическая основа (промежуточный шаг)</div>
-          <pre className="rounded-lg bg-muted p-2 text-[11px] whitespace-pre-wrap">{a.trace}</pre>
-        </div>
+        <Section title="Фактическая основа (промежуточный шаг)">
+          <pre className="rounded-xl border bg-background p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">
+            {a.trace}
+          </pre>
+        </Section>
       )}
     </div>
   );
-}
-
-function Note({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{children}</div>;
 }
 
 // ---------- панель ----------
@@ -408,68 +685,154 @@ export function DebugPanel({
   question,
   kb,
   onOpenChunk,
+  onClose,
 }: {
   message?: Message;
   question?: string;
   kb: KbIndex | null;
   onOpenChunk: (id: string) => void;
+  onClose?: () => void;
 }) {
   const [tab, setTab] = useState("support");
   const a = message?.answer;
   const r = a?.retrieval ?? message?.retrieval ?? null;
 
+  const close = onClose && (
+    <button
+      type="button"
+      onClick={onClose}
+      aria-label="Закрыть отладку"
+      className="-mr-2 flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+    >
+      <X className="size-4" />
+    </button>
+  );
+
   if (!message) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
-        <Bug className="size-8 text-muted-foreground/50" />
-        <div className="font-medium text-foreground">Отладка ответа</div>
-        Задайте вопрос — здесь появится, что нашёл поиск, какие разделы базы ушли модели, полный промпт и на какие факты
-        опирается каждое предложение ответа.
+      <div className="flex h-full flex-col">
+        <div className="flex h-14 shrink-0 items-center justify-between px-5 text-[15px] font-medium">
+          Отладка ответа
+          {close}
+        </div>
+        <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16 text-center">
+          <div className="max-w-[22rem] space-y-2">
+            <p className="text-[15px] font-medium">Здесь появится разбор ответа</p>
+            <p className="text-[14px] leading-relaxed text-muted-foreground">
+              Что нашёл поиск, какие разделы базы ушли модели, полный промпт и на какие факты опирается каждое
+              предложение.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
 
+  const claims = a ? a.citations.filter((c) => !c.question) : [];
+  const grounded = claims.filter((c) => c.support.length && !c.unsupported_numbers.length).length;
+  const counts: Record<string, string | undefined> = {
+    support: a ? `${grounded}/${claims.length}` : undefined,
+    search: r ? String(r.hits.length) : undefined,
+    context: r ? String(r.context.chunk_ids.length) : undefined,
+  };
+  const guardFired = a && (a.guard.unknown_numbers?.length || a.guard.too_long || a.guard.stripped || a.guard.dropped);
+  const tabs = [
+    { value: "support", label: "Опора" },
+    { value: "search", label: "Поиск" },
+    { value: "context", label: "Контекст" },
+    { value: "prompt", label: "Промпт" },
+    { value: "guard", label: "Проверка" },
+    { value: "json", label: "JSON" },
+  ];
+  const enabled = (v: string) => (v === "search" ? !!r : !!a);
+  const meta = a
+    ? [a.model ? a.model.split("/").pop() : "без модели", a.mode === "eval" ? "автопроверка" : "чат", sec(a.timings.server_total)]
+    : ["ищу в базе…"];
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 space-y-2 border-b px-4 py-3">
+      <div className="shrink-0 space-y-3 px-5 pt-4 pb-3.5">
         <div className="flex items-center gap-2">
-          <Bug className="size-4 text-muted-foreground" />
-          <span className="text-sm font-semibold">Отладка ответа</span>
-          {a && (
-            <span className="ml-auto flex gap-1">
-              <Badge variant="secondary" className="font-mono text-[10px]">{a.model || "без модели"}</Badge>
-              <Badge variant="secondary" className="text-[10px]">{a.mode === "eval" ? "автопроверка" : "чат"}</Badge>
+          <span className="text-[15px] font-semibold tracking-[-0.01em]">Отладка ответа</span>
+          <span className="ml-auto" />
+          {close}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {meta.map((m, i) => (
+            <span
+              key={m}
+              className={cn(
+                "tnum inline-flex h-6 items-center rounded-md border bg-background px-2 text-xs text-muted-foreground dark:bg-card",
+                i === 0 && "font-mono text-[11.5px]",
+              )}
+            >
+              {m}
+            </span>
+          ))}
+          {a?.fallback && (
+            <span className="inline-flex h-6 items-center rounded-md bg-tone-warning px-2 text-xs font-medium text-white">
+              запасной ответ
             </span>
           )}
+          {guardFired ? (
+            <span className="inline-flex h-6 items-center rounded-md bg-tone-danger px-2 text-xs font-medium text-white">
+              сработала проверка
+            </span>
+          ) : null}
         </div>
-        {question && <p className="line-clamp-2 text-xs text-muted-foreground">Вопрос: {question}</p>}
+        {question && (
+          <div className="rounded-xl bg-muted px-3.5 py-2.5 dark:bg-accent">
+            <div className="text-xs font-medium text-muted-foreground">Вопрос клиента</div>
+            <p className="mt-0.5 line-clamp-2 text-[13.5px] leading-snug">{question}</p>
+          </div>
+        )}
       </div>
       <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="min-h-0 flex-1 gap-0">
-        <div className="shrink-0 overflow-x-auto border-b px-3 py-2">
-          <TabsList className="h-8">
-            <TabsTrigger value="support" disabled={!a} className="text-xs"><ShieldCheck />Опора</TabsTrigger>
-            <TabsTrigger value="search" disabled={!r} className="text-xs"><Search />Поиск</TabsTrigger>
-            <TabsTrigger value="context" disabled={!a} className="text-xs"><Layers />Контекст</TabsTrigger>
-            <TabsTrigger value="prompt" disabled={!a} className="text-xs"><FileText />Промпт</TabsTrigger>
-            <TabsTrigger value="guard" disabled={!a} className="text-xs">Проверка</TabsTrigger>
-            <TabsTrigger value="json" disabled={!a} className="text-xs">JSON</TabsTrigger>
+        <div className="shrink-0 overflow-x-auto border-b px-[13px] max-sm:[mask-image:linear-gradient(to_right,#000_86%,transparent)]">
+          <TabsList variant="line" className="h-10 gap-0 p-0">
+            {tabs.map((t) => (
+              <TabsTrigger
+                key={t.value}
+                value={t.value}
+                disabled={!enabled(t.value)}
+                className="h-10 flex-none gap-1 rounded-none px-[7px] text-[13px] after:bottom-0! after:bg-brand"
+              >
+                {t.label}
+                {counts[t.value] && (
+                  <span className="tnum font-mono text-[10.5px] font-normal text-muted-foreground">{counts[t.value]}</span>
+                )}
+              </TabsTrigger>
+            ))}
           </TabsList>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {!a && message.pending && (
-            r ? <SearchTab r={r} kb={kb} onOpen={onOpenChunk} /> : <Empty>Идёт поиск по базе знаний…</Empty>
-          )}
+          {!a && message.pending &&
+            (r ? <SearchTab r={r} kb={kb} onOpen={onOpenChunk} /> : <Empty>Идёт поиск по базе знаний…</Empty>)}
           {!a && !message.pending && <Empty>{message.error ?? "Нет данных"}</Empty>}
           {a && (
             <>
-              <TabsContent value="support"><SupportTab a={a} kb={kb} onOpen={onOpenChunk} /></TabsContent>
-              <TabsContent value="search">{r ? <SearchTab r={r} kb={kb} onOpen={onOpenChunk} /> : <Empty>Поиск не выполнялся</Empty>}</TabsContent>
-              <TabsContent value="context"><ContextTab a={a} r={r} kb={kb} onOpen={onOpenChunk} /></TabsContent>
-              <TabsContent value="prompt"><PromptTab a={a} /></TabsContent>
-              <TabsContent value="guard"><GuardTab a={a} /></TabsContent>
+              <TabsContent value="support">
+                <SupportTab a={a} kb={kb} onOpen={onOpenChunk} />
+              </TabsContent>
+              <TabsContent value="search">
+                {r ? <SearchTab r={r} kb={kb} onOpen={onOpenChunk} /> : <Empty>Поиск не выполнялся</Empty>}
+              </TabsContent>
+              <TabsContent value="context">
+                <ContextTab a={a} r={r} kb={kb} onOpen={onOpenChunk} />
+              </TabsContent>
+              <TabsContent value="prompt">
+                <PromptTab a={a} />
+              </TabsContent>
+              <TabsContent value="guard">
+                <GuardTab a={a} />
+              </TabsContent>
               <TabsContent value="json">
-                <pre className="p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                  {JSON.stringify({ ...a, prompt: `[${a.prompt.length} сообщ., ${a.prompt_chars} симв. — см. вкладку «Промпт»]` }, null, 2)}
+                <pre className="p-5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">
+                  {JSON.stringify(
+                    { ...a, prompt: `[${a.prompt.length} сообщ., ${a.prompt_chars} симв. — см. вкладку «Промпт»]` },
+                    null,
+                    2,
+                  )}
                 </pre>
               </TabsContent>
             </>

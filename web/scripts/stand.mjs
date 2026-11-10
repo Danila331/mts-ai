@@ -45,18 +45,45 @@ const TYPES = {
   ".map": "application/json",
 };
 
-const TAG = `<script src="${widget}/widget.js" async
-  data-title="Консультант EnergyTool"
-  data-color="#FF0032"
-  data-position="right"
-  data-greeting="Здравствуйте! Подскажу, как сократить расходы на электроэнергию и какой продукт EnergyTool вам подойдёт."
-  data-greeting-delay="4"></script>`;
+const DEFAULT_TAG = {
+  title: "Консультант EnergyTool",
+  color: "#FF0032",
+  position: "right",
+  greeting: "Здравствуйте! Подскажу, как сократить расходы на электроэнергию и какой продукт EnergyTool вам подойдёт.",
+  greetingDelay: "4",
+};
 
-function page() {
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const kebab = (k) => k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+
+/**
+ * Тег виджета. Превью на /widget передаёт настройки в адресе (?w_title=…&w_color=…), чтобы показать
+ * сайт МТС с теми же параметрами, что в редакторе; ?w_preview=1 заново показывает подсказку у кнопки.
+ */
+function tag(params) {
+  const cfg = { ...DEFAULT_TAG };
+  for (const key of ["title", "color", "position", "greeting", "greetingDelay", "quick"]) {
+    const v = params.get(`w_${key}`);
+    if (v !== null) cfg[key] = v;
+  }
+  if (!/^#[0-9a-f]{3,8}$/i.test(cfg.color)) cfg.color = DEFAULT_TAG.color;
+  const attrs = Object.entries(cfg)
+    .map(([k, v]) => `data-${kebab(k)}="${esc(v)}"`)
+    .join("\n  ");
+  // Только для превью: сбросить «подсказка уже показана» и принимать команды ask/toggle от страницы /widget
+  // (iframe с другого origin не может вызвать EnergyToolChat напрямую). Команды — только с origin виджета.
+  const reset = params.get("w_preview")
+    ? `<script>try{sessionStorage.removeItem("energytool-chat:greeted");sessionStorage.removeItem("energytool-chat:open")}catch(e){}
+addEventListener("message",function(e){if(e.origin!==${JSON.stringify(widget)}||!e.data||e.data.type!=="eb:preview")return;var c=window.EnergyToolChat;if(!c)return;if(e.data.action==="ask")c.ask(String(e.data.text||""));if(e.data.action==="toggle")c.toggle();});</script>`
+    : "";
+  return `${reset}<script src="${widget}/widget.js?v=${Date.now()}" async\n  ${attrs}></script>`;
+}
+
+function page(params) {
   let html = readFileSync(join(site, "index.html"), "utf8");
   // Счётчик МТС (dataLayer / tag.a.mts.ru) — вырезаем инлайн-скрипт целиком.
   html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*tag\.a\.mts\.ru(?:(?!<\/script>)[\s\S])*<\/script>/g, "");
-  return html.replace("</body>", `${TAG}</body>`);
+  return html.replace("</body>", `${tag(params)}</body>`);
 }
 
 createServer((req, res) => {
@@ -75,7 +102,7 @@ createServer((req, res) => {
       return;
     }
     res.writeHead(200, { "Content-Type": TYPES[".html"], "Cache-Control": "no-store" });
-    res.end(page());
+    res.end(page(url.searchParams));
     return;
   }
   res.writeHead(200, { "Content-Type": TYPES[extname(file).toLowerCase()] ?? "application/octet-stream" });
