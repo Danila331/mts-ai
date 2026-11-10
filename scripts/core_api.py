@@ -1,31 +1,32 @@
-"""HTTP-API веб-чата поверх общего ядра energybot (для web/ — тестового стенда жюри и виджета).
+"""Внутренняя HTTP-служба ядра energybot: ответ на вопрос и всё, что видела при этом модель.
 
-Только стандартная библиотека: ядро не дублируется, логика ответа — та же, что у solution.py, но в режиме
-«chat» (бот может предложить передать заявку менеджеру). Для отладочной панели сервер дополнительно
-отдаёт выдачу поиска со скорами, состав контекста, промпт, тайминги, срабатывания проверки ответа
-и сопоставление предложений ответа с разделами базы.
+Публичный API стенда и виджета — Go-служба backend/: она принимает запросы фронта, хранит заявки, оценки
+и журнал ответов в Postgres и ходит сюда за самим ответом. Здесь остаётся только то, что без ядра не
+посчитать: ответ (та же логика, что у solution.py, в режиме «chat»), выдача поиска со скорами, состав
+контекста, промпт, тайминги, срабатывания проверки ответа и сопоставление предложений с разделами базы.
 
-    set -a; source .env; set +a          # необязательно: сервер сам читает .env из корня репозитория
-    .venv/bin/python scripts/web_api.py  # → http://127.0.0.1:8787
+Только стандартная библиотека, наружу служба не смотрит: на Railway — приватная сеть, локально — петля.
 
-Эндпоинты:
-    GET  /api/health            состояние: схема ответа, есть ли модель, эмбеддинги, размер базы
-    GET  /api/kb                база знаний разделами (те же фрагменты, что видит модель)
-    POST /api/chat              {"messages": [{"role", "content"}], "mode": "chat"|"eval"} → SSE: stage, answer
-    POST /api/lead              {"name", "phone", "company", "comment", "messages"} → резюме диалога для менеджера
-    POST /api/feedback          {"session_id", "message_id", "rating": 1|-1, "comment"}
+    set -a; source .env; set +a           # необязательно: служба сама читает .env из корня репозитория
+    .venv/bin/python scripts/core_api.py  # → http://127.0.0.1:8788
+
+Эндпоинты (при заданном EB_CORE_TOKEN — только с заголовком Authorization: Bearer <токен>):
+    GET  /healthz               жива ли служба (без токена: это проба хостинга)
+    GET  /core/health           схема ответа, есть ли модель, эмбеддинги, размер базы
+    GET  /core/kb               база знаний разделами (те же фрагменты, что видит модель)
+    POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"} → SSE: stage, answer, done
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
-import re
+import socket
 import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -54,16 +55,8 @@ from energybot.llm import Api, env, env_num  # noqa: E402
 from energybot.pipeline import FALLBACK, Consultant  # noqa: E402
 from energybot.text import tokens  # noqa: E402
 
-DATA = ROOT / "web" / ".data"  # заявки и оценки ответов — локально, в git не попадают
 MAX_BODY = 256_000
 MAX_TURNS = 40
-
-SUMMARY_SYSTEM = """Ты готовишь заявку для менеджера МТС EnergyTool по диалогу клиента с ИИ-консультантом.
-Напиши резюме на русском, только по тому, что есть в диалоге, ничего не додумывай. Формат — ровно четыре строки:
-Задача клиента: …
-Объект и исходные данные: … (что клиент сообщил: регион, тип объекта, мощность, потребление, оборудование; если нет — «не указаны»)
-Подходящий продукт: … (какой продукт обсуждали; если не ясно — «уточнить»)
-Что уточнить менеджеру: …"""
 
 
 # ---------- отладочные данные одного ответа ----------
@@ -237,8 +230,6 @@ class App:
         self.api = Api()
         self.bot = WebConsultant(kb_path, index_dir=ROOT / "index", api=self.api)
         self.mode = env("EB_WEB_MODE", "chat")
-        self.lock = threading.Lock()
-        DATA.mkdir(parents=True, exist_ok=True)
 
     def health(self) -> dict:
         docs = dict.fromkeys(c.doc for c in self.bot.kb.chunks)
@@ -316,47 +307,9 @@ class App:
                 s["title"] = by_id[s["id"]].title if s["id"] in by_id else s["doc"]
         return payload
 
-    def summary(self, turns: list) -> str:
-        dialog = "\n".join(("Клиент: " if t["role"] == "user" else "Консультант: ") + t["content"] for t in turns)
-        if self.api.configured and dialog:
-            try:
-                text = self.api.chat([{"role": "system", "content": SUMMARY_SYSTEM},
-                                      {"role": "user", "content": f"ДИАЛОГ\n{dialog}"}], max_tokens=400)
-                text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
-                if text:
-                    return text
-            except Exception as exc:  # noqa: BLE001 — заявка важнее резюме
-                print(f"[web] резюме: {type(exc).__name__}: {exc}", file=sys.stderr)
-        asked = [t["content"] for t in turns if t["role"] == "user"]
-        return "Вопросы клиента: " + " / ".join(asked[-5:]) if asked else "Диалога не было."
-
-    def lead(self, body: dict) -> dict:
-        turns = clean_turns(body.get("messages"), require_user=False)
-        lead = {
-            "id": uuid.uuid4().hex[:10],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "name": str(body.get("name", ""))[:200],
-            "phone": str(body.get("phone", ""))[:50],
-            "company": str(body.get("company", ""))[:200],
-            "comment": str(body.get("comment", ""))[:2000],
-            "summary": self.summary(turns),
-            "messages": turns,
-        }
-        self.append("leads.jsonl", lead)
-        return {"id": lead["id"], "summary": lead["summary"]}
-
-    def feedback(self, body: dict) -> dict:
-        row = {k: body.get(k) for k in ("session_id", "message_id", "rating", "comment", "question", "answer")}
-        row["created_at"] = datetime.now(timezone.utc).isoformat()
-        self.append("feedback.jsonl", row)
-        return {"ok": True}
-
-    def append(self, name: str, row: dict) -> None:
-        with self.lock, open(DATA / name, "a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
 
 def clean_turns(messages, require_user: bool = True) -> list:
+    """Те же правила, что у Go-службы (internal/dialog): ядро не доверяет даже своему шлюзу."""
     if not isinstance(messages, list):
         raise ValueError("messages: ожидается список реплик")
     turns = []
@@ -373,28 +326,22 @@ def clean_turns(messages, require_user: bool = True) -> list:
 
 
 def make_handler(app: App):
-    allowed = [o.strip() for o in env("EB_WEB_CORS", "*").split(",") if o.strip()]
+    # Ядро тратит деньги на модель, поэтому даже в приватной сети отвечает только своему шлюзу.
+    token = env("EB_CORE_TOKEN")
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt, *args):  # noqa: A003 — короче стандартного лога
-            print(f"[web] {self.command} {self.path} {args[1] if len(args) > 1 else ''}", file=sys.stderr)
+            if self.path != "/healthz":  # пробы хостинга раз в несколько секунд заслоняют настоящие запросы
+                print(f"[core] {self.command} {self.path} {args[1] if len(args) > 1 else ''}", file=sys.stderr)
 
-        def cors(self):
-            origin = self.headers.get("Origin", "")
-            if "*" in allowed:
-                self.send_header("Access-Control-Allow-Origin", "*")
-            elif origin in allowed:
-                self.send_header("Access-Control-Allow-Origin", origin)
-                self.send_header("Vary", "Origin")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        def authorized(self) -> bool:
+            return not token or hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {token}")
 
         def json(self, status: int, data: dict):
             raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
-            self.cors()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
@@ -409,39 +356,34 @@ def make_handler(app: App):
                 raise ValueError("ожидается JSON-объект")
             return data
 
-        def do_OPTIONS(self):  # noqa: N802
-            self.send_response(204)
-            self.cors()
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-
         def do_GET(self):  # noqa: N802
-            if self.path == "/api/health":
+            if self.path == "/healthz":
+                return self.json(200, {"ok": True})
+            if not self.authorized():
+                return self.json(401, {"error": "unauthorized"})
+            if self.path == "/core/health":
                 return self.json(200, app.health())
-            if self.path == "/api/kb":
+            if self.path == "/core/kb":
                 return self.json(200, app.kb())
             return self.json(404, {"error": "not found"})
 
         def do_POST(self):  # noqa: N802
+            if not self.authorized():
+                return self.json(401, {"error": "unauthorized"})
             try:
                 body = self.body()
-                if self.path == "/api/chat":
+                if self.path == "/core/chat":
                     return self.stream_chat(body)
-                if self.path == "/api/lead":
-                    return self.json(200, app.lead(body))
-                if self.path == "/api/feedback":
-                    return self.json(200, app.feedback(body))
                 return self.json(404, {"error": "not found"})
             except ValueError as exc:
                 return self.json(400, {"error": str(exc)})
             except Exception as exc:  # noqa: BLE001
-                print(f"[web] {type(exc).__name__}: {exc}", file=sys.stderr)
+                print(f"[core] {type(exc).__name__}: {exc}", file=sys.stderr)
                 return self.json(500, {"error": f"{type(exc).__name__}"})
 
         def stream_chat(self, body: dict):
             clean_turns(body.get("messages"))  # ошибки формата — до начала потока, обычным 400
             self.send_response(200)
-            self.cors()
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
@@ -456,24 +398,42 @@ def make_handler(app: App):
                         self.wfile.write(chunk)
                         self.wfile.flush()
                     except OSError:
-                        pass  # клиент ушёл — ответ всё равно досчитаем и запишем в лог
+                        pass  # шлюз ушёл — ответ всё равно досчитаем, чтобы не оборвать модель на середине
 
             try:
                 emit("answer", app.chat(body, emit))
             except Exception as exc:  # noqa: BLE001
-                print(f"[web] chat: {type(exc).__name__}: {exc}", file=sys.stderr)
+                print(f"[core] chat: {type(exc).__name__}: {exc}", file=sys.stderr)
                 emit("error", {"error": f"{type(exc).__name__}: {exc}"})
             emit("done", {})
 
     return Handler
 
 
+class DualStackServer(ThreadingHTTPServer):
+    """Приватная сеть Railway адресует службы по IPv6, docker compose — по IPv4.
+
+    Адрес «::» с выключенным IPV6_V6ONLY слушает оба семейства, поэтому один образ работает в обоих местах.
+    """
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        try:
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except (AttributeError, OSError):
+            pass  # сокет и так двойной или IPv4 недоступен — слушаем что есть
+        super().server_bind()
+
+
 def main():
-    host = env("EB_WEB_HOST", "127.0.0.1")
-    port = env_num("EB_WEB_PORT", 8787, 1, 65535)
+    host = env("EB_CORE_HOST", "127.0.0.1")
+    # PORT задают хостинги; EB_CORE_PORT — своё имя для локального запуска.
+    port = env_num("PORT", 0, 1, 65535) or env_num("EB_CORE_PORT", 8788, 1, 65535)
     app = App()
-    server = ThreadingHTTPServer((host, port), make_handler(app))
-    print(f"[web] API: http://{host}:{port}/api/health", file=sys.stderr, flush=True)
+    server_cls = DualStackServer if ":" in host else ThreadingHTTPServer
+    server = server_cls((host, port), make_handler(app))
+    print(f"[core] ядро: http://{host}:{port}/core/health", file=sys.stderr, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

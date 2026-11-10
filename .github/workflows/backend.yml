@@ -1,0 +1,114 @@
+name: Backend
+
+# Ворота бэкенда перед выкладкой: Go-API и образы обеих служб.
+#
+# Railway выкладывает main сам («Wait for CI» в настройках службы) — но
+# только после того, как этот прогон на том же коммите зелёный. Поэтому
+# красное здесь в бой не едет, а слияние dev → main и есть выкладка
+# (docs/deploy.md).
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go — формат, vet, sqlc, тесты
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      # Тесты хранилища идут против настоящего Postgres той же версии,
+      # что на Railway: моки базы проверяют моки.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: energytool
+          POSTGRES_PASSWORD: energytool
+          POSTGRES_DB: energytool
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U energytool"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Форматирование и vet
+        run: |
+          # gofmt -l печатает файлы и ничего не возвращает кодом: без
+          # этой обёртки шаг всегда зелёный.
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "не отформатировано:"; echo "$unformatted"; exit 1
+          fi
+          go vet ./...
+
+      - uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.31.1"
+
+      - name: Код запросов совпадает с queries/ и migrations/
+        # Правка запроса без make sqlc собирается и проходит тесты на
+        # старом коде — расхождение ловит только эта проверка.
+        run: sqlc diff
+
+      - name: Тесты
+        env:
+          TEST_DATABASE_URL: postgres://energytool:energytool@localhost:5432/energytool?sslmode=disable
+        run: go test ./... -count=1
+
+  images:
+    name: Образы и сквозная проверка
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Тот же docker-compose.yml, что у разработчика: собираются оба
+      # образа, поднимаются база, ядро и API, и запросы фронта проходят
+      # насквозь. Ключа модели в CI нет — ядро отвечает заглушкой, а
+      # проверяется связность служб, а не качество ответа.
+      - name: Сборка и запуск
+        env:
+          EB_API_TOKEN: ci-token
+        run: docker compose up --build --wait --wait-timeout 300
+
+      - name: Запросы фронта
+        run: sh backend/scripts/smoke.sh http://127.0.0.1:8787 ci-token
+
+      - name: Ответ, заявка и оценка легли в базу
+        run: |
+          for table in answers leads feedback; do
+            n=$(docker compose exec -T db psql -U energytool -d energytool -tAc "SELECT count(*) FROM $table")
+            if [ "$n" -lt 1 ]; then echo "$table: пусто"; exit 1; fi
+            echo "$table: $n"
+          done
+
+      - name: Журналы служб
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Остановка
+        if: always()
+        run: docker compose down -v

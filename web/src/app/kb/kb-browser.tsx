@@ -225,7 +225,7 @@ export function KbBrowser() {
         <div className="px-6 pt-4 pb-28 sm:px-10 lg:px-14">
           {error ? (
             <div className="mx-auto max-w-[720px] rounded-xl bg-tone-danger px-4 py-3 text-[14px] text-white">
-              {error}. Запустите API: .venv/bin/python scripts/web_api.py
+              {error}. Запустите API: docker compose up
             </div>
           ) : doc && kb ? (
             <DocView

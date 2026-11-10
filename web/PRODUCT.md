@@ -22,7 +22,7 @@ Not a "chat with an LLM" but a consultant with verifiable grounding: numbered so
 
 ## Operating Context
 
-- Stand: Next.js 16 + shadcn/ui (base-ui), Python API `scripts/web_api.py` behind the `/api/*` proxy. Sessions are stored in the browser's `localStorage`.
+- Stand: Next.js 16 + shadcn/ui (base-ui), Go API `backend/` (answers from the Python core `scripts/core_api.py`) behind the `/api/*` proxy. Sessions are stored in the browser's `localStorage`.
 - Widget: `widget.js` (Shadow DOM launcher + iframe `/embed`) on a third-party site; the host page is light.
 - "Autocheck" mode reproduces the evaluation platform: the bot does not offer to leave a request.
 

@@ -1,4 +1,4 @@
-// Контракт Python-API (scripts/web_api.py). Поля — как в JSON сервера.
+// Контракт API (Go-служба backend/, ответ строит ядро scripts/core_api.py). Поля — как в JSON сервера.
 
 export type Role = "user" | "assistant";
 

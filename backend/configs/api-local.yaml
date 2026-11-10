@@ -1,0 +1,29 @@
+# Настройки для машины разработчика (make api). Ключ модели сюда не
+# пишется: файл лежит в репозитории. Его берут из ../.env — make api
+# подхватывает тот же .env, что и Python-ядро.
+env: development
+
+http:
+  port: 8787 # тот же порт, что был у Python-API: прокси Next по умолчанию ходит сюда
+  allowed_origins:
+    - http://localhost:3000
+
+db:
+  dsn: postgres://energytool:energytool@localhost:5433/energytool?sslmode=disable
+  max_conns: 10
+  migrate: true
+
+core:
+  url: http://127.0.0.1:8788
+  timeout: 3m
+
+llm:
+  model: qwen/qwen3.8-27b
+  thinking_param: chat_template_kwargs
+  disable_thinking: true
+  timeout: 30s
+
+# Пределы частоты здесь не задаются: действуют умолчания из config.go,
+# те же, что в бою. Ноль в этом файле их не выключит — cleanenv считает
+# нулевое значение незаданным и подставляет умолчание. Выключить предел
+# можно только переменной, например EB_LIMIT_CHAT_PER_MINUTE=0.
