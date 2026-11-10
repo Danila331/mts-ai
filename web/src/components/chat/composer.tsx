@@ -1,0 +1,115 @@
+"use client";
+
+import { ArrowUp, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
+
+export function Composer({
+  onSend,
+  onStop,
+  busy,
+  disabled,
+  compact,
+  placeholder = "Опишите задачу: объект, что хотите посчитать или улучшить",
+  autoFocus,
+  value: external,
+}: {
+  onSend: (text: string) => void;
+  onStop?: () => void;
+  busy?: boolean;
+  disabled?: boolean;
+  compact?: boolean;
+  placeholder?: string;
+  autoFocus?: boolean;
+  /** Подставить текст снаружи (например, вопрос из виджета). */
+  value?: { text: string; nonce: number };
+}) {
+  const [text, setText] = useState("");
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!external) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подстановка текста по внешнему событию
+    setText(external.text);
+    ref.current?.focus();
+  }, [external]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, compact ? 128 : 224)}px`;
+  }, [text, compact]);
+
+  const ready = !busy && !disabled && !!text.trim();
+  const submit = () => {
+    if (!ready) return;
+    onSend(text);
+    setText("");
+  };
+
+  const action = busy ? (
+    <button
+      type="button"
+      onClick={onStop}
+      aria-label="Остановить ответ"
+      className="flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-85 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+    >
+      <Square className="size-3 fill-current" />
+    </button>
+  ) : (
+    <button
+      type="button"
+      onClick={submit}
+      disabled={!ready}
+      aria-label="Отправить"
+      className={cn(
+        "flex size-9 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-brand/30 focus-visible:outline-none",
+        ready ? "bg-brand text-white hover:bg-primary" : "cursor-default bg-muted text-muted-foreground/70 dark:bg-accent",
+      )}
+    >
+      <ArrowUp className="size-[18px]" strokeWidth={2.4} />
+    </button>
+  );
+
+  return (
+    <div
+      onClick={() => ref.current?.focus()}
+      className={cn(
+        "cursor-text border border-input/80 bg-background shadow-[var(--shadow-float)] transition-[border-color,box-shadow] focus-within:border-ring/70 dark:bg-card",
+        compact ? "flex items-end gap-2 rounded-[22px] py-1.5 pr-1.5 pl-4" : "rounded-[26px] p-2",
+      )}
+    >
+      <textarea
+        ref={ref}
+        value={text}
+        rows={1}
+        autoFocus={autoFocus}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder={placeholder}
+        aria-label="Сообщение консультанту"
+        className={cn(
+          "block w-full resize-none bg-transparent leading-relaxed outline-none placeholder:text-muted-foreground",
+          compact ? "min-h-9 flex-1 py-[7px] text-[14px]" : "min-h-12 px-3 pt-1.5 text-[15px]",
+        )}
+      />
+      {compact ? (
+        action
+      ) : (
+        <div className="flex items-center gap-2 pl-3">
+          <span className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
+            Enter — отправить, Shift + Enter — новая строка
+          </span>
+          <span className="flex-1 sm:hidden" />
+          {action}
+        </div>
+      )}
+    </div>
+  );
+}

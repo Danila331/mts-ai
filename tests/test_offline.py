@@ -19,15 +19,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from mock_api import MockApi  # noqa: E402
+
 from energybot.dialog import parse, search_queries  # noqa: E402
 from energybot.kb import KnowledgeBase, normalize_tables  # noqa: E402
 from energybot.llm import strip_thinking  # noqa: E402
 from energybot.pipeline import tidy  # noqa: E402
-from mock_api import MockApi  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "eval"))
-from validate_dataset import load_cases, validate, violates  # noqa: E402
 from run_eval import judge_vs_baseline, platform_metrics  # noqa: E402
+from validate_dataset import load_cases, validate, violates  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_submission import build as build_zip  # noqa: E402
@@ -140,6 +141,7 @@ class JudgeMetricsTest(unittest.TestCase):
 class BlindJudgeTest(unittest.TestCase):
     def test_export_hides_side_and_score_matches_platform(self):
         import json as _json
+
         import blind_judge
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp)
@@ -165,6 +167,7 @@ class BlindJudgeTest(unittest.TestCase):
 class DeadlineTest(unittest.TestCase):
     def test_no_requests_after_deadline(self):
         import time as _time
+
         from energybot.llm import Api, DeadlineExceeded
         api = Api()
         api.base_url, api.llm_key = "http://127.0.0.1:9", "k"
@@ -206,6 +209,14 @@ class GuardTest(unittest.TestCase):
         self.assertNotIn("3 750 000", result.text)
         self.assertIn("25 000", result.text)
         self.assertEqual(result.guard["stripped"], ["3750000"])
+
+    def test_unverifiable_short_answer_is_replaced(self):
+        """Если без непроверенных чисел ответа почти не остаётся — выдержка из базы, а не выдумка."""
+        with MockApi(reject_template_kwargs=False, responder=lambda m: "Стоимость составит 999 999 рублей.") as mock:
+            result = _consultant(mock).answer(self.QUESTION)
+        self.assertNotIn("999", result.text)
+        self.assertEqual(result.guard["dropped"], ["999999"])
+        self.assertTrue(result.text.strip())
 
     def test_clean_answer_is_untouched(self):
         with MockApi(reject_template_kwargs=False, responder=lambda m: self.GOOD) as mock:
@@ -294,6 +305,25 @@ class SolutionEndToEndTest(unittest.TestCase):
         self.assertTrue(all(r["answer"].strip() for r in rows))
         self.assertIn("быстрый режим", log)
         self.assertLess(elapsed, 45, log[-500:])
+
+    def test_ids_are_kept_exactly(self):
+        questions = [(" a ", "Вопрос один?"), ("b", "Вопрос два?"), ("007", "Вопрос три?")]
+        with MockApi(reject_template_kwargs=False) as mock:
+            rows, _ = self._run(mock, questions)
+        self.assertEqual([r["id"] for r in rows], [" a ", "b", "007"])
+
+    def test_hard_deadline_with_dripping_response(self):
+        """Ответ «капает» быстрее тайм-аута чтения, но бесконечно долго — файл всё равно пишется вовремя."""
+        questions = [(str(i), f"Вопрос {i} про платформу учёта?") for i in range(4)]
+        started = time.perf_counter()
+        with MockApi(reject_template_kwargs=False, chat_drip=0.5) as mock:
+            rows, log = self._run(mock, questions, extra_env={
+                "EB_DEADLINE_SEC": "5", "EB_HARD_DEADLINE_SEC": "12", "MAX_WORKERS": "2"})
+        elapsed = time.perf_counter() - started
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r["answer"].strip() for r in rows))
+        self.assertIn("жёсткий дедлайн", log)
+        self.assertLess(elapsed, 30, log[-400:])
 
     def test_llm_outage_still_gives_valid_submission(self):
         with MockApi(fail_chat=True) as mock:

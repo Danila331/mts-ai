@@ -43,8 +43,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
-from energybot.llm import Api, env  # noqa: E402
 from validate_dataset import violates  # noqa: E402
+
+from energybot.llm import Api, env  # noqa: E402
 
 JUDGE_PROMPT = """Ты — строгий эксперт, проверяющий ответы ИИ-консультанта МТС EnergyTool (энергетика для бизнеса).
 Сравни ОТВЕТ БОТА с ЭТАЛОННЫМ ОТВЕТОМ на тот же вопрос клиента. Эталон опирается на базу знаний компании и считается верным.

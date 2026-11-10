@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -26,7 +27,9 @@ OUTPUT = Path(env("OUTPUT_PATH", "submission.csv"))
 # MAX_WORKERS платформы отражает лимиты сервиса (регламент, раздел 6) — уважаем его.
 MAX_WORKERS = env_num("EB_MAX_WORKERS", 0, 0, 16) or env_num("MAX_WORKERS", 4, 1, 16)
 # Лимит прогона на платформе — 20 минут; оставляем запас на запись файла.
-DEADLINE_SEC = env_num("EB_DEADLINE_SEC", 1050.0, 30.0, 3600.0, float)
+DEADLINE_SEC = env_num("EB_DEADLINE_SEC", 1050.0, 5.0, 3600.0, float)
+# Жёсткий предел: к этому моменту файл записан при любом поведении сети, зависшие потоки бросаются.
+HARD_DEADLINE_SEC = env_num("EB_HARD_DEADLINE_SEC", 1140.0, 10.0, 3600.0, float)
 MAX_ANSWER_CHARS = 9000  # предел платформы — 10 000 символов
 OFFLINE_MARGIN_SEC = 20.0  # верхняя граница запаса до дедлайна, после которого модель уже не вызываем
 
@@ -53,7 +56,8 @@ class Budget:
             self.dispatched += 1
             left = self.deadline_sec - (time.perf_counter() - self.started)
             avg = self.spent / self.done if self.done else None
-            margin = OFFLINE_MARGIN_SEC if avg is None else min(OFFLINE_MARGIN_SEC, max(5.0, 1.5 * avg))
+            cap = min(OFFLINE_MARGIN_SEC, 0.2 * self.deadline_sec)  # запас не больше пятой части дедлайна
+            margin = cap if avg is None else min(cap, max(min(5.0, cap), 1.5 * avg))
             if left < margin:
                 return "offline"
             if not self.fast and self.done >= self.workers:
@@ -86,7 +90,8 @@ def read_questions(path: Path) -> list:
         reader = csv.DictReader(f)
         fields = {name.strip().lower(): name for name in reader.fieldnames or []}
         id_col, q_col = fields.get("id", "id"), fields.get("question", "question")
-        return [(str(row[id_col]).strip(), str(row[q_col] or "")) for row in reader]
+        # ID сохраняется ровно как во входном файле: регламент требует ответ на каждый исходный ID.
+        return [(str(row[id_col]), str(row[q_col] or "")) for row in reader]
 
 
 def write_answers(path: Path, rows: list):
@@ -136,10 +141,23 @@ def main():
               f"{' guard=' + ','.join(result.guard) if result.guard else ''}", file=sys.stderr, flush=True)
         return qid, result.text, info
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for i, (qid, text, info) in enumerate(pool.map(work, range(len(questions)))):
-            answers[i] = text
-            debug.append(info)
+    pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    futures = {pool.submit(work, i): i for i in range(len(questions))}
+    done, pending = wait(futures, timeout=max(1.0, HARD_DEADLINE_SEC - (time.perf_counter() - started)))
+    for future in done:
+        _qid, text, info = future.result()
+        answers[futures[future]] = text
+        debug.append(info)
+    # Тайм-аут httpx ограничивает паузы между порциями данных, а не весь запрос: медленно
+    # «капающий» ответ мог бы держать поток за дедлайном. Такие вопросы отвечаем без модели.
+    for future in pending:
+        i = futures[future]
+        try:
+            answers[i] = bot.answer(turns[i], mode="eval", offline=True).text
+        except Exception:  # noqa: BLE001
+            answers[i] = FALLBACK
+        debug.append({"id": questions[i][0], "mode": "hard-deadline"})
+    pool.shutdown(wait=False, cancel_futures=True)
 
     write_answers(OUTPUT, [(qid, a) for (qid, _), a in zip(questions, answers)])
     if debug_path:
@@ -149,8 +167,15 @@ def main():
     fails = sum(1 for a in answers if a == FALLBACK)
     modes = {m: sum(1 for d in debug if d.get("mode") == m) for m in ("normal", "fast", "offline")}
     guarded = sum(1 for d in debug if d.get("guard"))
+    hard = len(pending)
     print(f"Готово: {OUTPUT} ({len(questions)} ответов, запасных: {fails}, режимы: {modes}, "
-          f"исправлено проверкой: {guarded}) за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
+          f"исправлено проверкой: {guarded}{f', жёсткий дедлайн: {hard}' if hard else ''}) "
+          f"за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
+    if hard:
+        # Не ждём зависшие потоки: файл уже записан.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

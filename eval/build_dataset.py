@@ -19,8 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
-from energybot.kb import KnowledgeBase  # noqa: E402
 from validate_dataset import load_cases, validate  # noqa: E402
+
+from energybot.kb import KnowledgeBase  # noqa: E402
 
 DATASET = ROOT / "eval" / "dataset"
 HOLDOUT_SHARE = 0.3

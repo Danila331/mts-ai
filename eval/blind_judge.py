@@ -4,11 +4,14 @@
 как на платформе (раунд 1: A — бейзлайн, B — команда; раунд 2: наоборот), но записи
 перемешаны, получают случайные коды и разнесены по пакетам, а ключ лежит отдельно.
 
-    # 1) пакеты для судей из готового прогона run_eval (нужны bot/ и baseline/)
-    python eval/blind_judge.py export eval/reports/<время> --parts 8
+    # 1) пакеты для судей из готового прогона run_eval (нужны bot/ и baseline/ или кэш бейзлайна)
+    python eval/blind_judge.py export eval/reports/<время> --parts 8 [--baseline-pred eval/baseline/answers.csv]
     # 2) судьи заполняют verdicts-XX.jsonl рядом с пакетами
     # 3) подсчёт
-    python eval/blind_judge.py score eval/reports/<время>
+    python eval/blind_judge.py score eval/reports/<время> [--baseline-pred ...]
+
+Оба раунда одного вопроса всегда попадают в разные пакеты. В CI ключ кладётся отдельно
+(--key) и судьям не передаётся.
 
 Формат вердикта (одна строка JSON на запись пакета):
     {"pid": "k3f9a1", "verdict": "B_much_better|B_better|equal|A_better|A_much_better", "reason": "..."}
@@ -52,28 +55,41 @@ def load_cases() -> dict:
     return cases
 
 
-def export(report: Path, parts: int, seed: int):
+def baseline_path(report: Path, baseline_pred: str | None) -> Path:
+    return Path(baseline_pred) if baseline_pred else report / "baseline" / "submission.csv"
+
+
+def export(report: Path, parts: int, seed: int, baseline_pred: str | None = None, key_path: str | None = None,
+           out_dir: str | None = None):
     bot = read_answers(report / "bot" / "submission.csv")
-    base = read_answers(report / "baseline" / "submission.csv")
+    base = read_answers(baseline_path(report, baseline_pred))
     cases = load_cases()
-    ids = [i for i in bot if i in base and cases.get(i, {}).get("reference")]
+    ids = [i for i in bot if base.get(i) and cases.get(i, {}).get("reference")]
+    missing = [i for i in bot if not base.get(i)]
+    if missing:
+        print(f"нет ответа бейзлайна для {len(missing)} вопросов (например {missing[:3]}) — они пропущены", file=sys.stderr)
     rng = random.Random(seed)
-    entries, key = [], {}
-    for qid in ids:
+    rng.shuffle(ids)
+    parts = max(1, min(parts, len(ids)))
+    packets = [[] for _ in range(parts)]
+    key = {}
+    for i, qid in enumerate(ids):
         for rnd in (1, 2):
             pid = f"{rng.getrandbits(32):08x}"
             team_side = "B" if rnd == 1 else "A"  # раунд 1: A — бейзлайн; раунд 2: A — команда
             a, b = (base[qid], bot[qid]) if rnd == 1 else (bot[qid], base[qid])
-            entries.append({"pid": pid, "question": cases[qid]["question"], "reference": cases[qid]["reference"],
-                            "A": a, "B": b})
+            # Раунды одного вопроса — в разные пакеты: судья не видит «зеркальных» пар.
+            n = i % parts if rnd == 1 else (i + max(1, parts // 2)) % parts
+            packets[n].append({"pid": pid, "question": cases[qid]["question"],
+                               "reference": cases[qid]["reference"], "A": a, "B": b})
             key[pid] = {"id": qid, "round": rnd, "team": team_side}
-    rng.shuffle(entries)
-    out = report / "blind"
-    out.mkdir(exist_ok=True)
-    (out / "key.json").write_text(json.dumps(key, ensure_ascii=False, indent=1), encoding="utf-8")
-    size = -(-len(entries) // parts)
-    for n in range(parts):
-        chunk = entries[n * size:(n + 1) * size]
+    out = Path(out_dir) if out_dir else report / "blind"
+    out.mkdir(parents=True, exist_ok=True)
+    key_file = Path(key_path) if key_path else out / "key.json"
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.write_text(json.dumps(key, ensure_ascii=False, indent=1), encoding="utf-8")
+    for n, chunk in enumerate(packets):
+        rng.shuffle(chunk)
         if not chunk:
             continue
         lines = [f"# Пакет {n + 1:02d} — слепое сравнение ответов ({len(chunk)} записей)\n",
@@ -87,12 +103,13 @@ def export(report: Path, parts: int, seed: int):
                       "**Эталонный ответ:**", "", e["reference"], "", "**Ответ A:**", "", e["A"], "",
                       "**Ответ B:**", "", e["B"], ""]
         (out / f"packet-{n + 1:02d}.md").write_text("\n".join(lines), encoding="utf-8")
-    print(f"{len(ids)} вопросов → {len(entries)} записей в {min(parts, len(entries))} пакетах: {out}")
+    print(f"{len(ids)} вопросов → {2 * len(ids)} записей в {parts} пакетах: {out}; ключ: {key_file}")
 
 
-def score(report: Path):
-    out = report / "blind"
-    key = json.loads((out / "key.json").read_text(encoding="utf-8"))
+def score(report: Path, baseline_pred: str | None = None, key_path: str | None = None,
+          verdicts_dir: str | None = None, min_score: float | None = None) -> float | None:
+    out = Path(verdicts_dir) if verdicts_dir else report / "blind"
+    key = json.loads(Path(key_path or out / "key.json").read_text(encoding="utf-8"))
     rounds, bad = {}, 0
     for path in sorted(out.glob("verdicts-*.jsonl")):
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -119,7 +136,7 @@ def score(report: Path):
         lines += [f"| {title} | n | средний балл |", "|---|---|---|"] + breakdown(list(per_q.items()), k, items) + [""]
     lines.append("## Поражения и ничьи\n")
     bot = read_answers(report / "bot" / "submission.csv")
-    base = read_answers(report / "baseline" / "submission.csv")
+    base = read_answers(baseline_path(report, baseline_pred))
     for qid, s in sorted(per_q.items(), key=lambda x: x[1]):
         if s > 0.5:
             break
@@ -128,9 +145,16 @@ def score(report: Path):
                   f"- раунд 1: {rounds[qid][1][1]}", f"- раунд 2: {rounds[qid][2][1]}",
                   f"- вопрос: {c['question']}", f"- бот: {bot.get(qid, '')}", f"- бейзлайн: {base.get(qid, '')}",
                   f"- эталон: {c['reference']}", ""]
+    missing_pairs = len(key) // 2 - m["n"]
+    if missing_pairs:
+        lines.insert(2, f"⚠️ Без пары вердиктов осталось {missing_pairs} вопросов — они не учтены.\n")
     (out / "report.md").write_text("\n".join(lines), encoding="utf-8")
-    print("\n".join(lines[:4]))
+    print("\n".join(lines[:5]))
     print(f"Отчёт: {out / 'report.md'}")
+    if min_score is not None and (m["score"] is None or m["score"] < min_score):
+        print(f"Score {m['score']} ниже порога {min_score}", file=sys.stderr)
+        sys.exit(2)
+    return m["score"]
 
 
 def main():
@@ -139,9 +163,16 @@ def main():
     ap.add_argument("report", help="папка прогона eval/reports/<время>")
     ap.add_argument("--parts", type=int, default=8)
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--baseline-pred", help="ответы бейзлайна из кэша вместо <report>/baseline/submission.csv")
+    ap.add_argument("--key", help="где хранить ключ (по умолчанию рядом с пакетами)")
+    ap.add_argument("--out", help="папка пакетов/вердиктов (по умолчанию <report>/blind)")
+    ap.add_argument("--min-score", type=float, help="score: код выхода 2, если Score ниже порога")
     args = ap.parse_args()
     report = Path(args.report)
-    export(report, args.parts, args.seed) if args.command == "export" else score(report)
+    if args.command == "export":
+        export(report, args.parts, args.seed, args.baseline_pred, args.key, args.out)
+    else:
+        score(report, args.baseline_pred, args.key, args.out, args.min_score)
 
 
 if __name__ == "__main__":

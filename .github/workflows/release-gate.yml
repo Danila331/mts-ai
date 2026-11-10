@@ -1,0 +1,310 @@
+name: Release gate (dev → main)
+
+# Только PR из dev в main (и ручной запуск). Проверяет, что в main уходит рабочий сабмит:
+#   1. submission        — сборка ZIP и детерминированная сверка с регламентом;
+#   2. regulation-review — Codex (подписка ChatGPT) сверяет ZIP с docs/tech-regulations.md;
+#   3. answers           — ответы бота на выборке (500 кейсов + 18 демо) на qwen3.8-27b;
+#   4. judge             — слепой судья Codex по методике платформы (бейзлайн из кэша);
+#   5. score             — Score = 0,7·Match Rate + 0,3·Win Rate, комментарий в PR.
+# Задания с Codex идут строго по очереди: у них общий auth.json (docs/ci.md).
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      eval_set:
+        description: Набор для оценки
+        type: choice
+        options: [all, demo, dev, holdout]
+        default: all
+      packets:
+        description: Сколько пакетов для судьи
+        default: "12"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: release-gate
+  cancel-in-progress: false
+
+env:
+  EVAL_SET: ${{ inputs.eval_set || 'all' }}
+  PACKETS: ${{ inputs.packets || '12' }}
+  # Модель Codex для ревью регламента и судьи; переопределяется переменными репозитория.
+  CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-6.1-sol' }}
+  CODEX_EFFORT: ${{ vars.CODEX_REASONING_EFFORT || 'xhigh' }}
+  # Режим Fast у Codex (service_tier=priority): в 2 раза быстрее, больше расход лимитов подписки.
+  CODEX_TIER: ${{ vars.CODEX_SERVICE_TIER || 'priority' }}
+
+jobs:
+  guard:
+    name: Только PR из dev
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.ref == 'dev' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - run: echo "PR из dev в main — запускаем проверку релиза"
+
+  submission:
+    name: Сабмит — сверка с регламентом
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Детерминированная сверка
+        run: python scripts/check_submission.py --report check.md
+      - if: always()
+        run: if [ -f check.md ]; then cat check.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: submission
+          path: |
+            dist/submission.zip
+            check.md
+          retention-days: 30
+
+  regulation-review:
+    name: Codex — ZIP против технического регламента
+    needs: submission
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: submission
+          path: artifact
+      - name: Папка для ревью
+        run: |
+          mkdir -p "$RUNNER_TEMP/review/submission"
+          unzip -q artifact/dist/submission.zip -d "$RUNNER_TEMP/review/submission"
+          cp docs/tech-regulations.md "$RUNNER_TEMP/review/regulations.md"
+          cp artifact/check.md "$RUNNER_TEMP/review/check.md"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: ./.github/actions/codex
+        with:
+          mode: restore
+          auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          api-key: ${{ secrets.OPENAI_API_KEY }}
+      - name: Ревью Codex
+        run: |
+          codex exec --sandbox read-only --skip-git-repo-check -C "$RUNNER_TEMP/review" \
+            --model "$CODEX_MODEL" -c "model_reasoning_effort=\"$CODEX_EFFORT\"" -c "service_tier=\"$CODEX_TIER\"" \
+            --output-schema "$GITHUB_WORKSPACE/.github/codex/regulation-schema.json" \
+            -o "$RUNNER_TEMP/verdict.json" \
+            "$(cat .github/codex/regulation-prompt.md)" 2> "$RUNNER_TEMP/codex.log"
+      - uses: ./.github/actions/codex
+        if: always()
+        with:
+          mode: persist
+          secrets-token: ${{ secrets.CODEX_SECRETS_TOKEN }}
+      - name: Вердикт
+        id: verdict
+        run: |
+          python3 - "$RUNNER_TEMP/verdict.json" > regulation.md <<'PY'
+          import json, sys
+          v = json.load(open(sys.argv[1]))
+          blockers = [x for x in v["violations"] if x["severity"] == "blocker"]
+          ok = v["compliant"] and not blockers
+          print("## Codex: сабмит против технического регламента\n")
+          print(f"**{'✅ соответствует' if ok else '❌ есть нарушения'}** — {v['summary']}\n")
+          if v["violations"]:
+              print("| серьёзность | требование | доказательство |\n|---|---|---|")
+              for x in v["violations"]:
+                  print(f"| {x['severity']} | {x['rule']} | {x['evidence']} |")
+          open("regulation.ok", "w").write("1" if ok else "0")
+          PY
+          tee -a "$GITHUB_STEP_SUMMARY" < regulation.md
+          cp "$RUNNER_TEMP/verdict.json" regulation-verdict.json
+          echo "ok=$(cat regulation.ok)" >> "$GITHUB_OUTPUT"
+      - name: Вердикт — артефакт
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regulation-review
+          path: |
+            regulation.md
+            regulation-verdict.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Комментарий в PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --repo "$GITHUB_REPOSITORY" --body-file regulation.md
+      - name: Нарушения блокируют релиз
+        if: steps.verdict.outputs.ok != '1'
+        run: echo "::error::Codex нашёл нарушения регламента — см. сводку" && exit 1
+
+  answers:
+    name: Ответы бота на выборке
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      LLM_BASE_URL: https://openrouter.ai/api/v1
+      LLM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      LLM_MODEL: qwen/qwen3.8-27b
+      EMB_MODEL: baai/bge-m3
+      EB_USE_RERANKER: "0"
+      EB_THINKING_PARAM: reasoning
+      MAX_WORKERS: "6"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Ключ OpenRouter задан
+        run: '[ -n "$LLM_API_KEY" ] || { echo "::error::Нет секрета OPENROUTER_API_KEY — см. docs/ci.md"; exit 1; }'
+      - name: Ответы бота (бейзлайн — из кэша eval/baseline/answers.csv)
+        run: |
+          set -o pipefail
+          python eval/run_eval.py --set "$EVAL_SET" --baseline-pred eval/baseline/answers.csv --no-judge | tee run.md
+      - name: Слепые пакеты для судьи
+        run: |
+          REPORT="$(find eval/reports -mindepth 1 -maxdepth 1 -type d | sort | tail -1)/"
+          echo "REPORT=$REPORT" >> "$GITHUB_ENV"
+          python eval/blind_judge.py export "$REPORT" --parts "$PACKETS" \
+            --baseline-pred eval/baseline/answers.csv --out packets --key private/key.json
+          mkdir -p private/report && cp -r "$REPORT"bot private/report/
+      - if: always()
+        run: if [ -f run.md ]; then cat run.md >> "$GITHUB_STEP_SUMMARY"; fi
+      # Пакеты судья получает отдельно от ключа — он физически не может узнать, где наш ответ.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packets
+          path: packets
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-private
+          path: private
+          retention-days: 30
+
+  judge:
+    name: Codex — слепой судья
+    needs: [answers, regulation-review]
+    if: ${{ !cancelled() && needs.answers.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: packets
+          path: packets
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: ./.github/actions/codex
+        with:
+          mode: restore
+          auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          api-key: ${{ secrets.OPENAI_API_KEY }}
+      - name: Судейство по пакетам (последовательно)
+        run: |
+          set -uo pipefail
+          mkdir -p verdicts
+          for packet in packets/packet-*.md; do
+            n=$(basename "$packet" .md | sed 's/packet-//')
+            work="$RUNNER_TEMP/judge-$n"; mkdir -p "$work"; cp "$packet" "$work/"
+            prompt=$(sed -e "s/{{PACKET}}/packet-$n.md/g" -e "s/{{VERDICTS}}/verdicts-$n.jsonl/g" .github/codex/judge-prompt.md)
+            for attempt in 1 2; do
+              codex exec --sandbox workspace-write --skip-git-repo-check -C "$work" \
+                --model "$CODEX_MODEL" -c "model_reasoning_effort=\"$CODEX_EFFORT\"" -c "service_tier=\"$CODEX_TIER\"" \
+                "$prompt" > "$work/out.txt" 2> "$work/log.txt"
+              if python3 - "$work/packet-$n.md" "$work/verdicts-$n.jsonl" <<'PY'
+          import json, re, sys
+          pids = set(re.findall(r"^## pid (\w+)", open(sys.argv[1], encoding="utf-8").read(), re.M))
+          try:
+              rows = [json.loads(x) for x in open(sys.argv[2], encoding="utf-8") if x.strip()]
+          except Exception as exc:
+              sys.exit(f"битый файл вердиктов: {exc}")
+          ok = {"B_much_better", "B_better", "equal", "A_better", "A_much_better"}
+          got = {r.get("pid") for r in rows if r.get("verdict") in ok}
+          sys.exit(0 if got == pids and len(rows) == len(pids) else f"вердиктов {len(got)} из {len(pids)}")
+          PY
+              then cp "$work/verdicts-$n.jsonl" verdicts/; echo "пакет $n: готово"; break
+              else echo "::warning::пакет $n, попытка $attempt: вердикты неполные"; fi
+            done
+          done
+          echo "Пакетов с вердиктами: $(find verdicts -name 'verdicts-*.jsonl' | wc -l) из $(find packets -name 'packet-*.md' | wc -l)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/codex
+        if: always()
+        with:
+          mode: persist
+          secrets-token: ${{ secrets.CODEX_SECRETS_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verdicts
+          path: verdicts
+          retention-days: 30
+
+  score:
+    name: Score по методике платформы
+    needs: judge
+    if: ${{ !cancelled() && needs.judge.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-dev.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: eval-private
+          path: private
+      - uses: actions/download-artifact@v4
+        with:
+          name: verdicts
+          path: verdicts
+      - name: Подсчёт
+        env:
+          MIN_SCORE: ${{ vars.EVAL_MIN_SCORE }}
+        run: |
+          python eval/blind_judge.py score private/report --baseline-pred eval/baseline/answers.csv \
+            --key private/key.json --out verdicts ${MIN_SCORE:+--min-score "$MIN_SCORE"}
+      - if: always()
+        run: if [ -f verdicts/report.md ]; then head -c 60000 verdicts/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Комментарий в PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f verdicts/report.md ] || exit 0
+          {
+            echo "## Слепой судья Codex — выборка ($EVAL_SET) против бейзлайна"
+            echo
+            sed -n '3,40p' verdicts/report.md
+            echo
+            echo "_Полный отчёт с поражениями и ничьими — в сводке запуска._"
+          } > comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --repo "$GITHUB_REPOSITORY" --body-file comment.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: score-report
+          path: verdicts/report.md
+          retention-days: 30

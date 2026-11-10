@@ -119,7 +119,7 @@ def normalize_tables(text: str) -> str:
                 i += 1
         out.extend(r for r in rows_out if r)
     # Оставшиеся длинные линии — горизонтальные разделители.
-    return "\n".join(l for l in out if not FULL_RULE.match(l))
+    return "\n".join(line for line in out if not FULL_RULE.match(line))
 
 
 LIST_ITEM = re.compile(r"^(?:-|\d+\.)\s+")
@@ -162,7 +162,7 @@ def chunk_document(doc: str, raw: str) -> list:
             return
         path = " > ".join(stack[k] for k in sorted(stack) if k >= 2) or title
         links = sorted({m.group(2) for m in FILE_LINK.finditer(content)} - {Path(doc).name})
-        cid = hashlib.sha1(f"{doc}|{path}|{content}".encode("utf-8")).hexdigest()[:16]
+        cid = hashlib.sha1(f"{doc}|{path}|{content}".encode()).hexdigest()[:16]
         chunks.append(Chunk(cid, doc, title, path, content, links))
 
     for line in text.split("\n"):
@@ -216,7 +216,7 @@ class KnowledgeBase:
     fingerprint: str
 
     @classmethod
-    def load(cls, path: Path) -> "KnowledgeBase":
+    def load(cls, path: Path) -> KnowledgeBase:
         sources = read_sources(path)
         if not sources:
             raise ValueError(f"База знаний пуста: {path}")

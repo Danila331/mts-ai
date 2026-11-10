@@ -42,6 +42,7 @@ eval/                       локальный стенд оценки
   retrieval_eval.py         качество поиска (работает без ключей)
   run_eval.py               прогон как на платформе + стиль + проверки + LLM-судья по методике платформы
   blind_judge.py            слепое судейство (человек или ИИ-агенты): пакеты без указания авторства, ключ отдельно
+  codex_judge.py            слепой судья Codex одной командой: ответы → пакеты → Codex → Score
 tests/                      офлайн-тесты, включая полный прогон на заглушке API
 scripts/build_index.py      предрасчёт эмбеддингов базы в index/ — только для локальной работы, в сабмит не идёт
 scripts/build_submission.py сборка плоского dist/submission.zip по регламенту
@@ -65,6 +66,15 @@ scripts/simulate_budget.py  бюджет времени: расчётная та
    выдержкой из самого релевантного раздела. Пустых ответов не бывает.
 7. Любая ступень может отказать: без эмбеддингов работает BM25, без реранкера — RRF, при сбое LLM — выдержка из базы.
    `submission.csv` пишется с самого начала, поэтому сабмит валиден даже при падении.
+
+## CI
+
+- `ci.yml` — на каждый PR: `ruff`, тесты, сверка ZIP с регламентом, `actionlint`; TypeScript — когда появится `web/`.
+- `release-gate.yml` — на PR `dev → main`: Codex сверяет ZIP с регламентом, бот отвечает на 518 вопросов,
+  Codex-судья вслепую сравнивает с бейзлайном (кэш `eval/baseline/answers.csv`), Score — комментарием в PR.
+
+Слепой судья Codex локально — `python eval/codex_judge.py --set demo --packets 3`.
+Секреты, вход Codex по подписке ChatGPT, запуск судьи другим разработчиком и настройка защиты `main` — в [`docs/ci.md`](docs/ci.md).
 
 ## Быстрый старт
 
@@ -127,7 +137,8 @@ set -a; source .env; set +a
 | `EB_USE_EMBEDDINGS`, `EB_USE_RERANKER`, `EB_DISABLE_THINKING` | включение ступеней (`0` — выключить) | `1` |
 | `EB_MAX_WORKERS` | переопределить параллельность | `MAX_WORKERS` |
 | `EB_DEADLINE_SEC` | общий лимит прогона | `1050` |
-| `EMBEDDER_BASE_URL/API_KEY`, `RERANKER_BASE_URL/API_KEY` | только локально: отдельные адреса и ключи | как у LLM |
+| `EMBEDDER_API_KEY`, `RERANKER_API_KEY` | отдельные ключи (как в примере организаторов) | ключ LLM |
+| `EB_EMBEDDER_BASE_URL`, `EB_RERANKER_BASE_URL` | только локально: отдельные адреса эмбеддингов и реранкера | адрес LLM |
 | `JUDGE_BASE_URL`, `JUDGE_API_KEY`, `JUDGE_MODEL` | отдельная модель для LLM-судьи стенда | как у LLM |
 | `DEBUG_JSONL` | путь для источников и времени ответа по каждому вопросу | выключено |
 
