@@ -88,6 +88,32 @@ class PostprocessTest(unittest.TestCase):
         self.assertEqual(strip_thinking("<think>a\nb</think>\nОтвет"), "Ответ")
         self.assertEqual(strip_thinking("<think>не закрыто"), "")
 
+    def test_strip_thinking_with_closing_tag_only(self):
+        """vLLM без разбора размышлений отдаёт рассуждение и ответ одним текстом с одной меткой </think>."""
+        raw = "Клиент спрашивает про скаты. В базе сказано, что используются оба.\n</think>\n\nДа, можно."
+        self.assertEqual(strip_thinking(raw), "Да, можно.")
+        self.assertEqual(strip_thinking("<think>a</think>первый</think>Ответ"), "Ответ")
+        self.assertEqual(strip_thinking("рассуждение без ответа</think>"), "")
+
+    def test_kb_check_verdicts(self):
+        """Указание генератору даёт только вердикт «НЕТ»; «ЕСТЬ» и «ВНЕ ТЕМЫ» оставляют запрос как в v3."""
+        from energybot.prompts import parse_check
+        self.assertEqual(parse_check("БЛИЖАЙШЕЕ В БАЗЕ: «…» — раздел\nВЕРДИКТ: НЕТ: срок хранения истории."),
+                         "срок хранения истории")
+        self.assertEqual(parse_check("БЛИЖАЙШЕЕ В БАЗЕ: «…»\nВЕРДИКТ: ЕСТЬ"), "")
+        self.assertEqual(parse_check("БЛИЖАЙШЕЕ В БАЗЕ: «…»\nВЕРДИКТ: ВНЕ ТЕМЫ"), "")
+        self.assertEqual(parse_check("что-то неразборчивое"), "")
+
+    def test_inline_evidence_is_split_from_answer(self):
+        """Опора и ответ приходят одним текстом: клиенту уходит только то, что после метки ОТВЕТ."""
+        from energybot.prompts import split_inline_evidence
+        raw = "ЦИТАТЫ:\n- «Порог — 750 кВт» — Оптовый рынок\nНЕТ В БАЗЕ: —\nПРИМЕНИМОСТЬ: —\nОТВЕТ:\nДа, от 750 кВт."
+        answer, evidence = split_inline_evidence(raw)
+        self.assertEqual(answer, "Да, от 750 кВт.")
+        self.assertIn("750 кВт", evidence)
+        self.assertEqual(split_inline_evidence("ЦИТАТЫ:\n- «…»\nНЕТ В БАЗЕ: —"), ("", ""))  # формат не соблюдён
+        self.assertEqual(split_inline_evidence("Просто ответ."), ("Просто ответ.", ""))
+
     def test_tidy_removes_markdown(self):
         self.assertEqual(tidy("Консультант: **Да**, можно:\n- раз\n- два\nВопрос?"), "Да, можно: раз два Вопрос?")
 
@@ -136,6 +162,7 @@ class JudgeMetricsTest(unittest.TestCase):
 
         score, _ = judge_vs_baseline(PrefersTeam(), "вопрос", "эталон", "команда", "бейзлайн")
         self.assertEqual(score, 1.0)
+
 
 
 class BlindJudgeTest(unittest.TestCase):
@@ -270,13 +297,17 @@ class SolutionEndToEndTest(unittest.TestCase):
         self.assertGreaterEqual(mock.calls["embeddings"], 1)
         self.assertGreaterEqual(mock.calls["rerank"], 1)
         roles = [m["role"] for m in mock.last_messages]
-        self.assertEqual(roles[0], "system")
-        self.assertIn("МАТЕРИАЛЫ", mock.last_messages[0]["content"])
+        self.assertEqual(roles, ["system", "user"])
+        self.assertIn("СПРАВОЧНИК", mock.last_messages[0]["content"])
+        self.assertIn("МАТЕРИАЛЫ ПО ВОПРОСУ", mock.last_messages[1]["content"])
 
-    def test_dialog_history_is_passed_as_turns(self):
+    def test_dialog_history_is_passed_to_model(self):
+        """Диалог целиком идёт последним блоком запроса: модель отвечает на последнюю реплику клиента."""
         with MockApi(reject_template_kwargs=False) as mock:
             self._run(mock, [("1", "Пользователь: Мы СНТ.\nАссистент: Какая задача?\nПользователь: Учёт.")])
-        self.assertEqual([m["role"] for m in mock.last_messages], ["system", "user", "assistant", "user"])
+        user = mock.last_messages[-1]["content"]
+        self.assertIn("Клиент: Мы СНТ.\nКонсультант: Какая задача?\nКлиент: Учёт.", user)
+        self.assertLess(user.index("МАТЕРИАЛЫ ПО ВОПРОСУ"), user.index("ДИАЛОГ"))
 
     def test_flat_zip_runs_like_on_platform(self):
         """Сабмит из распакованного ZIP: только корневые .py и requirements.txt, без energybot/."""
@@ -306,6 +337,35 @@ class SolutionEndToEndTest(unittest.TestCase):
         self.assertIn("быстрый режим", log)
         self.assertLess(elapsed, 45, log[-500:])
 
+    def test_inline_evidence_never_reaches_submission(self):
+        raw = "ЦИТАТЫ:\n- «Минимального количества приборов нет.» — Платформа\nНЕТ В БАЗЕ: —\nПРИМЕНИМОСТЬ: ДА\nОТВЕТ:\nДа, подойдёт."
+        with MockApi(reject_template_kwargs=False, responder=lambda m: raw) as mock:
+            rows, _ = self._run(mock, [("1", "Нам подойдёт платформа учёта?")], extra_env={"EB_EVIDENCE": "2"})
+            calls = mock.calls["chat"]
+        self.assertEqual(rows[0]["answer"], "Да, подойдёт.")
+        self.assertEqual(calls, 1)
+
+    def test_kb_check_adds_note_only_when_kb_is_silent(self):
+        """Проверка базы — отдельный вызов: при «НЕТ» генератор получает указание, при «ЕСТЬ» запрос прежний."""
+        seen = []
+
+        def responder(verdict):
+            def reply(messages):
+                tail = messages[-1]["content"]
+                if "Сейчас не отвечай клиенту" in tail:
+                    return verdict
+                seen.append("ПРОВЕРКА БАЗЫ" in tail)
+                return "Ответ клиенту без чисел."
+            return reply
+
+        for verdict, noted in (("БЛИЖАЙШЕЕ В БАЗЕ: «…»\nВЕРДИКТ: НЕТ: срок хранения", True),
+                               ("БЛИЖАЙШЕЕ В БАЗЕ: «…»\nВЕРДИКТ: ЕСТЬ", False)):
+            seen.clear()
+            with MockApi(reject_template_kwargs=False, responder=responder(verdict)) as mock:
+                rows, _ = self._run(mock, [("1", "Сколько хранится история?")], extra_env={"EB_CHECK": "2"})
+                calls = mock.calls["chat"]
+            self.assertEqual((rows[0]["answer"], calls, seen), ("Ответ клиенту без чисел.", 2, [noted]))
+
     def test_ids_are_kept_exactly(self):
         questions = [(" a ", "Вопрос один?"), ("b", "Вопрос два?"), ("007", "Вопрос три?")]
         with MockApi(reject_template_kwargs=False) as mock:
@@ -330,6 +390,185 @@ class SolutionEndToEndTest(unittest.TestCase):
             rows, _ = self._run(mock, [("1", "Вопрос один?"), ("2", "Вопрос два?")])
         self.assertEqual(len(rows), 2)
         self.assertTrue(all("специалист" in r["answer"] for r in rows))
+
+
+
+class _Env:
+    """Временные переменные окружения на время блока."""
+
+    def __init__(self, **values):
+        self.values, self.old = values, {}
+
+    def __enter__(self):
+        for k, v in self.values.items():
+            self.old[k] = os.environ.get(k)
+            os.environ[k] = v
+        return self
+
+    def __exit__(self, *exc):
+        for k, v in self.old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+
+
+class FactMapTest(unittest.TestCase):
+    """Схема EB_ARCH=factmap: карта фактов + поиск по разделам + проверка чисел."""
+
+    QUESTION = GuardTest.QUESTION
+    GOOD = GuardTest.GOOD
+    BAD = GuardTest.BAD
+
+    def test_fact_map_is_built_from_kb(self):
+        from energybot.factmap import fact_map_chunks, render_fact_map
+        kb = KnowledgeBase.load(KB_DIR)
+        text = render_fact_map(fact_map_chunks(kb))
+        self.assertIn("Чего утверждать нельзя", text)
+        self.assertIn("Факты, которые можно утверждать", text)
+        self.assertIn("750", text)  # порог оптового рынка — из числовых показателей
+        self.assertLess(len(text), 45000)  # карта — часть неизменного промпта, а не вся база
+
+    def test_char_ngrams_find_section_by_word_form(self):
+        from energybot.retrieval import Retriever
+        kb = KnowledgeBase.load(KB_DIR)
+        r = Retriever(kb, char_ngrams=True)
+        hits = r.candidates("шиферной кровлей", n=5, char_query="шиферной кровлей")
+        self.assertTrue(any("23-solar" in h.chunk.doc for h in hits), [h.chunk.path for h in hits])
+        fm = {c.id for c in kb.chunks if c.is_guard}
+        hits = r.candidates("чего утверждать нельзя солнечные", n=12, exclude=fm)
+        self.assertFalse(any(h.chunk.id in fm for h in hits))
+
+    def test_rerank_template_is_built_on_client(self):
+        from energybot.retrieval import rerank_inputs
+        q, docs = rerank_inputs("Вопрос?", ["Раздел"], "qwen")
+        self.assertIn("<Instruct>:", q)
+        self.assertIn("<Query>: Вопрос?", q)
+        self.assertTrue(docs[0].startswith("<Document>: Раздел"))
+        self.assertEqual(rerank_inputs("Вопрос?", ["Раздел"], "raw"), ("Вопрос?", ["Раздел"]))
+
+    def _bot(self, mock):
+        with _Env(EB_ARCH="factmap"):
+            return _consultant(mock)
+
+    def test_answer_uses_fact_map_and_sections(self):
+        with MockApi(reject_template_kwargs=False, responder=lambda m: self.GOOD) as mock:
+            result = self._bot(mock).answer(self.QUESTION)
+            calls, messages = mock.calls["chat"], mock.last_messages
+        self.assertEqual((result.text, calls), (self.GOOD, 1))
+        self.assertIn("КАРТА ФАКТОВ", messages[0]["content"])
+        self.assertIn("РАЗДЕЛЫ БАЗЫ ПО ВОПРОСУ", messages[1]["content"])
+        self.assertTrue(result.sources)
+        self.assertLessEqual(len(result.sources), 5)
+
+    def test_invented_number_is_repaired(self):
+        def responder(messages):
+            return self.GOOD if messages[-1]["content"].startswith("[Служебная") else self.BAD
+
+        with MockApi(reject_template_kwargs=False, responder=responder) as mock:
+            result = self._bot(mock).answer(self.QUESTION)
+        self.assertEqual(result.text, self.GOOD)
+        self.assertEqual(result.guard["unknown_numbers"], ["3750000"])
+
+    def test_short_reply_is_condensed_before_search(self):
+        def responder(messages):
+            if messages[0]["content"].startswith("Перепиши"):
+                return "Подойдёт ли платформа учёта для СНТ на 300 кВт?"
+            return self.GOOD
+
+        dialog = "Пользователь: Мы СНТ, хотим учёт.\nАссистент: Какая мощность?\nПользователь: 300 кВт"
+        with MockApi(reject_template_kwargs=False, responder=responder) as mock:
+            result = self._bot(mock).answer(dialog)
+            calls = mock.calls["chat"]
+        self.assertEqual(calls, 2)
+        self.assertIn("СНТ", result.guard["condensed"])
+        self.assertEqual(result.text, self.GOOD)
+
+    def test_single_question_is_not_condensed(self):
+        with MockApi(reject_template_kwargs=False, responder=lambda m: self.GOOD) as mock:
+            self._bot(mock).answer("Да")
+            self.assertEqual(mock.calls["chat"], 1)
+
+    def test_empty_answer_is_retried(self):
+        state = {"n": 0}
+
+        def responder(messages):
+            state["n"] += 1
+            return "<think>рассуждаю и не успеваю" if state["n"] == 1 else self.GOOD
+
+        with MockApi(reject_template_kwargs=False, responder=responder) as mock:
+            result = self._bot(mock).answer(self.QUESTION)
+        self.assertEqual((result.text, state["n"]), (self.GOOD, 2))
+
+    def test_llm_outage_gives_extract_from_kb(self):
+        with MockApi(fail_chat=True) as mock:
+            result = self._bot(mock).answer(self.QUESTION)
+        self.assertTrue(result.text.strip())
+        self.assertTrue(result.error)
+
+    def test_full_run(self):
+        questions = [("1", "Сколько стоит платформа учёта?"),
+                     ("2", "Пользователь: Хотим на опт.\nАссистент: Какая мощность?\nПользователь: 800 кВт")]
+        with MockApi(reject_template_kwargs=True) as mock:
+            rows, log = SolutionEndToEndTest._run(self, mock, questions, extra_env={"EB_ARCH": "factmap"})
+        self.assertEqual([r["id"] for r in rows], ["1", "2"])
+        self.assertTrue(all(r["answer"].strip() for r in rows))
+        self.assertIn("схема factmap", log)
+
+
+
+class ExperimentsTest(unittest.TestCase):
+    """Каналы и варианты, добавленные для экспериментов на 18 эталонах."""
+
+    GOOD = GuardTest.GOOD
+
+    def test_history_window_in_lexical_query(self):
+        turns = parse("Пользователь: про солнце\nАссистент: ок\nПользователь: про опт\nАссистент: ок\n"
+                      "Пользователь: про фото\nАссистент: ок\nПользователь: про учёт\nАссистент: ок\n"
+                      "Пользователь: итог?")
+        self.assertIn("солнце", search_queries(turns)[0])
+        self.assertNotIn("солнце", search_queries(turns, window=3)[0])
+
+    def test_parse_marks(self):
+        from energybot.factmap import parse_marks
+        self.assertEqual(parse_marks("0: 9\n1 - 3,5\n7: 10\n2: 15", 3), {0: 9.0, 1: 3.5, 2: 10.0})
+
+    def test_jury_rules_are_selected(self):
+        from energybot.prompts import build_messages
+        msgs = build_messages("", "материалы", parse("Вопрос?"), style="jury", examples=False)
+        self.assertIn("КОГДА ВОПРОС НЕ НУЖЕН", msgs[0]["content"])
+        self.assertIn("30–60 слов", msgs[1]["content"])
+
+    def _answer(self, env: dict, responder):
+        with MockApi(reject_template_kwargs=False, responder=responder) as mock:
+            with _Env(**env):
+                bot = _consultant(mock)
+            result = bot.answer("Можно ли поставить панели на шиферную крышу?")
+            return result, mock
+
+    def test_toc_selection_keeps_search(self):
+        def responder(messages):
+            if messages[0]["content"].startswith("Ты выбираешь разделы"):
+                return "3, 5, 3, 9999"
+            return self.GOOD
+        result, _ = self._answer({"EB_ARCH": "factmap", "EB_FM_TOC": "1"}, responder)
+        self.assertEqual(result.guard.get("toc"), 2)
+        self.assertNotIn("full_kb", result.guard)
+        self.assertEqual(result.text, self.GOOD)
+
+    def test_llm_rerank_and_parent_doc(self):
+        def responder(messages):
+            if messages[0]["content"].startswith("Ты отбираешь разделы"):
+                return "0: 2\n1: 10\n2: 7"
+            return self.GOOD
+        result, mock = self._answer({"EB_ARCH": "factmap", "EB_FM_LLMRERANK": "1", "EB_FM_PARENT": "1",
+                                     "EB_FM_PROMPT": "jury"}, responder)
+        self.assertEqual(result.guard.get("llm_rerank"), 3)
+        self.assertIn("=== Документ", mock.last_messages[1]["content"])
+        self.assertIn("КОГДА ВОПРОС НЕ НУЖЕН", mock.last_messages[0]["content"])
+
+    def test_verify_ensemble_search_on_v3(self):
+        result, mock = self._answer({"EB_SEARCH": "ve"}, lambda m: self.GOOD)
+        self.assertEqual(result.text, self.GOOD)
+        self.assertNotIn("=== Документ", mock.last_messages[1]["content"])  # фрагменты, а не документы целиком
+        self.assertIn("СПРАВОЧНИК", mock.last_messages[0]["content"])
 
 
 if __name__ == "__main__":

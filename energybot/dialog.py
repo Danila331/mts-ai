@@ -34,12 +34,14 @@ def parse(question: str) -> list:
     return turns
 
 
-def search_queries(turns: list) -> tuple:
+def search_queries(turns: list, window: int | None = None) -> tuple:
     """Запросы для поиска: лексический (весь контекст, последний вопрос с весом) и смысловой."""
     last = turns[-1]["content"]
     users = [t["content"] for t in turns[:-1] if t["role"] == "user"]
     prev_assistant = next((t["content"] for t in reversed(turns[:-1]) if t["role"] == "assistant"), "")
-    lexical = " ".join([last, last] + users + [prev_assistant])
+    # window — сколько последних реплик клиента брать в лексический запрос (None — все): при смене темы старые
+    # термины тянут чужие разделы (поиск из feature/verify-ensemble).
+    lexical = " ".join([last, last] + (users[-window:] if window else users) + [prev_assistant])
     # Для эмбеддинга и реранкера — связный текст ситуации клиента.
     semantic = " ".join(users[-2:] + ([prev_assistant] if prev_assistant else []) + [last])
     return lexical, semantic, last
