@@ -20,7 +20,7 @@ from .factmap import (
     parse_marks,
     render_fact_map,
 )
-from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
+from .guard import MAX_WORDS, repair_instruction, strip_sentences, unknown_numbers, word_count
 from .kb import KnowledgeBase
 from .llm import Api, context_overflow, env, env_num, strip_thinking
 from .prompts import (
@@ -42,7 +42,6 @@ from .prompts import (
     split_plan,
 )
 from .retrieval import Retriever
-from .text import tokens
 
 FALLBACK = (
     "Точного ответа на этот вопрос в моих материалах нет, поэтому не буду гадать. "
@@ -58,38 +57,6 @@ class Answer:
     error: str = ""
     guard: dict = field(default_factory=dict)  # что сработало в проверке ответа (для отладки)
     trace: str = ""  # фактическая основа ответа при двух шагах (для отладки)
-
-
-def content_words(text: str) -> set:
-    """Значимые основы слов: без стоп-слов, коротких служебных и чисел — по ним судим, о чём текст."""
-    return {t for t in tokens(text) if len(t) >= 3 and not t.isdigit()}
-
-
-def last_question(turns: list) -> str:
-    return next((t["content"] for t in reversed(turns) if t.get("role") == "user"), "")
-
-
-def extractive(chunks: list, question: str = "", max_words: int = 55) -> str:
-    """Ответ без модели — начало самого релевантного раздела. Только на случай сбоя/нехватки времени:
-    это лучше, чем пустая отписка, но хуже ответа модели.
-
-    Раздел берётся, только если в нём есть значимые слова из вопроса клиента. Поиск отдаёт кандидатов
-    всегда, даже на вопрос не по теме («как приготовить борщ»), и без этой проверки клиент получил бы
-    посторонний фрагмент вместо отказа, которого требует регламент (раздел 7). Пустая строка означает
-    отказ: вызывающий подставляет FALLBACK."""
-    if question:
-        asked = content_words(question)
-        chunks = [c for c in chunks if asked & content_words(c.search_text())]
-    if not chunks:
-        return ""
-    text = re.sub(r"(?m)^\s*-\s*", "", chunks[0].text)
-    out = []
-    for sentence in SENTENCE.split(" ".join(text.split())):
-        if out and word_count(" ".join(out + [sentence])) > max_words:
-            break
-        out.append(sentence)
-    answer = " ".join(out).strip()
-    return f"{answer} Подробнее по вашему объекту подскажет специалист." if answer else ""
 
 
 def tidy(text: str) -> str:
@@ -262,7 +229,7 @@ class Consultant:
     def answer(self, question, mode: str = "eval", query_vec=None, fast: bool = False,
                offline: bool = False, premium: bool = True) -> Answer:
         """fast — без реранкера, дорогих шагов и повторных проходов (нехватка времени);
-        offline — без модели вообще (время вышло): выдержка из базы;
+        offline — без модели вообще (время вышло): корректный отказ, как при сбое генерации;
         premium — разрешены ли для этого вопроса дорогие шаги: размышления (EB_THINK) и опора из базы
         (EB_EVIDENCE). Без них вопрос отвечается одним обычным вызовом."""
         turns = parse(question) if isinstance(question, str) else question
@@ -278,7 +245,7 @@ class Consultant:
         top_chunks = [h.chunk for h in ranked[:max(5, self.top_k)]]
         if offline:
             timings["total"] = time.perf_counter() - t0
-            return Answer(extractive(top_chunks, last_question(turns)) or FALLBACK, sources, timings, "без модели: лимит времени")
+            return Answer(FALLBACK, sources, timings, "без модели: лимит времени")
         exclude = ""
         if self.examples_loo:
             exclude = turns[0]["content"] if len(turns) == 1 else "\n".join(
@@ -376,7 +343,7 @@ class Consultant:
         timings["total"] = time.perf_counter() - t0
         if not text:
             reason = "ответ отброшен проверкой цифр" if guard.get("dropped") else (error or "пустой ответ")
-            return Answer(extractive(top_chunks, last_question(turns)) or FALLBACK, sources, timings, reason, guard)
+            return Answer(FALLBACK, sources, timings, reason, guard)
         return Answer(text, sources, timings, "", guard, draft)
 
     # ---------- схема factmap ----------
@@ -500,7 +467,7 @@ class Consultant:
         sources = [(c.doc, c.path, None) for c in top]
         if offline:
             timings["total"] = time.perf_counter() - t0
-            return Answer(extractive(top, last_question(turns)) or FALLBACK, sources, timings, "без модели: лимит времени", guard)
+            return Answer(FALLBACK, sources, timings, "без модели: лимит времени", guard)
         t1 = time.perf_counter()
         if self.fm_prompt in ("v3", "jury"):
             messages = build_messages(self.fact_map, materials, turns, mode, self.use_examples,
@@ -520,7 +487,7 @@ class Consultant:
         timings["total"] = time.perf_counter() - t0
         if not text:
             reason = "ответ отброшен проверкой цифр" if guard.get("dropped") else (error or "пустой ответ")
-            return Answer(extractive(top, last_question(turns)) or FALLBACK, sources, timings, reason, guard)
+            return Answer(FALLBACK, sources, timings, reason, guard)
         return Answer(text, sources, timings, "", guard)
 
     def check(self, text: str, messages: list, materials: str, turns: list, fast: bool) -> tuple:
