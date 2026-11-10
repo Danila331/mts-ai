@@ -4,9 +4,15 @@
 //
 //   node scripts/stand.mjs --site <папка energytool.mts.ru> [--port 4000] [--widget http://localhost:3000]
 //
+// Экспорт для деплоя (например, на Vercel): та же страница с виджетом, но статикой в новую папку, плюс
+// SPA-маршрутизация. С --protect стенд закрывается логином/паролем (Basic Auth, пароль — переменная
+// STAND_PASSWORD в проекте Vercel; без неё стенд не открывается никому):
+//
+//   node scripts/stand.mjs --site <папка energytool.mts.ru> --widget https://<стенд> --export <новая папка> [--protect]
+//
 // Без зависимостей. Счётчики аналитики МТС (tag.a.mts.ru) из страницы вырезаются, чтобы стенд не слал события.
 
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { cpSync, createReadStream, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 
@@ -84,6 +90,55 @@ function page(params) {
   // Счётчик МТС (dataLayer / tag.a.mts.ru) — вырезаем инлайн-скрипт целиком.
   html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*tag\.a\.mts\.ru(?:(?!<\/script>)[\s\S])*<\/script>/g, "");
   return html.replace("</body>", `${tag(params)}</body>`);
+}
+
+// Только для --protect: пока STAND_PASSWORD не задан, стенд не открывается никому.
+const MIDDLEWARE = `// Демо-стенд закрыт логином и паролем (Basic Auth). Пароль — переменная окружения STAND_PASSWORD
+// в проекте Vercel, логин — STAND_USER (по умолчанию jury). Без пароля стенд не открывается никому.
+export const config = { matcher: "/:path*" };
+
+const text = (body, status, headers = {}) =>
+  new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8", ...headers } });
+
+export default function middleware(request) {
+  const password = process.env.STAND_PASSWORD;
+  const user = process.env.STAND_USER || "jury";
+  if (!password) return text("Демо-стенд закрыт: в проекте не задан пароль (STAND_PASSWORD).", 503);
+  const [scheme, encoded] = (request.headers.get("authorization") || "").split(" ");
+  if (scheme === "Basic" && encoded) {
+    const raw = new TextDecoder().decode(Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0)));
+    const i = raw.indexOf(":");
+    if (raw.slice(0, i) === user && raw.slice(i + 1) === password) {
+      return new Response(null, { headers: { "x-middleware-next": "1" } });
+    }
+  }
+  return text("Нужны логин и пароль демо-стенда.", 401, {
+    "WWW-Authenticate": 'Basic realm="EnergyTool demo", charset="UTF-8"',
+  });
+}
+`;
+
+function exportStatic(out) {
+  if (existsSync(out) && readdirSync(out).length) {
+    console.error(`Папка ${out} не пуста — укажите новую`);
+    process.exit(1);
+  }
+  cpSync(site, out, { recursive: true });
+  writeFileSync(join(out, "index.html"), page(new URLSearchParams()));
+  // SPA: файлы отдаются как есть, остальные пути — index.html (роутинг приложения разберётся сам).
+  writeFileSync(
+    join(out, "vercel.json"),
+    `${JSON.stringify({ rewrites: [{ source: "/(.*)", destination: "/index.html" }] }, null, 2)}\n`,
+  );
+  if ("protect" in args) writeFileSync(join(out, "middleware.js"), MIDDLEWARE);
+  console.log(
+    `Стенд для деплоя: ${out} (виджет: ${widget}/widget.js${"protect" in args ? ", закрыт паролем" : ", открыт"})`,
+  );
+}
+
+if (args.export) {
+  exportStatic(resolve(args.export));
+  process.exit(0);
 }
 
 createServer((req, res) => {
