@@ -117,6 +117,14 @@ class PostprocessTest(unittest.TestCase):
     def test_tidy_removes_markdown(self):
         self.assertEqual(tidy("Консультант: **Да**, можно:\n- раз\n- два\nВопрос?"), "Да, можно: раз два Вопрос?")
 
+    def test_fallback_refuses_off_topic(self):
+        """Запасной ответ без модели не отдаёт посторонний фрагмент: вопрос не по базе — отказ (регламент, раздел 7)."""
+        from energybot.pipeline import extractive
+        solar = next(c for c in KnowledgeBase.load(KB_DIR).chunks if "солнечн" in c.text.lower())
+        self.assertEqual(extractive([solar], "Как приготовить борщ?"), "")
+        answer = extractive([solar], "Сколько вырабатывает солнечная станция?")
+        self.assertTrue(answer.endswith("подскажет специалист."))
+
 
 class DatasetTest(unittest.TestCase):
     def test_dataset_is_valid_and_split(self):

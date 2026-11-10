@@ -155,9 +155,31 @@ def main():
 
     api = Api()
     api.deadline = started + DEADLINE_SEC
-    bot = Consultant(kb_path, index_dir=HERE / "index", api=api)
     turns = [parse(q) for _, q in questions]
-    vectors = bot.embed_queries([search_queries(t)[1] for t in turns])
+
+    # Загрузка базы и эмбеддинги — тоже под жёстким дедлайном. Тайм-аут httpx ограничивает паузы между
+    # порциями данных, а не весь запрос, и медленно «капающий» ответ /embeddings держал бы главный поток
+    # дольше лимита платформы (регламент, раздел 5) ещё до того, как ниже включается ожидание с дедлайном.
+    # Не успели — в файле уже запасные ответы, выходим, не дожидаясь зависшего запроса.
+    prepared: dict = {}
+
+    def prepare():
+        try:
+            prepared["bot"] = Consultant(kb_path, index_dir=HERE / "index", api=api)
+            prepared["vectors"] = prepared["bot"].embed_queries([search_queries(t)[1] for t in turns])
+        except BaseException as exc:  # noqa: BLE001 — ошибку поднимет главный поток
+            prepared["error"] = exc
+
+    loader = threading.Thread(target=prepare, daemon=True)
+    loader.start()
+    loader.join(timeout=max(1.0, HARD_DEADLINE_SEC - (time.perf_counter() - started)))
+    if "error" in prepared:
+        raise prepared["error"]
+    if "vectors" not in prepared:
+        print("Подготовка не уложилась в жёсткий дедлайн — в файле запасные ответы", file=sys.stderr, flush=True)
+        sys.stdout.flush()
+        os._exit(0)
+    bot, vectors = prepared["bot"], prepared["vectors"]
     print(f"Вопросов: {len(questions)}; потоков: {MAX_WORKERS}", file=sys.stderr, flush=True)
 
     debug_path = env("DEBUG_JSONL")
