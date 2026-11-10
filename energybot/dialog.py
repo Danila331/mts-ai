@@ -28,10 +28,12 @@ def parse(question: str) -> list:
             turns[-1]["content"] += " " + content
         else:
             turns.append({"role": role, "content": content})
-    if turns and turns[-1]["role"] != "user":
-        # Нечего отвечать: последняя реплика ассистента. Не теряем её смысл.
-        turns.append({"role": "user", "content": "Продолжите, пожалуйста."})
-    return turns
+    # Отвечаем на последнюю реплику пользователя с учётом истории до неё (регламент, раздел 3). Реплики
+    # ассистента после неё вопроса не содержат; дописывать за клиента выдуманную реплику нельзя — модель
+    # ответила бы на неё, а не на клиента.
+    while turns and turns[-1]["role"] != "user":
+        turns.pop()
+    return turns or [{"role": "user", "content": " ".join(text.split())}]
 
 
 def search_queries(turns: list, window: int | None = None) -> tuple:

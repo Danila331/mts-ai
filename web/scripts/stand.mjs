@@ -51,45 +51,19 @@ const TYPES = {
   ".map": "application/json",
 };
 
-const DEFAULT_TAG = {
-  title: "Консультант EnergyTool",
-  color: "#FF0032",
-  position: "right",
-  greeting: "Здравствуйте! Подскажу, как сократить расходы на электроэнергию и какой продукт EnergyTool вам подойдёт.",
-  greetingDelay: "4",
-};
-
-const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const kebab = (k) => k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
-
 /**
- * Тег виджета. Превью на /widget передаёт настройки в адресе (?w_title=…&w_color=…), чтобы показать
- * сайт МТС с теми же параметрами, что в редакторе; ?w_preview=1 заново показывает подсказку у кнопки.
+ * Тег виджета — один для локального стенда и для экспорта: web/public/stand.js с адреса стенда EnergyTool AI.
+ * Он сам читает настройки превью из адреса (?w_title=…, ?w_preview=1) и подключает widget.js с умолчаниями
+ * виджета. В копии сайта нет ничего от виджета, кроме этой строки, поэтому развёрнутый стенд не нужно
+ * пересобирать: каждая выкладка EnergyTool AI сразу меняет виджет и на нём.
  */
-function tag(params) {
-  const cfg = { ...DEFAULT_TAG };
-  for (const key of ["title", "color", "position", "greeting", "greetingDelay", "quick"]) {
-    const v = params.get(`w_${key}`);
-    if (v !== null) cfg[key] = v;
-  }
-  if (!/^#[0-9a-f]{3,8}$/i.test(cfg.color)) cfg.color = DEFAULT_TAG.color;
-  const attrs = Object.entries(cfg)
-    .map(([k, v]) => `data-${kebab(k)}="${esc(v)}"`)
-    .join("\n  ");
-  // Только для превью: сбросить «подсказка уже показана» и принимать команды ask/toggle от страницы /widget
-  // (iframe с другого origin не может вызвать EnergyToolChat напрямую). Команды — только с origin виджета.
-  const reset = params.get("w_preview")
-    ? `<script>try{sessionStorage.removeItem("energytool-chat:greeted");sessionStorage.removeItem("energytool-chat:open")}catch(e){}
-addEventListener("message",function(e){if(e.origin!==${JSON.stringify(widget)}||!e.data||e.data.type!=="eb:preview")return;var c=window.EnergyToolChat;if(!c)return;if(e.data.action==="ask")c.ask(String(e.data.text||""));if(e.data.action==="toggle")c.toggle();});</script>`
-    : "";
-  return `${reset}<script src="${widget}/widget.js?v=${Date.now()}" async\n  ${attrs}></script>`;
-}
+const TAG = `<script src="${widget}/stand.js" async></script>`;
 
-function page(params) {
+function page() {
   let html = readFileSync(join(site, "index.html"), "utf8");
   // Счётчик МТС (dataLayer / tag.a.mts.ru) — вырезаем инлайн-скрипт целиком.
   html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*tag\.a\.mts\.ru(?:(?!<\/script>)[\s\S])*<\/script>/g, "");
-  return html.replace("</body>", `${tag(params)}</body>`);
+  return html.replace("</body>", `${TAG}</body>`);
 }
 
 // Только для --protect: пока STAND_PASSWORD не задан, стенд не открывается никому.
@@ -124,7 +98,7 @@ function exportStatic(out) {
     process.exit(1);
   }
   cpSync(site, out, { recursive: true });
-  writeFileSync(join(out, "index.html"), page(new URLSearchParams()));
+  writeFileSync(join(out, "index.html"), page());
   // SPA: файлы отдаются как есть, остальные пути — index.html (роутинг приложения разберётся сам).
   writeFileSync(
     join(out, "vercel.json"),
@@ -157,7 +131,7 @@ createServer((req, res) => {
       return;
     }
     res.writeHead(200, { "Content-Type": TYPES[".html"], "Cache-Control": "no-store" });
-    res.end(page(url.searchParams));
+    res.end(page());
     return;
   }
   res.writeHead(200, { "Content-Type": TYPES[extname(file).toLowerCase()] ?? "application/octet-stream" });
