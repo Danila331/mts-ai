@@ -170,9 +170,10 @@ class Api:
                 raise
         choice = data["choices"][0]
         text = strip_thinking(choice["message"].get("content") or "")
-        if not text and self._ran_out_thinking(choice, data):
-            # Сервер проигнорировал отключение размышлений, и модель потратила весь лимит на них.
-            # Один повтор с запасом токенов: медленнее, но без пустого ответа.
+        truncated = choice.get("finish_reason") == "length"
+        if (not text or truncated) and self._ran_out_thinking(choice, data):
+            # Модель потратила весь лимит на размышления: ответ пуст или обрезан посреди слова.
+            # Один повтор с запасом токенов: медленнее, но без пустого/обрезанного ответа.
             self.thinking_overflows += 1
             body["max_tokens"] = max(self.thinking_budget, 3 * body["max_tokens"])
             data = self._post(self.base_url + "/chat/completions", self.llm_key, body)
