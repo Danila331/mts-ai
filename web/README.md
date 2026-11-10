@@ -1,7 +1,7 @@
 # web — стенд и виджет ИИ-консультанта МТС EnergyTool
 
-Next.js 16 + TypeScript + shadcn/ui. Ответы строит общее ядро `energybot/` через `scripts/web_api.py`;
-фронт ходит в него через прокси `/api/*`. Экраны, протокол виджета и API — в [DESIGN.md](DESIGN.md).
+Next.js 16 + TypeScript + shadcn/ui. Фронт ходит через прокси `/api/*` в Go-API (`backend/`), а ответы
+строит общее ядро `energybot/` во внутренней службе `scripts/core_api.py`. Экраны, протокол виджета и API — в [DESIGN.md](DESIGN.md).
 
 | Адрес | Что это |
 |---|---|
@@ -16,7 +16,7 @@ Next.js 16 + TypeScript + shadcn/ui. Ответы строит общее ядр
 Из корня репозитория:
 
 ```bash
-.venv/bin/python scripts/web_api.py   # API на :8787, ключи модели — из .env
+docker compose up --build   # Postgres, ядро и Go-API на :8787, ключи модели — из .env
 ```
 
 ```bash
@@ -29,9 +29,10 @@ cd web && npm install && npm run dev  # стенд на http://localhost:3000
 node web/scripts/stand.mjs --site <путь к energytool.mts.ru>   # http://localhost:4000
 ```
 
-Переменные: `EB_API_URL` (адрес Python-API для Next, по умолчанию `http://127.0.0.1:8787`), `EB_STAND_URL`
-(ссылка на стенд сайта со страницы `/widget`), `EB_WEB_PORT` / `EB_WEB_HOST` / `EB_WEB_CORS` / `EB_WEB_MODE`
-для `web_api.py`. Заявки и оценки ответов пишутся в `web/.data/` (в git не попадают, данные только тестовые).
+Переменные Next: `EB_API_URL` (адрес Go-API, по умолчанию `http://127.0.0.1:8787`), `EB_API_TOKEN` (общий секрет
+с API; локально можно не задавать), `EB_STAND_URL` (ссылка на стенд сайта со страницы `/widget`). Заявки, оценки
+и журнал ответов хранит Postgres. Без docker — см. [backend/README.md](../backend/README.md); деплой на Vercel и
+Railway — [docs/deploy.md](../docs/deploy.md).
 
 ## Проверки
 

@@ -1,0 +1,23 @@
+# Контекст сборки ядра (core/Dockerfile) — корень репозитория. Всё, что
+# ядру не нужно, сюда: иначе в docker уезжают node_modules фронта,
+# виртуальное окружение и отчёты прогонов — сотни мегабайт на каждую
+# сборку.
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.ruff_cache
+.env
+.env.*
+dist
+eval
+docs
+tests
+web
+backend
+sample_submission
+*.pdf
+*.csv
+*.zip

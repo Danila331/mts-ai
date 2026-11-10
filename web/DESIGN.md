@@ -207,15 +207,20 @@ components:
  жюри ──────────▶│ /playground  чат + сессии + отладка    /kb  база знаний     /widget  встраивание и превью │
                  │ /embed       чат внутри iframe виджета (без отладки)                                     │
  сайт МТС ──────▶│ /widget.js   загрузчик виджета (TypeScript → esbuild, без зависимостей)                  │
- (любой домен)   │ /api/*       прокси на Python-API (тот же origin — без CORS для фронта)                  │
+ (любой домен)   │ /api/*       прокси на Go-API (тот же origin — без CORS для фронта; токен знает только сервер)│
                  └───────────────────────────────────────────┬──────────────────────────────────────────────┘
                                                              ▼
-                          scripts/web_api.py — stdlib HTTP, общий energybot.Consultant (режим chat)
-                          SSE: stage(retrieval) → stage(generation) → answer → done
+                          backend/ — Go-API: заявки, оценки, журнал ответов (Postgres), пределы частоты
+                          SSE: stage(retrieval) → stage(generation) → answer → done (поток ядра как есть)
+                                                             ▼
+                          scripts/core_api.py — Python-ядро, общий energybot.Consultant (режим chat)
 ```
 
-- Ядро не дублируется: `scripts/web_api.py` наследует `Consultant` и только **перехватывает** выдачу поиска
+- Ядро не дублируется: `scripts/core_api.py` наследует `Consultant` и только **перехватывает** выдачу поиска
   и промпт, чтобы отдать их отладочной панели. Ответ формируется ровно той же цепочкой, что и в `solution.py`.
+- Go-API (`backend/`) — публичная часть: принимает запросы фронта, пересылает поток ядра, хранит заявки,
+  оценки и журнал ответов в Postgres. Ядро — внутренняя служба: наружу не смотрит.
+  Деплой: фронт — Vercel, API, ядро и база — Railway ([docs/deploy.md](../docs/deploy.md)).
 - Стенд сайта МТС (`web/scripts/stand.mjs`) раздаёт сохранённую копию energytool.mts.ru с другого порта
   (другой origin — честная проверка встраивания), вырезает счётчики аналитики и подставляет тег виджета.
   Копия сайта в репозиторий не кладётся.
@@ -276,15 +281,15 @@ components:
 - JS-API на странице: `EnergyToolChat.open()`, `.close()`, `.toggle()`, `.ask("вопрос")` — например, кнопка
   «Спросить консультанта» в карточке продукта открывает виджет с готовым вопросом.
 
-## API (`scripts/web_api.py`, через Next — `/api/*`)
+## API (`backend/`, через Next — `/api/*`)
 
 | Метод | Ответ |
 |---|---|
 | `GET /api/health` | схема, модель, эмбеддинги, реранкер, число документов/разделов |
 | `GET /api/kb` | документы → разделы `{id, path, text, links, is_guard, is_reference}` |
 | `POST /api/chat` `{messages, mode}` | SSE: `stage` (retrieval: hits, queries, context), `stage` (generation), `answer` (text, sources, citations, guard, timings, prompt), `done` |
-| `POST /api/lead` | резюме диалога для менеджера (LLM, при сбое — список вопросов клиента), запись в `web/.data/leads.jsonl` |
-| `POST /api/feedback` | 👍/👎 с комментарием → `web/.data/feedback.jsonl` |
+| `POST /api/lead` | резюме диалога для менеджера (LLM, при сбое — список вопросов клиента), запись в Postgres (`leads`) |
+| `POST /api/feedback` | 👍/👎 с комментарием → Postgres (`feedback`) |
 
 ## Что берём у похожих продуктов
 
@@ -297,12 +302,12 @@ components:
 | Langfuse, LangSmith | трасса вызовов, тайминги этапов, промпт и сырой ответ | вкладки «Промпт», «Проверка», «JSON» |
 
 Дальше (не в этом шаге): журнал диалогов и заявок для менеджера, сравнение двух вариантов бота бок о бок
-(A/B, как в eval/lab.py), стриминг токенов, голосовой ввод, авторизация админки, деплой (Docker: Next + Python).
+(A/B, как в eval/lab.py), стриминг токенов, голосовой ввод, авторизация админки.
 
 ## Запуск
 
 ```bash
-.venv/bin/python scripts/web_api.py           # API: http://127.0.0.1:8787 (читает .env)
+docker compose up --build                     # база, ядро и API: http://127.0.0.1:8787 (читает .env)
 cd web && npm install && npm run dev          # стенд: http://localhost:3000
 node web/scripts/stand.mjs --site <папка energytool.mts.ru>   # сайт МТС с виджетом: http://localhost:4000
 ```

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "core/Dockerfile",
+    "watchPatterns": [
+      "/core/**",
+      "/energybot/**",
+      "/knowledge-base/**",
+      "/scripts/core_api.py",
+      "/solution-requirements.txt"
+    ]
+  },
+  "deploy": {
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  }
+}
