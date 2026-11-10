@@ -37,8 +37,21 @@ export function Composer({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, compact ? 128 : 224)}px`;
+    const fit = () => {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, compact ? 128 : 224)}px`;
+    };
+    fit();
+    // В виджете чат грузится заранее в скрытом окне: пересчитываем высоту, когда поле получает настоящую ширину.
+    let width = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth !== width) {
+        width = el.clientWidth;
+        fit();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [text, compact]);
 
   const ready = !busy && !disabled && !!text.trim();
