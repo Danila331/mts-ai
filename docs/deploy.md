@@ -24,31 +24,35 @@ Railway сам следит за веткой `main` и выкладывает �
 (`.github/workflows/backend.yml`: Go-тесты на настоящем Postgres, сборка обоих образов, сквозной прогон
 через docker compose; плюс `ci.yml`). Красное в бой не едет.
 
-Каждая служба пересобирается, только если менялись её файлы (`watchPatterns` в `railway.json`): правка
+Каждая служба пересобирается, только если менялись её файлы (Watch Paths в настройках службы): правка
 фронта не перезапускает ядро, правка базы знаний не перезапускает API.
 
-Vercel выкладывает фронт из той же ветки `main` своей интеграцией с GitHub.
+Vercel выкладывает фронт из той же ветки `main` своей интеграцией с GitHub. Сборки других веток и PR
+(превью) выключены: `ignoreCommand` в `web/vercel.json` пропускает всё, что не `main`. В PR проверка
+Vercel поэтому показывает пропущенную сборку — это ожидаемо. Сборку фронта на PR проверяет CI
+(`ci.yml`, job TypeScript: линтер и типы).
 
 ## Настройка один раз
 
-### 1. Railway: проект и база
+Проект на Railway — `energytool` (регион EU West, Амстердам). Настройки служб хранятся в самом Railway:
+config-as-code (`railway.json`) Railway для новых проектов больше не читает, поэтому таких файлов в
+репозитории нет. Ниже — что выставлено, чтобы повторить или сверить.
 
-1. New Project → Deploy from GitHub repo → `Danila331/mts-ai`.
-2. В проекте: New → Database → **PostgreSQL**. Служба называется `Postgres`.
+### 1. Railway: база
+
+New → Database → **PostgreSQL**. Служба называется `Postgres`, публичного адреса нет.
 
 ### 2. Railway: служба `core` (Python-ядро)
 
-Settings:
-
 | Настройка | Значение |
 |---|---|
-| Source → Branch | `main` |
-| Source → Wait for CI | включить |
-| Source → Root Directory | пусто (корень репозитория: ядру нужны `energybot/` и `knowledge-base/`) |
-| Config-as-code → Railway Config File | `/core/railway.json` |
-| Networking → Public Networking | **не включать** |
-
-Variables:
+| Source | `Danila331/mts-ai`, ветка `main`, **Wait for CI** включён |
+| Root Directory | пусто (корень репозитория: ядру нужны `energybot/` и `knowledge-base/`) |
+| Dockerfile Path | `core/Dockerfile` |
+| Watch Paths | `/core/**`, `/energybot/**`, `/knowledge-base/**`, `/scripts/core_api.py`, `/solution-requirements.txt` |
+| Healthcheck | `/healthz`, тайм-аут 300 с (ядро на старте считает эмбеддинги базы) |
+| Restart Policy | On Failure, 5 попыток |
+| Public Networking | **не включать** |
 
 | Переменная | Значение |
 |---|---|
@@ -59,17 +63,15 @@ Variables:
 
 ### 3. Railway: служба `api` (Go)
 
-New → GitHub Repo → тот же репозиторий. Settings:
-
 | Настройка | Значение |
 |---|---|
-| Source → Branch | `main` |
-| Source → Wait for CI | включить |
-| Source → Root Directory | `/backend` |
-| Config-as-code → Railway Config File | `/backend/railway.json` (путь от корня репозитория) |
-| Networking → Public Networking | Generate Domain — этот адрес нужен Vercel |
-
-Variables:
+| Source | `Danila331/mts-ai`, ветка `main`, **Wait for CI** включён |
+| Root Directory | `/backend` |
+| Dockerfile Path | `Dockerfile` (внутри `/backend`) |
+| Watch Paths | `/backend/**` |
+| Healthcheck | `/healthz`, тайм-аут 120 с |
+| Restart Policy | On Failure, 5 попыток |
+| Public Networking | домен Railway, порт 8080 — этот адрес нужен Vercel |
 
 | Переменная | Значение |
 |---|---|
@@ -78,9 +80,10 @@ Variables:
 | `EB_CORE_TOKEN` | `${{core.EB_CORE_TOKEN}}` |
 | `EB_API_TOKEN` | ещё одна случайная строка — общая с Vercel |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `${{core.LLM_BASE_URL}}` и т. д. — модель нужна для резюме заявок |
-| `EB_THINKING_PARAM` | как у ядра |
+| `EB_THINKING_PARAM` | `${{core.EB_THINKING_PARAM}}` |
+| `PORT` | `8080` — тот же порт, что у домена |
 
-`PORT` Railway задаёт сам, API его слушает. `EB_ENV` не задаётся: без него запуск считается боевым, и API
+`EB_ENV` не задаётся: без него запуск считается боевым, и API
 откажется стартовать без базы, токенов и пределов частоты — это защита, а не помеха.
 
 Схему базы API накатывает сам при старте (миграции вшиты в бинарник), ручных шагов нет.
