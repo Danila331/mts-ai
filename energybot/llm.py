@@ -27,13 +27,30 @@ class DeadlineExceeded(RuntimeError):
 
 
 THINK = re.compile(r"<think>.*?</think>", re.S)
+OVERFLOW = re.compile(r"context|too long|maximum.{0,40}tokens|token limit|exceed", re.I)
+
+
+def context_overflow(response) -> bool:
+    """Ответ 400 из-за слишком длинного промпта (а не из-за незнакомого параметра)."""
+    try:
+        return bool(OVERFLOW.search(response.text or ""))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def strip_thinking(text: str) -> str:
+    """Убирает размышления модели из ответа.
+
+    Сервер может отдать их тремя способами: отдельным полем (тогда здесь чистый ответ), парой меток
+    <think>…</think> или — как vLLM без разбора размышлений — текстом с одной закрывающей меткой
+    (открывающая осталась в шаблоне запроса). Ответ клиенту — только то, что после последней </think>.
+    """
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
     text = THINK.sub("", text)
     if "<think>" in text:  # размышление не закрыто — ответа нет
         text = text.split("<think>")[0]
-    return text.replace("</think>", "").strip()
+    return text.strip()
 
 
 class Api:
@@ -65,8 +82,18 @@ class Api:
         # enable_thinking — DashScope; none — ничего не слать.
         self.thinking_param = env("EB_THINKING_PARAM", "chat_template_kwargs")
         self.thinking_budget = env_num("EB_THINKING_BUDGET", 3000, 500, 16000)
+        # Запрос с размышлениями — одна попытка с собственным тайм-аутом: не успел — отвечаем без размышлений.
+        self.think_timeout = env_num("EB_THINK_TIMEOUT", 50.0, 5.0, 600.0, float)
         self.thinking_overflows = 0
         self._thinking_param_ok = True
+        self.rejected_params = set()  # параметры сэмплинга, на которые сервер ответил 400
+        # Дополнительный сэмплинг для всех запросов (эксперименты с настройками Qwen); по умолчанию пусто.
+        self.default_extra = {}
+        for key, name, kind, lo, hi in (("top_p", "EB_TOP_P", float, 0.05, 1.0),
+                                        ("top_k", "EB_SAMPLE_TOP_K", int, 1, 200),
+                                        ("presence_penalty", "EB_PRESENCE_PENALTY", float, 0.0, 2.0)):
+            if env(name):
+                self.default_extra[key] = env_num(name, None, lo, hi, kind)
         self.deadline = None  # абсолютное time.perf_counter(), после которого запросы не делаем
         self.client = httpx.Client(timeout=self.timeout)
 
@@ -77,13 +104,14 @@ class Api:
     def configured(self) -> bool:
         return bool(self.base_url and self.llm_key)
 
-    def _post(self, url: str, key: str, body: dict, attempts: int = 3) -> dict:
+    def _post(self, url: str, key: str, body: dict, attempts: int = 3, timeout: float | None = None) -> dict:
         last = None
+        limit = timeout or self.timeout
         for attempt in range(attempts):
             remaining = self._remaining()
             if remaining is not None and remaining < 3:
                 raise DeadlineExceeded("исчерпан общий лимит времени прогона")
-            timeout = self.timeout if remaining is None else min(self.timeout, remaining - 1)
+            timeout = limit if remaining is None else min(limit, remaining - 1)
             try:
                 r = self.client.post(url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=timeout)
                 if r.status_code in (429, 500, 502, 503, 504):
@@ -96,7 +124,8 @@ class Api:
                     raise
             except (httpx.TimeoutException, httpx.TransportError, ValueError) as exc:
                 last = exc
-            time.sleep(0.6 * (2 ** attempt))
+            if attempt + 1 < attempts:
+                time.sleep(0.6 * (2 ** attempt))
         raise last
 
     # ---------- эмбеддинги ----------
@@ -135,47 +164,79 @@ class Api:
         return scores
 
     # ---------- генерация ----------
-    def _thinking_fields(self) -> dict:
-        """Как отключить размышления: у разных серверов разный параметр (EB_THINKING_PARAM)."""
-        if not self.disable_thinking or not self._thinking_param_ok:
+    def _thinking_fields(self, think: bool = False) -> dict:
+        """Как включить или отключить размышления: у разных серверов разный параметр (EB_THINKING_PARAM)."""
+        if not self._thinking_param_ok or (not think and not self.disable_thinking):
             return {}
         return {
-            "chat_template_kwargs": {"chat_template_kwargs": {"enable_thinking": False}},  # vLLM / SGLang
+            "chat_template_kwargs": {"chat_template_kwargs": {"enable_thinking": think}},  # vLLM / SGLang
             # OpenRouter: только провайдеры, которые поддерживают параметр, — иначе часть из них его
             # игнорирует или отклоняет, и модель думает (медленно, иногда пустой ответ).
-            "reasoning": {"reasoning": {"enabled": False}, "provider": {"require_parameters": True}},
-            "enable_thinking": {"enable_thinking": False},  # Alibaba DashScope
+            "reasoning": {"reasoning": {"enabled": think}, "provider": {"require_parameters": True}},
+            "enable_thinking": {"enable_thinking": think},  # Alibaba DashScope
         }.get(self.thinking_param, {})
 
-    def chat(self, messages: list, max_tokens: int | None = None, temperature: float | None = None) -> str:
+    def chat(self, messages: list, max_tokens: int | None = None, temperature: float | None = None,
+             think: bool = False, extra: dict | None = None, thinking_fields: bool = True,
+             retry_empty: bool = True) -> str:
+        """think=True — ответ с размышлениями: одна попытка с тайм-аутом EB_THINK_TIMEOUT и запасом токенов
+        на размышления. Пустая строка означает, что размышления не уложились в лимит, — вызывающий
+        повторяет запрос без них. Если сервер не принимает параметр режима, размышления не запрашиваются.
+
+        extra — дополнительные параметры сэмплинга (top_p, top_k, presence_penalty, reasoning_effort): если
+        сервер отвечает на них 400, они запоминаются как неподдерживаемые и дальше не шлются.
+        thinking_fields=False — не слать параметр отключения размышлений; retry_empty=False — не повторять
+        пустой ответ внутри клиента (повтор делает вызывающий)."""
+        think = think and self._thinking_param_ok
+        max_tokens = max_tokens or self.max_tokens
+        sampling = {k: v for k, v in {**self.default_extra, **(extra or {})}.items()
+                    if k not in self.rejected_params and v is not None}
         body = {
             "model": self.llm_model,
             "messages": messages,
-            "max_tokens": max_tokens or self.max_tokens,
+            "max_tokens": max_tokens + (self.thinking_budget if think else 0),
             "temperature": self.temperature if temperature is None else temperature,
-            **self._thinking_fields(),
+            **(self._thinking_fields(think) if thinking_fields else {}),
+            **sampling,
         }
-        try:
-            data = self._post(self.base_url + "/chat/completions", self.llm_key, body)
-        except httpx.HTTPStatusError as exc:
-            # Сервер не знает параметр отключения размышлений — больше его не шлём.
-            extra = set(self._thinking_fields())
-            if extra and exc.response is not None and exc.response.status_code in (400, 422):
-                print(f"[llm] сервер отклонил {sorted(extra)}, отправляем без него", file=sys.stderr)
+        url = self.base_url + "/chat/completions"
+        while True:
+            try:
+                if think:
+                    data = self._post(url, self.llm_key, body, attempts=1, timeout=self.think_timeout)
+                else:
+                    data = self._post(url, self.llm_key, body)
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response is None or exc.response.status_code not in (400, 422) \
+                        or context_overflow(exc.response):
+                    raise
+                # Сервер не знает параметр сэмплинга — больше его не шлём.
+                unknown = [k for k in sampling if k in body]
+                if unknown:
+                    print(f"[llm] сервер отклонил {sorted(unknown)}, отправляем без них", file=sys.stderr)
+                    self.rejected_params.update(unknown)
+                    for key in unknown:
+                        body.pop(key, None)
+                    continue
+                # Сервер не знает параметр режима размышлений — больше его не шлём.
+                mode_fields = [k for k in self._thinking_fields(think) if k in body] if thinking_fields else []
+                if not mode_fields:
+                    raise
+                print(f"[llm] сервер отклонил {sorted(mode_fields)}, отправляем без него", file=sys.stderr)
                 self._thinking_param_ok = False
-                for key in extra:
+                for key in mode_fields:
                     body.pop(key, None)
-                data = self._post(self.base_url + "/chat/completions", self.llm_key, body)
-            else:
-                raise
+                body["max_tokens"] = max_tokens
+                think = False
         choice = data["choices"][0]
         text = strip_thinking(choice["message"].get("content") or "")
-        if not text and self._ran_out_thinking(choice, data):
+        if not text and not think and retry_empty and self._ran_out_thinking(choice, data):
             # Сервер проигнорировал отключение размышлений, и модель потратила весь лимит на них.
             # Один повтор с запасом токенов: медленнее, но без пустого ответа.
             self.thinking_overflows += 1
             body["max_tokens"] = max(self.thinking_budget, 3 * body["max_tokens"])
-            data = self._post(self.base_url + "/chat/completions", self.llm_key, body)
+            data = self._post(url, self.llm_key, body)
             text = strip_thinking(data["choices"][0]["message"].get("content") or "")
         return text
 
