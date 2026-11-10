@@ -12,6 +12,7 @@ from .ambiguity import AmbiguityClassifier, decision_note
 from .calc import calculate, extract_parameters, infer_operation
 from .dialog import parse, search_queries
 from .gold_examples import GoldenExamples
+from .slots import choose_question, product_of
 from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
 from .kb import KnowledgeBase
 from .llm import Api, env, env_num
@@ -147,6 +148,19 @@ class Consultant:
         note = ""
         if not fast and env("EB_AMBIGUITY", "0") != "0":
             note = decision_note(self.ambiguity.classify(turns, materials, fast=fast))
+        if not note and env("EB_SLOTS", "1") != "0":
+            # Детерминированная очередь слотов продукта: вопрос из базы, не из головы.
+            product = product_of([h.chunk.doc for h in hits])
+            dialog_text = "\n".join(t["content"] for t in turns)
+            last_user = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
+            question = choose_question(product, dialog_text, last_user)
+            if question:
+                note = ("ОБЯЗАТЕЛЬНО закончи ответ уточняющим вопросом именно на эту тему "
+                        f"(своими словами): «{question}». Даже если примеры выше заканчиваются "
+                        "другим вопросом — тема важнее примера.")
+            elif product:
+                note = ("КАТЕГОРИЧЕСКИ не задавай уточняющий вопрос в конце: ответ закрыт "
+                        "или спрашивать нечего. Закончи утверждением.")
         prompt_text = system_prompt(materials, mode, examples=self._examples(mode))
         if note:
             prompt_text += "\n\nРЕШЕНИЕ ПО ЭТОМУ ХОДУ\n" + note

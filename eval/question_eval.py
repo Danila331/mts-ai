@@ -1,0 +1,63 @@
+"""Детерминированная проверка уточняющих вопросов против эталонов жюри на демо.
+
+Для 13 эталонов с вопросом проверяем, что у бота есть вопрос и его тема совпадает
+с эталонной. Для 5 эталонов без вопроса — что бот не задаёт лишнего.
+
+    python eval/question_eval.py eval/reports/<время>/predictions.csv
+"""
+
+from __future__ import annotations
+
+import csv
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Тема вопроса эталона (по demo_output.csv): регекс по формулировке.
+EXPECTED = {
+    "demo-1": r"регион",
+    "demo-2": r"регион",
+    "demo-3": r"дневн|потреблен",
+    "demo-4": r"кровл|лет|возраст",
+    "demo-5": r"модел|сч[её]тчик|прибор",
+    "demo-6": r"цех|сч[её]тчик",
+    "demo-7": r"магазин|показан",
+    "demo-10": r"категори",
+    "demo-12": r"мощност",
+    "demo-14": r"дн[её]м|вечер",
+    "demo-15": r"техник|сч[её]тчик",
+    "demo-17": r"мощност|месяц",
+    "demo-18": r"сбор|вручную|снима|удал[её]н",
+}
+NO_QUESTION = {"demo-8", "demo-9", "demo-11", "demo-13", "demo-16"}
+
+
+def main(path: str):
+    answers = {r["id"]: r["answer"] for r in csv.DictReader(open(path, encoding="utf-8-sig"))}
+    hit = miss = extra = ok_none = 0
+    for qid, pattern in EXPECTED.items():
+        a = answers.get(qid, "")
+        parts = [p for p in a.split("?") if p.strip()]
+        has_q = a.rstrip().endswith("?")
+        topic_ok = bool(re.search(pattern, a, re.I))
+        if has_q and topic_ok:
+            hit += 1
+        else:
+            miss += 1
+            print(f"✗ {qid}: вопрос={'да' if has_q else 'нет'}, тема {'совпала' if topic_ok else 'мимо'}"
+                  f" | хвост: …{a[-90:]}")
+    for qid in NO_QUESTION:
+        if answers.get(qid, "").rstrip().endswith("?"):
+            extra += 1
+            print(f"✗ {qid}: лишний вопрос | …{answers[qid][-90:]}")
+        else:
+            ok_none += 1
+    total = len(EXPECTED) + len(NO_QUESTION)
+    print(f"\nтема вопроса совпала: {hit}/{len(EXPECTED)}; без лишних вопросов: {ok_none}/{len(NO_QUESTION)}; "
+          f"итого: {hit + ok_none}/{total}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
