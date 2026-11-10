@@ -85,11 +85,32 @@ addEventListener("message",function(e){if(e.origin!==${JSON.stringify(widget)}||
   return `${reset}<script src="${widget}/widget.js?v=${Date.now()}" async\n  ${attrs}></script>`;
 }
 
-function page(params) {
+/**
+ * Тег виджета для статического экспорта. Сервера нет, поэтому настройки из адреса (?w_title=…, ?w_preview=1)
+ * читает сама страница и собирает тег в браузере — так превью на /widget показывает развёрнутый стенд с теми же
+ * параметрами, что в редакторе, ровно как локальный стенд. Без параметров — настройки по умолчанию.
+ */
+function exportTag() {
+  const script = `(function(){
+var p=new URLSearchParams(location.search),d=${JSON.stringify(DEFAULT_TAG)},keys=["title","color","position","greeting","greetingDelay","quick"];
+keys.forEach(function(k){var v=p.get("w_"+k);if(v!==null)d[k]=v;});
+if(!/^#[0-9a-f]{3,8}$/i.test(d.color))d.color=${JSON.stringify(DEFAULT_TAG.color)};
+if(p.get("w_preview")){
+try{sessionStorage.removeItem("energytool-chat:greeted");sessionStorage.removeItem("energytool-chat:open")}catch(e){}
+addEventListener("message",function(e){if(e.origin!==${JSON.stringify(widget)}||!e.data||e.data.type!=="eb:preview")return;var c=window.EnergyToolChat;if(!c)return;if(e.data.action==="ask")c.ask(String(e.data.text||""));if(e.data.action==="toggle")c.toggle();});
+}
+var s=document.createElement("script");s.async=true;s.src=${JSON.stringify(`${widget}/widget.js`)}+"?v="+Date.now();
+Object.keys(d).forEach(function(k){s.setAttribute("data-"+k.replace(/[A-Z]/g,function(c){return"-"+c.toLowerCase();}),d[k]);});
+document.body.appendChild(s);
+})();`;
+  return `<script>${script}</script>`;
+}
+
+function page(params, { dynamic = false } = {}) {
   let html = readFileSync(join(site, "index.html"), "utf8");
   // Счётчик МТС (dataLayer / tag.a.mts.ru) — вырезаем инлайн-скрипт целиком.
   html = html.replace(/<script[^>]*>(?:(?!<\/script>)[\s\S])*tag\.a\.mts\.ru(?:(?!<\/script>)[\s\S])*<\/script>/g, "");
-  return html.replace("</body>", `${tag(params)}</body>`);
+  return html.replace("</body>", `${dynamic ? exportTag() : tag(params)}</body>`);
 }
 
 // Только для --protect: пока STAND_PASSWORD не задан, стенд не открывается никому.
@@ -124,7 +145,7 @@ function exportStatic(out) {
     process.exit(1);
   }
   cpSync(site, out, { recursive: true });
-  writeFileSync(join(out, "index.html"), page(new URLSearchParams()));
+  writeFileSync(join(out, "index.html"), page(new URLSearchParams(), { dynamic: true }));
   // SPA: файлы отдаются как есть, остальные пути — index.html (роутинг приложения разберётся сам).
   writeFileSync(
     join(out, "vercel.json"),
