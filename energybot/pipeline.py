@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .dialog import parse, search_queries
+from .gold_examples import GoldenExamples
 from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
 from .kb import KnowledgeBase
 from .llm import Api, env, env_num
@@ -22,10 +23,11 @@ FALLBACK = (
 
 VERIFY_INSTRUCTION = """[Служебная проверка.] Выше — мой черновик ответа клиенту{second}.
 Проверь его по МАТЕРИАЛАМ и правилам:
-1. Каждое число и факт в ответе должны быть из МАТЕРИАЛОВ, с их оговорками.
+1. Каждое число и факт в ответе должны быть из МАТЕРИАЛОВ, с их оговорками; термины — дословно из МАТЕРИАЛОВ.
 2. Ответ должен прямо отвечать на ПОСЛЕДНЮЮ реплику клиента; если в ней несколько вопросов — закрыть все.
-3. Проверь полноту: если в МАТЕРИАЛАХ есть важный факт по теме вопроса (бесплатность, отсутствие обязательств, верификация, ограничения, состав услуги), а ответ его упустил — добавь.
-4. 25–50 слов, обычный текст; уточняющий вопрос в конце — только если для следующего шага нужны данные клиента.
+3. Полнота: если в МАТЕРИАЛАХ есть важная оговорка или ограничение по теме вопроса, а ответ её упустил — добавь. Но не добавляй второстепенные факты и цифры сверх необходимого: эталон минималистичен.
+4. Тональность — как в МАТЕРИАЛАХ: если там «может быть ниже», «сомнительно», «зависит от» — не делай вывод категоричнее.
+5. 25–40 слов, обычный текст; уточняющий вопрос в конце — только если для следующего шага нужны данные клиента.
 Выбери более точный черновик или объедини их, исправь найденные ошибки и выведи только итоговый ответ клиенту, без пояснений.
 
 Черновик А:
@@ -79,6 +81,12 @@ class Consultant:
         self.n_candidates = env_num("EB_N_CANDIDATES", 20, 5, 60)
         self.expand_docs = env_num("EB_EXPAND_DOCS", 1, 0, 3)
         self.context_chars = env_num("EB_CONTEXT_CHARS", 10000, 2000, 60000)
+        # Динамический few-shot: ближайшие эталоны жюри по эмбеддингу вопроса.
+        self.golden = None
+        if env("EB_DYNAMIC_FEWSHOT", "1") != "0" and self.api.configured:
+            self.golden = GoldenExamples(self.api)
+            if self.golden.vecs is None:
+                self.golden = None
         print(
             f"[consultant] фрагментов: {len(self.kb.chunks)}, dense: {self.dense}, "
             f"загрузка {time.perf_counter() - t0:.1f} c",
@@ -98,6 +106,7 @@ class Consultant:
         lexical, semantic, last = search_queries(turns)
         if query_vec is None and self.dense and not fast:
             query_vec = self.embed_queries([semantic])[0]
+        self._last_qvec = query_vec  # для динамического few-shot
         ranked = self.retriever.search(lexical, query_vec, rerank_query=semantic, n_candidates=self.n_candidates,
                                        rerank=not fast)
         context = self.retriever.context(ranked, top_k=self.top_k, expand_docs=self.expand_docs,
@@ -126,7 +135,7 @@ class Consultant:
         if offline:
             timings["total"] = time.perf_counter() - t0
             return Answer(extractive(chunks) or FALLBACK, sources, timings, "без модели: лимит времени")
-        messages = [{"role": "system", "content": system_prompt(materials, mode)}] + turns
+        messages = [{"role": "system", "content": system_prompt(materials, mode, examples=self._examples(mode))}] + turns
         t1 = time.perf_counter()
         text, error = "", ""
         if not fast and env("EB_FACTS_COMPOSE") == "1":
@@ -157,6 +166,13 @@ class Consultant:
         if not text:
             return Answer(extractive(chunks) or FALLBACK, sources, timings, error or "пустой ответ", guard)
         return Answer(text, sources, timings, "", guard)
+
+    def _examples(self, mode: str) -> str:
+        """Динамический few-shot: ближайшие эталоны жюри. В eval пропускаем самосовпадение
+        (локально вопрос совпадает с эталонным, на платформе вопросы скрытые)."""
+        if self.golden is None:
+            return ""
+        return self.golden.pick(getattr(self, "_last_qvec", None), skip_self=(mode == "eval"))
 
     def select_chunks(self, chunks: list, turns: list) -> list:
         """Эксперимент 3: LLM выбирает, какие фрагменты нужны для ответа. Сбой → все."""
