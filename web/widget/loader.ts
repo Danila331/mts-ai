@@ -19,6 +19,8 @@ interface Config {
   offsetX: number;
   offsetY: number;
   open: boolean;
+  /** Быстрые вопросы в подсказке: data-quick="вопрос 1|вопрос 2", data-quick="" — без них. */
+  quick: string[];
 }
 
 interface Api {
@@ -53,7 +55,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   const hex = /^#[0-9a-f]{3,8}$/i;
   const cfg: Config = {
     title: d.title || "Консультант EnergyTool",
-    subtitle: d.subtitle || "ИИ-помощник · отвечает по базе знаний МТС",
+    subtitle: d.subtitle || "Отвечает по базе знаний МТС",
     color: d.color && hex.test(d.color) ? d.color : "#FF0032",
     position: d.position === "left" ? "left" : "right",
     greeting: d.greeting ?? "Здравствуйте! Подберу решение по энергоучёту, потерям и солнечной генерации.",
@@ -61,6 +63,11 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     offsetX: Number(d.offsetX ?? 24),
     offsetY: Number(d.offsetY ?? 24),
     open: d.open === "true",
+    quick: (d.quick ?? "Как снизить расходы на электроэнергию?|Окупится ли солнечная станция?")
+      .split("|")
+      .map((q) => q.trim())
+      .filter(Boolean)
+      .slice(0, 3),
   };
 
   const side = cfg.position;
@@ -69,53 +76,67 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   host.style.cssText = "all: initial; position: fixed; z-index: 2147483000;";
   const root = host.attachShadow({ mode: "open" });
 
+  const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   root.innerHTML = `
 <style>
   :host { --c: ${cfg.color}; }
   * { box-sizing: border-box; }
   .launcher {
     position: fixed; bottom: ${cfg.offsetY}px; ${side}: ${cfg.offsetX}px;
-    width: 60px; height: 60px; border-radius: 50%; border: 0; cursor: pointer;
+    width: 56px; height: 56px; border-radius: 50%; border: 0; cursor: pointer; padding: 0;
     background: var(--c); color: #fff; display: grid; place-items: center;
-    box-shadow: 0 8px 24px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.12);
-    transition: transform .2s ease, box-shadow .2s ease;
+    box-shadow: 0 2px 4px rgba(29,32,35,.12), 0 10px 28px rgba(29,32,35,.20);
+    transition: transform .25s cubic-bezier(.16,1,.3,1), box-shadow .25s ease;
   }
-  .launcher:hover { transform: scale(1.06); box-shadow: 0 10px 30px rgba(0,0,0,.22); }
-  .launcher:focus-visible { outline: 3px solid color-mix(in srgb, var(--c) 40%, white); outline-offset: 3px; }
-  .launcher svg { width: 28px; height: 28px; transition: transform .25s ease, opacity .2s ease; position: absolute; }
-  .launcher .i-close { transform: rotate(-90deg) scale(.6); opacity: 0; }
+  .launcher:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(29,32,35,.14), 0 14px 36px rgba(29,32,35,.24); }
+  .launcher:active { transform: translateY(0) scale(.97); }
+  .launcher:focus-visible { outline: 3px solid color-mix(in srgb, var(--c) 35%, white); outline-offset: 3px; }
+  .launcher svg { width: 26px; height: 26px; transition: transform .3s cubic-bezier(.16,1,.3,1), opacity .2s ease; position: absolute; }
+  .launcher .i-close { width: 22px; height: 22px; transform: rotate(-90deg) scale(.6); opacity: 0; }
   .open .launcher .i-chat { transform: rotate(90deg) scale(.6); opacity: 0; }
   .open .launcher .i-close { transform: none; opacity: 1; }
   .badge {
-    position: absolute; top: 2px; ${side === "right" ? "right" : "left"}: 2px; width: 14px; height: 14px;
-    border-radius: 50%; background: #1D2023; border: 2px solid #fff; display: none;
+    position: absolute; top: 1px; ${side === "right" ? "right" : "left"}: 1px; width: 14px; height: 14px;
+    border-radius: 50%; background: #1D2023; border: 2.5px solid #fff; display: none;
   }
   .unread .badge { display: block; }
   .bubble {
-    position: fixed; bottom: ${cfg.offsetY + 74}px; ${side}: ${cfg.offsetX}px; max-width: 280px;
-    background: #fff; color: #1D2023; border-radius: 18px; border-${side === "right" ? "bottom-right" : "bottom-left"}-radius: 6px;
-    padding: 12px 34px 12px 14px; font: 14px/1.4 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    box-shadow: 0 10px 30px rgba(0,0,0,.14), 0 0 0 1px rgba(0,0,0,.04); cursor: pointer;
-    opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity .25s ease, transform .25s ease;
+    position: fixed; bottom: ${cfg.offsetY + 70}px; ${side}: ${cfg.offsetX}px; width: 304px;
+    background: #fff; color: #1D2023; border-radius: 20px; border-${side === "right" ? "bottom-right" : "bottom-left"}-radius: 6px;
+    padding: 14px 14px 14px 14px; font: 14px/1.45 ${font};
+    box-shadow: 0 2px 6px rgba(29,32,35,.06), 0 14px 40px rgba(29,32,35,.16), 0 0 0 1px rgba(29,32,35,.06); cursor: pointer;
+    opacity: 0; transform: translateY(8px) scale(.98); transform-origin: bottom ${side};
+    pointer-events: none; transition: opacity .3s ease, transform .35s cubic-bezier(.16,1,.3,1);
   }
   .bubble.show { opacity: 1; transform: none; pointer-events: auto; }
-  .bubble b { display: block; font-size: 12px; color: #626C77; font-weight: 500; margin-bottom: 2px; }
-  .bubble .x { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border: 0; background: none;
-    color: #969FA8; cursor: pointer; border-radius: 50%; font-size: 16px; line-height: 1; }
+  .bubble .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-right: 22px; }
+  .bubble .ava { width: 32px; height: 32px; border-radius: 50%; background: var(--c); color: #fff; display: grid; place-items: center; flex: none; }
+  .bubble .ava svg { width: 24px; height: 24px; }
+  .bubble b { display: block; font-size: 13.5px; color: #1D2023; font-weight: 600; line-height: 1.2; }
+  .bubble .st { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #626C77; margin-top: 2px; }
+  .bubble .st i { width: 6px; height: 6px; border-radius: 50%; background: #0B7F45; }
+  .bubble .text { display: block; }
+  .bubble .quick { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .bubble .quick button { all: unset; box-sizing: border-box; cursor: pointer; padding: 8px 12px; border-radius: 12px;
+    background: #F2F3F7; color: #1D2023; font: 500 13px/1.3 ${font}; transition: background .15s, color .15s; }
+  .bubble .quick button:hover { background: var(--c); color: #fff; }
+  .bubble .quick button:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 45%, white); outline-offset: 1px; }
+  .bubble .x { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border: 0; padding: 0; background: none;
+    color: #969FA8; cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
+  .bubble .x svg { width: 14px; height: 14px; }
   .bubble .x:hover { background: #F2F3F7; color: #1D2023; }
   .panel {
-    position: fixed; bottom: ${cfg.offsetY + 76}px; ${side}: ${cfg.offsetX}px;
-    width: 400px; height: min(680px, calc(100vh - ${cfg.offsetY + 100}px));
+    position: fixed; bottom: ${cfg.offsetY + 72}px; ${side}: ${cfg.offsetX}px;
+    width: 400px; height: min(680px, calc(100vh - ${cfg.offsetY + 96}px));
     border-radius: 20px; overflow: hidden; background: #fff;
-    box-shadow: 0 20px 60px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.05);
-    opacity: 0; transform: translateY(16px) scale(.98); transform-origin: bottom ${side};
+    box-shadow: 0 4px 12px rgba(29,32,35,.08), 0 24px 64px rgba(29,32,35,.22), 0 0 0 1px rgba(29,32,35,.06);
+    opacity: 0; transform: translateY(12px) scale(.98); transform-origin: bottom ${side};
     pointer-events: none; visibility: hidden;
-    transition: opacity .22s ease, transform .22s ease, visibility 0s linear .22s;
+    transition: opacity .2s ease, transform .3s cubic-bezier(.16,1,.3,1), visibility 0s linear .3s;
   }
   .open .panel { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition-delay: 0s; }
   iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
-  .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #969FA8;
-    font: 13px -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #626C77; font: 13px ${font}; }
   @media (max-width: 640px) {
     .panel { inset: 0; width: 100%; height: 100%; border-radius: 0; bottom: 0; ${side}: 0; }
     .open .launcher { display: none; }
@@ -124,14 +145,19 @@ const STORAGE_GREETED = "energytool-chat:greeted";
 </style>
 <div class="wrap">
   <div class="panel" role="dialog" aria-label="${escapeHtml(cfg.title)}" aria-modal="false">
-    <div class="loading">Загрузка консультанта…</div>
+    <div class="loading">Загружаю консультанта…</div>
   </div>
   <div class="bubble" role="status">
-    <b>${escapeHtml(cfg.title)}</b><span class="text">${escapeHtml(cfg.greeting)}</span>
-    <button class="x" aria-label="Скрыть подсказку">×</button>
+    <div class="head">
+      <span class="ava"><svg viewBox="0 0 28 28" fill="none" aria-hidden="true"><path d="M7.42 19.39A7 7 0 1 1 20.58 19.39" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M14 17 17.6 12.7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="14" cy="17" r="1.7" fill="currentColor"/></svg></span>
+      <span><b>${escapeHtml(cfg.title)}</b><span class="st"><i></i>${escapeHtml(cfg.subtitle)}</span></span>
+    </div>
+    <span class="text">${escapeHtml(cfg.greeting)}</span>
+    ${cfg.quick.length ? `<div class="quick">${cfg.quick.map((q) => `<button type="button" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>` : ""}
+    <button class="x" aria-label="Скрыть подсказку"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
   </div>
   <button class="launcher" aria-label="Открыть чат с консультантом" aria-expanded="false">
-    <svg class="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12Z"/><path d="M10 9.5a2 2 0 1 1 2.9 1.8c-.6.3-.9.8-.9 1.4v.3"/><path d="M12 16h.01"/></svg>
+    <svg class="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M8 12h.01M12 12h.01M16 12h.01" stroke-width="2.6"/></svg>
     <svg class="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
     <span class="badge"></span>
   </button>
@@ -228,6 +254,11 @@ const STORAGE_GREETED = "energytool-chat:greeted";
 
   launcher.addEventListener("click", toggle);
   bubble.addEventListener("click", (e) => {
+    const quick = (e.target as Element).closest<HTMLElement>("[data-q]");
+    if (quick) {
+      ask(quick.dataset.q || "");
+      return;
+    }
     if ((e.target as Element).closest(".x")) {
       hideBubble();
       sessionStorage.setItem(STORAGE_GREETED, "1");

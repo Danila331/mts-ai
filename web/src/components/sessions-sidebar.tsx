@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, MoreHorizontal, Pencil, Plus, Search, Trash2, UserRound } from "lucide-react";
+import { Download, FileJson, MoreHorizontal, Pencil, Search, Trash2, UserRound, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { SidebarLabel } from "@/components/app-shell";
 import type { ChatController } from "@/hooks/use-chat";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -52,7 +52,7 @@ function bucket(ts: number) {
   return "Ранее";
 }
 
-export function SessionsSidebar({ chat, onNew }: { chat: ChatController; onNew: () => void }) {
+export function SessionsList({ chat, onPicked }: { chat: ChatController; onPicked?: () => void }) {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -60,6 +60,7 @@ export function SessionsSidebar({ chat, onNew }: { chat: ChatController; onNew: 
   const groups = useMemo(() => {
     const query = q.trim().toLowerCase();
     const list = [...chat.sessions]
+      .filter((s) => s.messages.length > 0)
       .filter(
         (s) =>
           !query ||
@@ -78,95 +79,122 @@ export function SessionsSidebar({ chat, onNew }: { chat: ChatController; onNew: 
   };
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-sidebar">
-      <div className="space-y-2 p-3">
-        <Button onClick={onNew} className="w-full justify-start" variant="outline">
-          <Plus /> Новый диалог
-        </Button>
-        <div className="relative">
-          <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по диалогам" className="h-8 pl-8 text-xs" />
-        </div>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 px-2">
+        <label className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-muted-foreground transition-colors focus-within:bg-sidebar-accent hover:bg-sidebar-accent">
+          <Search className="size-4 shrink-0" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Поиск по диалогам"
+            aria-label="Поиск по диалогам"
+            className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted-foreground"
+          />
+          {q && (
+            <button type="button" onClick={() => setQ("")} aria-label="Очистить поиск" className="hover:text-foreground">
+              <X className="size-3.5" />
+            </button>
+          )}
+        </label>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {!groups.length && (
+          <p className="px-2.5 py-4 text-[13px] text-muted-foreground">
+            {q ? "Ничего не нашлось. Попробуйте другое слово." : "Здесь появятся ваши диалоги."}
+          </p>
+        )}
         {groups.map(([label, list]) => (
-          <div key={label} className="mb-3">
-            <div className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">{label}</div>
-            {list.map((s) => (
-              <div
-                key={s.id}
-                className={cn(
-                  "group flex items-center rounded-lg pr-1 text-sm transition-colors hover:bg-sidebar-accent",
-                  s.id === chat.activeId && "bg-sidebar-accent font-medium",
-                )}
-              >
-                {editing === s.id ? (
-                  <input
-                    autoFocus
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commit}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commit();
-                      if (e.key === "Escape") setEditing(null);
-                    }}
-                    className="m-1 h-7 flex-1 rounded-md border bg-background px-2 text-sm outline-none"
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => chat.select(s.id)}
-                    className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left"
-                  >
-                    <span className="truncate">{s.title}</span>
-                    {s.lead && <UserRound className="size-3 shrink-0 text-emerald-600" aria-label="заявка передана" />}
-                    {s.messages.some((m) => m.pending) && (
-                      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-brand" />
-                    )}
-                  </button>
-                )}
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        className="opacity-0 group-hover:opacity-100 aria-expanded:opacity-100"
-                        aria-label="Действия с диалогом"
-                      />
-                    }
-                  >
-                    <MoreHorizontal />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setDraft(s.title);
-                        setEditing(s.id);
+          <section key={label} aria-label={label}>
+            <SidebarLabel>{label}</SidebarLabel>
+            {list.map((s) => {
+              const active = s.id === chat.activeId;
+              return (
+                <div
+                  key={s.id}
+                  className={cn(
+                    "group relative flex h-9 items-center rounded-lg text-[14px] transition-colors hover:bg-sidebar-accent",
+                    active && "bg-sidebar-accent",
+                  )}
+                >
+                  {editing === s.id ? (
+                    <input
+                      autoFocus
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onBlur={commit}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commit();
+                        if (e.key === "Escape") setEditing(null);
                       }}
+                      aria-label="Название диалога"
+                      className="mx-1 h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-[14px] outline-none focus:border-ring"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        chat.select(s.id);
+                        onPicked?.();
+                      }}
+                      aria-current={active ? "true" : undefined}
+                      className="flex h-full min-w-0 flex-1 items-center gap-2 pr-8 pl-2.5 text-left"
                     >
-                      <Pencil /> Переименовать
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => exportSession(s, "md")}>
-                      <Download /> Экспорт в Markdown
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => exportSession(s, "json")}>
-                      <Download /> Экспорт с отладкой (JSON)
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem variant="destructive" onClick={() => chat.remove(s.id)}>
-                      <Trash2 /> Удалить
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            ))}
-          </div>
+                      <span className={cn("truncate", active ? "text-foreground" : "text-sidebar-foreground/85")}>
+                        {s.title}
+                      </span>
+                      {s.messages.some((m) => m.pending) && (
+                        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-brand" aria-label="отвечает" />
+                      )}
+                      {s.lead && (
+                        <UserRound className="size-3.5 shrink-0 text-success" aria-label="заявка передана" />
+                      )}
+                    </button>
+                  )}
+                  {editing !== s.id && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className={cn(
+                              "absolute right-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-transparent hover:text-foreground focus-visible:opacity-100 aria-expanded:opacity-100",
+                              active && "opacity-100",
+                            )}
+                            aria-label="Действия с диалогом"
+                          />
+                        }
+                      >
+                        <MoreHorizontal className="size-4!" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-52">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setDraft(s.title);
+                            setEditing(s.id);
+                          }}
+                        >
+                          <Pencil /> Переименовать
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportSession(s, "md")}>
+                          <Download /> Экспорт в Markdown
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportSession(s, "json")}>
+                          <FileJson /> Экспорт с отладкой (JSON)
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem variant="destructive" onClick={() => chat.remove(s.id)}>
+                          <Trash2 /> Удалить
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              );
+            })}
+          </section>
         ))}
       </div>
-      <div className="border-t p-3 text-[11px] leading-snug text-muted-foreground">
-        Диалоги хранятся в этом браузере. Отладка сохраняется вместе с ответами.
-      </div>
-    </aside>
+    </div>
   );
 }
