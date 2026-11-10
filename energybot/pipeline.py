@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .ambiguity import AmbiguityClassifier, decision_note
 from .calc import calculate, extract_parameters, infer_operation
 from .dialog import parse, search_queries
 from .gold_examples import GoldenExamples
@@ -88,6 +89,7 @@ class Consultant:
             self.golden = GoldenExamples(self.api)
             if self.golden.vecs is None:
                 self.golden = None
+        self.ambiguity = AmbiguityClassifier(self.api)
         print(
             f"[consultant] фрагментов: {len(self.kb.chunks)}, dense: {self.dense}, "
             f"загрузка {time.perf_counter() - t0:.1f} c",
@@ -141,7 +143,14 @@ class Consultant:
         if offline:
             timings["total"] = time.perf_counter() - t0
             return Answer(extractive(chunks) or FALLBACK, sources, timings, "без модели: лимит времени")
-        messages = [{"role": "system", "content": system_prompt(materials, mode, examples=self._examples(mode))}] + turns
+        # Классификатор неоднозначности: что известно, чего нет, какой вопрос задать.
+        note = ""
+        if not fast and env("EB_AMBIGUITY", "0") != "0":
+            note = decision_note(self.ambiguity.classify(turns, materials, fast=fast))
+        prompt_text = system_prompt(materials, mode, examples=self._examples(mode))
+        if note:
+            prompt_text += "\n\nРЕШЕНИЕ ПО ЭТОМУ ХОДУ\n" + note
+        messages = [{"role": "system", "content": prompt_text}] + turns
         t1 = time.perf_counter()
         text, error = "", ""
         if not fast and env("EB_FACTS_COMPOSE") == "1":
