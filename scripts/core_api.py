@@ -48,6 +48,9 @@ def load_dotenv(path: Path) -> None:
 
 
 load_dotenv(ROOT / ".env")
+# Стенд отвечает так же, как сабмит: вариант v28 — схема v3 с правилами «как у жюри» (eval/VARIANTS.md).
+# Умолчание, а не жёсткая настройка: EB_STYLE из окружения по-прежнему главнее.
+os.environ.setdefault("EB_STYLE", "jury")
 
 from energybot.dialog import search_queries  # noqa: E402
 from energybot.guard import SENTENCE, numbers  # noqa: E402
