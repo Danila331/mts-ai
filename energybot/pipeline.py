@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .calc import calculate, extract_parameters, infer_operation
 from .dialog import parse, search_queries
 from .gold_examples import GoldenExamples
 from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
@@ -129,6 +130,11 @@ class Consultant:
         sources = [(h.chunk.doc, h.chunk.path, round(float(h.score), 4)) for h in hits]
         sources += [(c.doc, c.path, None) for c in chunks[len(hits):]]
         materials = "\n\n".join(c.render() for c in chunks)
+        # Детерминированный калькулятор: распознанные расчёты идут мимо LLM-арифметики.
+        if env("EB_CALC", "1") != "0":
+            calc_note = self.try_calc(turns)
+            if calc_note:
+                materials = calc_note + "\n\n" + materials
         # Эксперимент 2: реранкер по предложениям топ-чанков (EB_SENT_RERANK=1).
         if not fast and not offline and env("EB_SENT_RERANK") == "1":
             materials = self.add_key_sentences(materials, chunks, turns)
@@ -166,6 +172,23 @@ class Consultant:
         if not text:
             return Answer(extractive(chunks) or FALLBACK, sources, timings, error or "пустой ответ", guard)
         return Answer(text, sources, timings, "", guard)
+
+    def try_calc(self, turns: list) -> str:
+        """Детерминированный расчёт (calc.py): если вопрос распознан как операция,
+        считает без LLM и возвращает блок для контекста. Ноль — значит не наш случай."""
+        dialog = "\n".join(t["content"] for t in turns)
+        op = infer_operation(dialog)
+        if not op:
+            return ""
+        result = calculate({"operation": op, "parameters": extract_parameters(op, dialog)})
+        status = result.get("status")
+        if status == "ok":
+            return ("ДЕТЕРМИНИРОВАННЫЙ РАСЧЁТ (посчитано инструментом, не моделью; "
+                    "используй дословно, ничего не пересчитывай):\n" + result["formatted"])
+        if status == "needs_input":
+            return ("ДЛЯ РАСЧЁТА НЕ ХВАТАЕТ (спроси это в уточняющем вопросе, "
+                    "сам не додумывай): " + "; ".join(result.get("questions", [])))
+        return ""  # invalid/unsupported — обычный ответ по материалам
 
     def _examples(self, mode: str) -> str:
         """Динамический few-shot: ближайшие эталоны жюри. В eval пропускаем самосовпадение
