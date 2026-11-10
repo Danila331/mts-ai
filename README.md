@@ -70,8 +70,9 @@ scripts/simulate_budget.py  бюджет времени: расчётная та
 ## CI
 
 - `ci.yml` — на каждый PR: `ruff`, тесты, сверка ZIP с регламентом, `actionlint`; TypeScript — когда появится `web/`.
-- `release-gate.yml` — на PR `dev → main`: Codex сверяет ZIP с регламентом, бот отвечает на 518 вопросов,
-  Codex-судья вслепую сравнивает с бейзлайном (кэш `eval/baseline/answers.csv`), Score — комментарием в PR.
+- `release-gate.yml` — на PR `dev → main`: сверка ZIP с регламентом и ревью Codex на соответствие регламенту.
+  Прогон бота на выборке и слепой судья в CI не запускаются — оценка качества локально (`eval/lab.py`).
+- Vercel — каждое слияние в `main` само выкатывает фронт `web/` на https://energytool-ai.vercel.app.
 
 Слепой судья Codex локально — `python eval/codex_judge.py --set demo --packets 3`.
 Секреты, вход Codex по подписке ChatGPT, запуск судьи другим разработчиком и настройка защиты `main` — в [`docs/ci.md`](docs/ci.md).
