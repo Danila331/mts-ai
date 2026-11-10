@@ -1,0 +1,95 @@
+# Бэкенд стенда одной командой: база, Python-ядро и Go-API.
+#
+#   docker compose up --build        # API: http://localhost:8787
+#   cd web && npm run dev            # стенд: http://localhost:3000
+#
+# Порт API — 8787, тот же, что был у Python-API: прокси Next по
+# умолчанию ходит именно туда (EB_API_URL), и фронт переезда не заметит.
+#
+# Ключ модели берётся из .env в корне — того же, что читает ядро при
+# запуске без docker. Без него стенд поднимается, но отвечает заглушкой.
+#
+# Порты публикуются только на петлю: без явного адреса docker слушает
+# 0.0.0.0 и правит iptables сам, в обход хостового межсетевого экрана,
+# и база с паролем из этого файла оказалась бы видна всей сети вокруг.
+name: energytool
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: energytool
+      POSTGRES_PASSWORD: energytool
+      POSTGRES_DB: energytool
+    ports: ["127.0.0.1:${EB_DB_PORT:-5433}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U energytool -d energytool"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  core:
+    build:
+      context: .
+      dockerfile: core/Dockerfile
+    image: energytool-core:local
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      EB_CORE_HOST: 0.0.0.0
+      EB_CORE_PORT: "8788"
+      # Общий секрет с API. Здесь дев-значение; на хостинге — свой.
+      EB_CORE_TOKEN: ${EB_CORE_TOKEN:-dev-core-token}
+    # Наружу ядро не публикуется: к нему ходит только api по сети
+    # compose. Для отладки ядра напрямую — раскомментировать.
+    # ports: ["127.0.0.1:8788:8788"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/healthz', timeout=2)"]
+      # Ядро на старте читает базу знаний и, при включённых эмбеддингах,
+      # считает векторы через API модели — это десятки секунд.
+      start_period: 180s
+      start_interval: 3s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  api:
+    build:
+      context: ./backend
+    image: energytool-api:local
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Разработку объявляем явно: молчание об окружении означает бой,
+      # а бой без EB_API_TOKEN api запускать откажется.
+      EB_ENV: ${EB_ENV:-development}
+      EB_DB_DSN: postgres://energytool:energytool@db:5432/energytool?sslmode=disable
+      EB_CORE_URL: http://core:8788
+      EB_CORE_TOKEN: ${EB_CORE_TOKEN:-dev-core-token}
+      EB_API_TOKEN: ${EB_API_TOKEN:-}
+      EB_ALLOWED_ORIGINS: http://localhost:3000
+    ports: ["127.0.0.1:${EB_API_PORT:-8787}:8080"]
+    depends_on:
+      db:
+        condition: service_healthy
+      # Только старт, не готовность: api без ядра всё равно принимает
+      # заявки и оценки, а /api/health честно скажет, что ядро
+      # поднимается.
+      core:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      start_period: 30s
+      start_interval: 2s
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  pgdata:

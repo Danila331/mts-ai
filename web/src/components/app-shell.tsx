@@ -85,7 +85,7 @@ function HealthStatus() {
           </div>
         ) : (
           <span className="text-xs">
-            {error || "Проверяю…"} Запустите: .venv/bin/python scripts/web_api.py
+            {error || "Проверяю…"} Запустите: docker compose up
           </span>
         )}
       </TooltipContent>

@@ -1,0 +1,132 @@
+# Развёртывание: Vercel + Railway
+
+Фронт (`web/`) живёт на Vercel, бэкенд — на Railway: Go-API, Python-ядро и Postgres.
+
+```
+браузер ──▶ Vercel: Next (web/) ──/api/*──▶ Railway: api (backend/, Go) ──приватная сеть──▶ Railway: core (scripts/core_api.py)
+                 EB_API_URL, EB_API_TOKEN          │ EB_API_TOKEN, EB_CORE_URL                    EB_CORE_TOKEN, ключ модели
+                                                   └──▶ Railway: Postgres (заявки, оценки, журнал ответов)
+```
+
+| Что | Где | Публичный адрес |
+|---|---|---|
+| Стенд и виджет | Vercel, корень проекта `web` | да |
+| API | Railway, служба `api`, корень `/backend` | да — к нему ходит сервер Next |
+| Ядро | Railway, служба `core`, корень `/` | нет — только приватная сеть |
+| База | Railway, `Postgres` | нет — только приватная сеть |
+
+Тот же набор служб поднимается локально одной командой — `docker compose up --build` (см. `docker-compose.yml`).
+
+## Автодеплой: слияние dev → main и есть выкладка
+
+Railway сам следит за веткой `main` и выкладывает каждый новый коммит в ней — но с включённым
+**Wait for CI** только после того, как на этом коммите зелёные проверки GitHub Actions
+(`.github/workflows/backend.yml`: Go-тесты на настоящем Postgres, сборка обоих образов, сквозной прогон
+через docker compose; плюс `ci.yml`). Красное в бой не едет.
+
+Каждая служба пересобирается, только если менялись её файлы (`watchPatterns` в `railway.json`): правка
+фронта не перезапускает ядро, правка базы знаний не перезапускает API.
+
+Vercel выкладывает фронт из той же ветки `main` своей интеграцией с GitHub.
+
+## Настройка один раз
+
+### 1. Railway: проект и база
+
+1. New Project → Deploy from GitHub repo → `Danila331/mts-ai`.
+2. В проекте: New → Database → **PostgreSQL**. Служба называется `Postgres`.
+
+### 2. Railway: служба `core` (Python-ядро)
+
+Settings:
+
+| Настройка | Значение |
+|---|---|
+| Source → Branch | `main` |
+| Source → Wait for CI | включить |
+| Source → Root Directory | пусто (корень репозитория: ядру нужны `energybot/` и `knowledge-base/`) |
+| Config-as-code → Railway Config File | `/core/railway.json` |
+| Networking → Public Networking | **не включать** |
+
+Variables:
+
+| Переменная | Значение |
+|---|---|
+| `EB_CORE_HOST` | `::` — приватная сеть Railway адресует по IPv6 |
+| `EB_CORE_PORT` | `8788` |
+| `EB_CORE_TOKEN` | длинная случайная строка (`openssl rand -hex 32`) — общая с `api` |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMB_MODEL`, … | как в `.env` (см. `.env.example`) |
+
+### 3. Railway: служба `api` (Go)
+
+New → GitHub Repo → тот же репозиторий. Settings:
+
+| Настройка | Значение |
+|---|---|
+| Source → Branch | `main` |
+| Source → Wait for CI | включить |
+| Source → Root Directory | `/backend` |
+| Config-as-code → Railway Config File | `/backend/railway.json` (путь от корня репозитория) |
+| Networking → Public Networking | Generate Domain — этот адрес нужен Vercel |
+
+Variables:
+
+| Переменная | Значение |
+|---|---|
+| `EB_DB_DSN` | `${{Postgres.DATABASE_URL}}` |
+| `EB_CORE_URL` | `http://${{core.RAILWAY_PRIVATE_DOMAIN}}:8788` |
+| `EB_CORE_TOKEN` | `${{core.EB_CORE_TOKEN}}` |
+| `EB_API_TOKEN` | ещё одна случайная строка — общая с Vercel |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `${{core.LLM_BASE_URL}}` и т. д. — модель нужна для резюме заявок |
+| `EB_THINKING_PARAM` | как у ядра |
+
+`PORT` Railway задаёт сам, API его слушает. `EB_ENV` не задаётся: без него запуск считается боевым, и API
+откажется стартовать без базы, токенов и пределов частоты — это защита, а не помеха.
+
+Схему базы API накатывает сам при старте (миграции вшиты в бинарник), ручных шагов нет.
+
+### 4. Vercel: фронт
+
+Project → Settings:
+
+| Настройка | Значение |
+|---|---|
+| Root Directory | `web` |
+| Git → Production Branch | `main` |
+| Environment Variables → `EB_API_URL` | публичный адрес `api` на Railway, `https://….up.railway.app` |
+| Environment Variables → `EB_API_TOKEN` | то же значение, что у `api` |
+| Environment Variables → `EB_STAND_URL` | адрес стенда сайта МТС, если он развёрнут |
+
+Браузер в Railway не ходит: все запросы идут на `/api/*` того же домена Vercel, и уже сервер Next
+пересылает их в API с токеном и настоящим адресом посетителя (`X-Client-IP`, по нему считаются пределы
+частоты). Поэтому CORS на API не нужен, а токен не попадает в браузер.
+
+Ответ модели идёт потоком до пары минут; маршрут прокси объявляет `maxDuration = 300`, чтобы Vercel не
+обрывал его на середине.
+
+## Проверка после выкладки
+
+```bash
+sh backend/scripts/smoke.sh https://<api>.up.railway.app <EB_API_TOKEN>
+```
+
+Скрипт проходит путь фронта целиком: состояние, база знаний, ответ потоком, заявка, оценка, отказ без
+токена и на плохом теле. Он создаёт одну тестовую заявку с именем «Смоук».
+
+## Переменные API
+
+| Переменная | Умолчание | Смысл |
+|---|---|---|
+| `EB_ENV` | — (бой) | `development` выключает проверку конфигурации при старте |
+| `EB_DB_DSN` / `DATABASE_URL` | — | адрес Postgres |
+| `EB_DB_MIGRATE` | `true` | накатывать ли схему при старте |
+| `EB_CORE_URL` | `http://127.0.0.1:8788` | адрес ядра |
+| `EB_CORE_TOKEN` | — | общий секрет с ядром; в бою обязателен |
+| `EB_CORE_TIMEOUT` | `3m` | потолок на один ответ ядра |
+| `EB_API_TOKEN` | — | общий секрет с прокси Next; в бою обязателен |
+| `EB_ALLOWED_ORIGINS` | — | CORS, только для вызовов из браузера напрямую |
+| `EB_LIMIT_CHAT_PER_MINUTE` / `_BURST` | 20 / 5 | вопросов с адреса |
+| `EB_LIMIT_LEAD_PER_HOUR` / `_BURST` | 10 / 3 | заявок с адреса |
+| `EB_LIMIT_FEEDBACK_PER_MINUTE` / `_BURST` | 30 / 10 | оценок с адреса |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | — | модель для резюме заявок; без неё резюме — список вопросов |
+| `EB_SUMMARY_TIMEOUT` | `30s` | тайм-аут одного запроса резюме |
