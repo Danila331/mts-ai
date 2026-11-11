@@ -138,7 +138,46 @@ class Consultant:
         context = self.retriever.context(ranked, top_k=self.top_k, expand_docs=self.expand_docs,
                                          char_budget=self.context_chars,
                                          ref_query=lexical if env("EB_REF_MIX", "1") != "0" else "")
+        context = self._close_graph(context, turns)
         return ranked[: self.top_k], context
+
+    def _close_graph(self, context: list, turns: list) -> list:
+        """Замыкание графа документов базы: к топ-продукту добавляем ключевой раздел
+        связанного продукта, если его ветка активна в диалоге (demo-15: платформа + фото).
+        Ребра редакционные (kb links), активация — по ключевым словам ветки."""
+        import re as _re
+        from .slots import DIALOG_PRODUCT, PRODUCT_BY_DOC
+        seen = {c.id for c in context}
+        product_docs = [c.doc for c in context if c.doc.startswith("20-products/")]
+        if not product_docs:
+            return context
+        dialog = "\n".join(t["content"] for t in turns)
+        # Граф по ссылкам разделов (двусторонний).
+        graph = {}
+        for c in self.kb.chunks:
+            graph.setdefault(c.doc, set()).update(c.links)
+            for l in c.links:
+                graph.setdefault(l, set()).add(c.doc)
+        # Ключевые слова продукта из DIALOG_PRODUCT (порядок слотов в slots.py).
+        pat_by_product = dict(DIALOG_PRODUCT)
+        doc_product = {f"20-products/{name}": p for name, p in PRODUCT_BY_DOC.items()}
+        added = 0
+        for doc in dict.fromkeys(product_docs):
+            for linked in graph.get(doc, ()):
+                if added >= 2:
+                    break
+                linked_full = linked if "/" in linked else f"20-products/{linked}"
+                lprod = doc_product.get(linked_full, "")
+                pat = pat_by_product.get(lprod)
+                if not pat or not _re.search(pat, dialog, _re.I):
+                    continue  # ветка не активна в диалоге
+                key = next((c for c in self.kb.chunks
+                            if c.doc == linked_full and c.path in ("Что это", "Какую задачу закрывает")), None)
+                if key and key.id not in seen:
+                    context.append(key)
+                    seen.add(key.id)
+                    added += 1
+        return context
 
     def answer(self, question, mode: str = "eval", query_vec=None, fast: bool = False,
                offline: bool = False) -> Answer:
