@@ -158,7 +158,8 @@ def main():
             if mode != "offline":
                 budget.record(time.perf_counter() - t0)
         info = {"id": qid, "mode": mode, "sources": result.sources, "timings": result.timings,
-                "error": result.error, "guard": result.guard}
+                "error": result.error, "guard": result.guard, "draft": result.draft,
+                "write": result.write, "final": result.text}
         print(f"[{qid}] {mode} {result.timings.get('total', 0):.1f} c"
               f"{' guard=' + ','.join(result.guard) if result.guard else ''}", file=sys.stderr, flush=True)
         return i, result.text, info

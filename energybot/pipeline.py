@@ -16,7 +16,7 @@ from .slots import choose_question, product_from_dialog, product_of
 from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
 from .kb import KnowledgeBase
 from .llm import Api, env, env_num
-from .prompts import system_prompt
+from .prompts import build_draft_messages, build_write_messages, filter_examples, system_prompt
 from .retrieval import Retriever
 
 FALLBACK = (
@@ -47,6 +47,8 @@ class Answer:
     error: str = ""
     guard: dict = field(default_factory=dict)  # что сработало в проверке ответа (для отладки)
     used_sources: list = field(default_factory=list)  # источники, чьи числа реально вошли в ответ
+    draft: str = ""
+    write: str = ""
 
 
 def used_sources(sources: list, chunks: list, answer: str) -> list:
@@ -241,6 +243,7 @@ class Consultant:
         sources += [(c.doc, c.path, None) for c in chunks[len(hits):]]
         materials = "\n\n".join(c.render() for c in chunks)
         # Детерминированный калькулятор: распознанные расчёты идут мимо LLM-арифметики.
+        calc_note = ""
         if env("EB_CALC", "1") != "0":
             calc_note = self.try_calc(turns)
             if calc_note:
@@ -284,12 +287,30 @@ class Consultant:
             prompt_text += "\n\nРЕШЕНИЕ ПО ЭТОМУ ХОДУ\n" + note
         messages = [{"role": "system", "content": prompt_text}]
         # Few-shot примеры как user/assistant-пары (LangChain: сообщения > строка в system).
-        for q, a in self._example_pairs(mode):
+        for q, a in self._example_pairs(mode, turns):
             messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         messages += turns
         t1 = time.perf_counter()
-        text, error = "", ""
-        if not fast and env("EB_FACTS_COMPOSE") == "1":
+        text, error, draft, written = "", "", "", ""
+        if not fast and env("EB_TWO_STAGE", "1") != "0":
+            try:
+                draft_chunks = self._close_graph([h.chunk for h in hits], turns)
+                draft_materials = "\n\n".join(c.render() for c in draft_chunks)
+                if calc_note:
+                    draft_materials = calc_note + "\n\n" + draft_materials
+                draft = self.api.chat(build_draft_messages(draft_materials, turns)).strip()
+            except Exception as exc:  # noqa: BLE001 — используем одностадийный путь
+                print(f"[consultant] черновик недоступен: {type(exc).__name__}", file=sys.stderr)
+            if draft:
+                write_messages = build_write_messages(materials, turns, draft, mode, note=note)
+                try:
+                    written = tidy(self.api.chat(write_messages))
+                except Exception as exc:  # noqa: BLE001 — используем одностадийный путь
+                    print(f"[consultant] оформление недоступно: {type(exc).__name__}", file=sys.stderr)
+                if written:
+                    messages = write_messages
+                    text = written
+        if not text and not fast and env("EB_TWO_STAGE", "1") == "0" and env("EB_FACTS_COMPOSE") == "1":
             # Эксперимент 4: ответ собирается из извлечённых фактов, без полного контекста.
             text, error = self.compose_from_facts(turns, mode, materials)
         for attempt in range(1 if fast else 2):
@@ -325,8 +346,8 @@ class Consultant:
         if not text:
             fallback = extractive(chunks) or FALLBACK
             err = error or "пустой ответ"
-            return Answer(fallback, sources, timings, err, guard)
-        return Answer(text, sources, timings, "", guard, used_sources(sources, chunks, text))
+            return Answer(fallback, sources, timings, err, guard, draft=draft, write=written)
+        return Answer(text, sources, timings, "", guard, used_sources(sources, chunks, text), draft, written)
 
     def try_calc(self, turns: list) -> str:
         """Детерминированный расчёт (calc.py): если вопрос распознан как операция,
@@ -345,14 +366,14 @@ class Consultant:
                     "сам не додумывай): " + "; ".join(result.get("questions", [])))
         return ""  # invalid/unsupported — обычный ответ по материалам
 
-    def _example_pairs(self, mode: str) -> list:
+    def _example_pairs(self, mode: str, turns: list) -> list:
         """Пары few-shot: ближайшие эталоны жюри, фолбэк — статические. В eval пропускаем
         самосовпадение (локально вопрос совпадает с эталонным, на платформе вопросы скрытые)."""
         from .prompts import static_example_pairs
         if self.golden is None:
-            return static_example_pairs()
-        pairs = self.golden.pick_pairs(getattr(self, "_last_qvec", None), skip_self=(mode == "eval"))
-        return pairs or static_example_pairs()
+            return filter_examples(static_example_pairs(), turns)
+        pairs = self.golden.pick_pairs(getattr(self, "_last_qvec", None), skip_self=True)
+        return filter_examples(pairs or static_example_pairs(), turns)
 
     def select_chunks(self, chunks: list, turns: list) -> list:
         """Эксперимент 3: LLM выбирает, какие фрагменты нужны для ответа. Сбой → все."""

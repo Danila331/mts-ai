@@ -213,7 +213,7 @@ class GuardTest(unittest.TestCase):
             result = _consultant(mock).answer(self.QUESTION)
             calls = mock.calls["chat"]
         self.assertEqual((result.text, result.guard), (self.GOOD, {}))
-        self.assertEqual(calls, 3)  # черновик + ансамбль + самопроверка (классификатор по умолчанию выкл.)
+        self.assertEqual(calls, 4)  # фактическая основа, ответ, ансамбль и самопроверка
 
 
 class EmbeddingBatchTest(unittest.TestCase):
