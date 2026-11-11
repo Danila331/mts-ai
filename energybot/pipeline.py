@@ -12,7 +12,7 @@ from .ambiguity import AmbiguityClassifier, decision_note
 from .calc import calculate, extract_parameters, infer_operation
 from .dialog import parse, search_queries
 from .gold_examples import GoldenExamples
-from .slots import choose_question, product_of
+from .slots import choose_question, product_from_dialog, product_of
 from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
 from .kb import KnowledgeBase
 from .llm import Api, env, env_num
@@ -128,6 +128,13 @@ class Consultant:
         self._last_qvec = query_vec  # для динамического few-shot
         ranked = self.retriever.search(lexical, query_vec, rerank_query=semantic, n_candidates=self.n_candidates,
                                        rerank=not fast)
+        # CRAG PARTIAL: после реранкера выбрасываем INCORRECT-чанки (скор ниже порога)
+        # из контекста всегда — мусор в контексте становится выдумкой в ответе.
+        if not fast:
+            min_chunk = env_num("EB_CHUNK_MIN", 0.05, 0.0, 1.0, float)
+            filtered = [h for h in ranked if float(h.score) >= min_chunk]
+            if filtered:
+                ranked = filtered
         context = self.retriever.context(ranked, top_k=self.top_k, expand_docs=self.expand_docs,
                                          char_budget=self.context_chars,
                                          ref_query=lexical if env("EB_REF_MIX", "1") != "0" else "")
@@ -177,8 +184,8 @@ class Consultant:
             note = decision_note(self.ambiguity.classify(turns, materials, fast=fast))
         if not note and env("EB_SLOTS", "1") != "0":
             # Детерминированная очередь слотов продукта: вопрос из базы, не из головы.
-            product = product_of([h.chunk.doc for h in hits])
             dialog_text = "\n".join(t["content"] for t in turns)
+            product = product_from_dialog(dialog_text) or product_of([h.chunk.doc for h in hits])
             last_user = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
             question = choose_question(product, dialog_text, last_user)
             if question:
@@ -208,10 +215,18 @@ class Consultant:
             except Exception as exc:  # noqa: BLE001 — на выходе всегда должен быть ответ
                 error = f"{type(exc).__name__}: {exc}"
                 print(f"[consultant] LLM, попытка {attempt + 1}: {error}", file=sys.stderr)
-        # Второй проход: ансамбль (черновик Б при другой температуре) + самопроверка по материалам.
-        # Только в нормальном режиме — в fast на это нет времени.
+        # Второй проход ТОЛЬКО по сигналу (Future AGI: рефлексия на всём трафике не окупается):
+        # слабый ретрив, обрезанный/длинный ответ, подозрительные числа — иначе пропускаем.
         if text and not fast and env("EB_VERIFY", "1") != "0":
-            text = self.verify(messages, text, ensemble=env("EB_ENSEMBLE", "1") != "0")
+            dialog = "\n".join(t["content"] for t in turns)
+            weak = bool(hits) and float(hits[0].score) < env_num("EB_VERIFY_SCORE", 0.5, 0.0, 1.0, float)
+            not_direct = self._expects_direct(turns) and not re.match(
+                r"^(да|нет|можно|нельзя|пока нет|начать|начни|конечно|не совсем|не обязательно)\b",
+                text.lower())
+            suspect = bool(unknown_numbers(text, materials, dialog)) or word_count(text) > MAX_WORDS \
+                or not_direct
+            if weak or suspect:
+                text = self.verify(messages, text, ensemble=env("EB_ENSEMBLE", "1") != "0")
         timings["generation"] = time.perf_counter() - t1
         guard = {}
         if text:

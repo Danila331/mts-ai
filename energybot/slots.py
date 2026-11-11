@@ -86,8 +86,27 @@ PROCESS_YESNO = re.compile(r"(сначала|сначала надо|нужно 
 CAPABILITY = re.compile(r"сможет|сможете|разбер[её]т|прочитать|прочт[её]т|читает", re.I)
 
 
+# Продукт по тексту диалога (первая реплика несёт тему): надёжнее, чем топ чанка —
+# ретрив цепляется за боковые слова («фото» в demo-15/18 тянул meter_reading вместо askue).
+DIALOG_PRODUCT = [
+    ("solar", r"солнеч|панел|станц|кровл|фасад"),
+    ("orem", r"оптов|опт\b|поставщик|сбыт"),
+    ("losses", r"потер|хищен|незаконн|небаланс"),
+    ("meter_reading", r"по фото|фотограф|фото показаний"),
+    ("askue", r"уч[её]т|платформ|сч[её]тчик|прибор|показан"),
+    ("tariff", r"тариф|категори|сч[её]т.*вырос|дорог"),
+]
+
+
+def product_from_dialog(dialog: str) -> str:
+    for product, pattern in DIALOG_PRODUCT:
+        if re.search(pattern, dialog, re.I):
+            return product
+    return ""
+
+
 def product_of(docs: list) -> str:
-    """Продукт по самому релевантному документу выдачи."""
+    """Продукт по самому релевантному документу выдачи (фолбэк, если диалог не помог)."""
     for doc in docs:
         name = doc.split("/")[-1]
         if name in PRODUCT_BY_DOC:
@@ -114,13 +133,4 @@ def choose_question(product: str, dialog: str, last_user: str) -> str:
     for slot, question, known_re in queue:
         if not re.search(known_re, dialog, re.I):
             return question
-    return ""
-
-
-def product_of(docs: list) -> str:
-    """Продукт по самому релевантному документу выдачи."""
-    for doc in docs:
-        name = doc.split("/")[-1]
-        if name in PRODUCT_BY_DOC:
-            return PRODUCT_BY_DOC[name]
     return ""
