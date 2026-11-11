@@ -195,14 +195,10 @@ class Consultant:
             elif product:
                 note = ("КАТЕГОРИЧЕСКИ не задавай уточняющий вопрос в конце: ответ закрыт "
                         "или спрашивать нечего. Закончи утверждением.")
-        prompt_text = system_prompt(materials, mode, examples="")  # примеры — сообщениями ниже
+        prompt_text = system_prompt(materials, mode, examples=self._examples(mode))
         if note:
             prompt_text += "\n\nРЕШЕНИЕ ПО ЭТОМУ ХОДУ\n" + note
-        messages = [{"role": "system", "content": prompt_text}]
-        # Few-shot примеры как user/assistant-пары (LangChain: сообщения > строка в system).
-        for q, a in self._example_pairs(mode):
-            messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
-        messages += turns
+        messages = [{"role": "system", "content": prompt_text}] + turns
         t1 = time.perf_counter()
         text, error = "", ""
         if not fast and env("EB_FACTS_COMPOSE") == "1":
@@ -261,14 +257,12 @@ class Consultant:
                     "сам не додумывай): " + "; ".join(result.get("questions", [])))
         return ""  # invalid/unsupported — обычный ответ по материалам
 
-    def _example_pairs(self, mode: str) -> list:
-        """Пары few-shot: ближайшие эталоны жюри, фолбэк — статические. В eval пропускаем
-        самосовпадение (локально вопрос совпадает с эталонным, на платформе вопросы скрытые)."""
-        from .prompts import static_example_pairs
+    def _examples(self, mode: str) -> str:
+        """Динамический few-shot: ближайшие эталоны жюри. В eval пропускаем самосовпадение
+        (локально вопрос совпадает с эталонным, на платформе вопросы скрытые)."""
         if self.golden is None:
-            return static_example_pairs()
-        pairs = self.golden.pick_pairs(getattr(self, "_last_qvec", None), skip_self=(mode == "eval"))
-        return pairs or static_example_pairs()
+            return ""
+        return self.golden.pick(getattr(self, "_last_qvec", None), skip_self=(mode == "eval"))
 
     def select_chunks(self, chunks: list, turns: list) -> list:
         """Эксперимент 3: LLM выбирает, какие фрагменты нужны для ответа. Сбой → все."""

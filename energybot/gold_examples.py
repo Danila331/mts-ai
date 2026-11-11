@@ -108,23 +108,6 @@ class GoldenExamples:
             import sys
             print(f"[gold] эмбеддинги эталонов недоступны: {exc}", file=sys.stderr)
 
-    def pick_pairs(self, query_vec, skip_self: bool = True, n: int = 2) -> list:
-        """Пары (вопрос, ответ) ближайших эталонов — для подачи примерами-сообщениями."""
-        if query_vec is None or self.vecs is None:
-            return []
-        sims = [(_cos(query_vec, v), i) for i, v in enumerate(self.vecs)]
-        sims.sort(key=lambda x: -x[0])
-        out = []
-        for sim, i in sims:
-            if skip_self and sim > 0.995:
-                continue
-            if sim < self.threshold:
-                break
-            out.append(GOLD[i])
-            if len(out) == n:
-                break
-        return out
-
     def pick(self, query_vec, skip_self: bool = True, n: int = 2) -> str:
         if query_vec is None or self.vecs is None:
             return ""
