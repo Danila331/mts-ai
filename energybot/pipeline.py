@@ -46,21 +46,7 @@ class Answer:
     timings: dict = field(default_factory=dict)
     error: str = ""
     guard: dict = field(default_factory=dict)  # что сработало в проверке ответа (для отладки)
-    action: str = ""  # answer | answer_clarify | boundary | specialist | error — исход хода
     used_sources: list = field(default_factory=list)  # источники, чьи числа реально вошли в ответ
-
-
-def classify_action(text: str, error: str) -> str:
-    """Машинный исход ответа: веб и стенд различают ответ/границу/сбой без разбора текста."""
-    if error:
-        return "error"
-    if text == FALLBACK or "в моих материалах нет" in text:
-        return "boundary"
-    if "специалист" in text.lower():
-        return "specialist"
-    if text.rstrip().endswith("?"):
-        return "answer_clarify"
-    return "answer"
 
 
 def used_sources(sources: list, chunks: list, answer: str) -> list:
@@ -173,8 +159,7 @@ class Consultant:
         if offline:
             timings["total"] = time.perf_counter() - t0
             text_off = extractive(chunks) or FALLBACK
-            return Answer(text_off, sources, timings, "без модели: лимит времени",
-                          action=classify_action(text_off, "offline"))
+            return Answer(text_off, sources, timings, "без модели: лимит времени")
         # Классификатор неоднозначности: что известно, чего нет, какой вопрос задать.
         note = ""
         if not fast and env("EB_AMBIGUITY", "0") != "0":
@@ -226,9 +211,8 @@ class Consultant:
         if not text:
             fallback = extractive(chunks) or FALLBACK
             err = error or "пустой ответ"
-            return Answer(fallback, sources, timings, err, guard, classify_action(fallback, err))
-        return Answer(text, sources, timings, "", guard, classify_action(text, ""),
-                      used_sources(sources, chunks, text))
+            return Answer(fallback, sources, timings, err, guard)
+        return Answer(text, sources, timings, "", guard, used_sources(sources, chunks, text))
 
     def try_calc(self, turns: list) -> str:
         """Детерминированный расчёт (calc.py): если вопрос распознан как операция,

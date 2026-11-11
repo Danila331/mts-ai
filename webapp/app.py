@@ -38,6 +38,14 @@ SUMMARY_PROMPT = """Составь краткое резюме диалога к
 PHONE = re.compile(r"^[+0-9][\d\s()\-]{6,20}$")
 
 
+def is_boundary(text: str, error: str) -> bool:
+    """Исход хода для веба: граница/сбой определяем по тексту, без поля в ядре."""
+    if error:
+        return True
+    t = text.lower()
+    return "в моих материалах нет" in t or "специалист" in t
+
+
 class ChatIn(BaseModel):
     session_id: str
     request_id: str = Field(min_length=4, max_length=64)
@@ -152,18 +160,18 @@ def create_app(consultant: Consultant, store: Store) -> FastAPI:
                 raise HTTPException(503, "модель временно недоступна, повторите реплику")
             # Сбой модели — отдельный исход: в историю не пишем, клиенту — понятный статус,
             # повтор с тем же request_id разрешён (строка со статусом error пересоздаётся).
-            if result.action == "error":
-                store.fail_turn(turn_id, result.error or "модель недоступна")
+            if result.error:
+                store.fail_turn(turn_id, result.error)
                 raise HTTPException(503, "модель временно недоступна, повторите реплику")
             store.finish_turn(turn_id, result)
             # Handoff после двух подряд границ/передач специалисту (паттерн rag-support-bot):
             # не выдумываем дальше, предлагаем человека.
             suggest_lead = False
-            if result.action in ("boundary", "specialist"):
+            if is_boundary(result.text, result.error):
                 recent = [t for t in store.turns_full(body.session_id) if t["status"] == "done"][-2:]
-                if len(recent) == 2 and all(t["action"] in ("boundary", "specialist") for t in recent):
+                if len(recent) == 2 and all(is_boundary(t["bot"], t["error"]) for t in recent):
                     suggest_lead = True
-            return {"text": result.text, "action": result.action, "sources": result.sources,
+            return {"text": result.text, "sources": result.sources,
                     "used_sources": result.used_sources, "suggest_lead": suggest_lead,
                     "timings_ms": {k: round(v * 1000) for k, v in result.timings.items()},
                     "error": result.error, "status": "done", "request_id": body.request_id}

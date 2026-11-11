@@ -99,9 +99,9 @@ class Store:
         """Результат хода и диагностика — одной короткой транзакцией."""
         with self.lock:
             self.db.execute(
-                "UPDATE turns SET bot=?, action=?, sources=?, timings=?, guard=?, error=?, status='done' "
+                "UPDATE turns SET bot=?, sources=?, timings=?, guard=?, error=?, status='done' "
                 "WHERE id=?",
-                (result.text, result.action, json.dumps(result.sources, ensure_ascii=False),
+                (result.text, json.dumps(result.sources, ensure_ascii=False),
                  json.dumps(result.timings), json.dumps(result.guard, ensure_ascii=False),
                  result.error, turn_id))
             self.db.commit()

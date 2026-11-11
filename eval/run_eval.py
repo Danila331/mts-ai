@@ -140,7 +140,7 @@ def judge_api():
     api.base_url = (env("JUDGE_BASE_URL") or api.base_url).rstrip("/")
     api.llm_key = env("JUDGE_API_KEY") or api.llm_key
     api.llm_model = env("JUDGE_MODEL") or api.llm_model
-    api.max_tokens = 300
+    api.max_tokens = 1500  # при 300 размышление съедало лимит до JSON — раунды терялись
     return api if api.configured else None
 
 
@@ -154,25 +154,27 @@ def parse_json(text: str) -> dict:
 
 def judge_one(api, question, reference, answer):
     msg = f"ВОПРОС КЛИЕНТА:\n{question}\n\nЭТАЛОННЫЙ ОТВЕТ:\n{reference}\n\nОТВЕТ БОТА:\n{answer}"
-    try:
-        out = parse_json(api.chat([{"role": "system", "content": JUDGE_PROMPT}, {"role": "user", "content": msg}]))
-        if "score" not in out:
-            return None, "судья вернул ответ не в формате JSON"
-        return float(out["score"]), out.get("verdict", "")
-    except Exception as exc:  # noqa: BLE001
-        return None, f"ошибка судьи: {exc}"
+    for _ in range(2):  # одна повторная попытка: иногда модель отвечает не JSON
+        try:
+            out = parse_json(api.chat([{"role": "system", "content": JUDGE_PROMPT}, {"role": "user", "content": msg}]))
+        except Exception as exc:  # noqa: BLE001
+            return None, f"ошибка судьи: {exc}"
+        if "score" in out:
+            return float(out["score"]), out.get("verdict", "")
+    return None, "судья вернул ответ не в формате JSON"
 
 
 def judge_round(api, question, reference, a, b):
     """Один раунд: оценка ответа B относительно A (1.0 … 0.0) или None при ошибке судьи."""
     msg = f"ВОПРОС КЛИЕНТА:\n{question}\n\nЭТАЛОННЫЙ ОТВЕТ:\n{reference}\n\nОТВЕТ A:\n{a}\n\nОТВЕТ B:\n{b}"
-    try:
-        out = parse_json(api.chat([{"role": "system", "content": PAIR_PROMPT}, {"role": "user", "content": msg}]))
-    except Exception as exc:  # noqa: BLE001
-        return None, f"ошибка судьи: {exc}"
-    if out.get("verdict") not in VERDICT_SCORE:
-        return None, "судья вернул ответ не в формате JSON"
-    return VERDICT_SCORE[out["verdict"]], out.get("reason", "")
+    for _ in range(2):
+        try:
+            out = parse_json(api.chat([{"role": "system", "content": PAIR_PROMPT}, {"role": "user", "content": msg}]))
+        except Exception as exc:  # noqa: BLE001
+            return None, f"ошибка судьи: {exc}"
+        if out.get("verdict") in VERDICT_SCORE:
+            return VERDICT_SCORE[out["verdict"]], out.get("reason", "")
+    return None, "судья вернул ответ не в формате JSON"
 
 
 def judge_vs_baseline(api, question, reference, team, baseline):

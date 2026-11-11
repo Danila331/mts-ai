@@ -56,7 +56,7 @@ class WebAppTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         data = r.json()
         self.assertTrue(data["text"])
-        self.assertIn(data["action"], ("answer", "answer_clarify", "specialist", "boundary"))
+        self.assertFalse(data["error"])
         self.assertGreater(data["timings_ms"]["total"], 0)
         self.assertTrue(data["sources"])
 
