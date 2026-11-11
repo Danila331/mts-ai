@@ -61,9 +61,11 @@ class Api:
         self.disable_thinking = env("EB_DISABLE_THINKING", "1") != "0"
         # chat_template_kwargs — vLLM (вероятно, прокси платформы); reasoning — OpenRouter;
         # enable_thinking — DashScope; none — ничего не слать.
-        # none (по умолчанию) — размышления НЕ отключаем: судья на демо оценивает их выше.
-        # chat_template_kwargs — vLLM; reasoning — OpenRouter; enable_thinking — DashScope.
-        self.thinking_param = env("EB_THINKING_PARAM", "none")
+        # none (по умолчанию) — размышления НЕ отключаем. chat_template_kwargs — vLLM (платформа);
+        # reasoning — OpenRouter-подобные прокси; enable_thinking — DashScope.
+        # Конфигурация бенча 8.75/10 на демо была с выключенным размышлением: на платформе
+        # это «chat_template_kwargs», но дефолт оставляем «none» — по вечерним замерам ON ≥ OFF.
+        self.thinking_param = env("EB_THINKING_PARAM", "chat_template_kwargs")
         self.thinking_budget = env_num("EB_THINKING_BUDGET", 3000, 500, 16000)
         self.thinking_overflows = 0
         self._thinking_param_ok = True
