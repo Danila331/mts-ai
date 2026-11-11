@@ -92,10 +92,18 @@ def tidy(text: str) -> str:
 EXTRA_EDGES = [
     # solar: ветвление сетевая/гибридная внутри 23-solar — при «отключениях/резерве»
     ("solar", "20-products/23-solar.md", "Два типа станций", r"отключен|резерв|автономн|перебо|вечер"),
+    # solar → microgeneration: продажа излишков — отдельный режим с жёсткой оговоркой
+    ("solar", "10-energy/15-microgeneration.md", "Сколько можно отдавать в сеть", r"излишк|отдава|отдать|продав|выкуп"),
     # orem → askue: коммерческий учёт — предусловие выхода на опт (всегда по теме)
     ("orem", "20-products/22-askue.md", "Что это", r"опт|750|выход"),
+    # orem → metering: «уже стоят свои счётчики» — виды учёта и что менять не надо
+    ("orem", "10-energy/13-metering.md", "Виды учёта", r"сч[её]тчик|прибор"),
     # tariff → askue: категории 3–6 требуют интервальный учёт
     ("tariff", "20-products/22-askue.md", "Что это", r"категори"),
+    # tariff → thresholds: «обязаны уйти из 1–2 категории» — порог 670 кВт
+    ("tariff", "10-energy/12-power-thresholds.md", "Порог 670 кВт", r"обязан|обяжут|переведут|заставят"),
+    # askue → metering: минимальный состав функций ИСУ (норматив)
+    ("askue", "10-energy/13-metering.md", "Интеллектуальные системы учёта", r"функци|минимум|интеллектуальн"),
     # solar ⇄ tariff: альтернатива снижения платежа, когда опт недоступен
     ("solar", "10-energy/11-price-categories.md", "Что такое ценовая категория", r"опт|750|плат[её]ж|сниз"),
 ]
@@ -160,40 +168,39 @@ class Consultant:
         связанного продукта, если его ветка активна в диалоге (demo-15: платформа + фото).
         Ребра редакционные (kb links), активация — по ключевым словам ветки."""
         import re as _re
-        from .slots import DIALOG_PRODUCT, PRODUCT_BY_DOC
+        from .slots import DIALOG_PRODUCT, PRODUCT_BY_DOC, product_of
         seen = {c.id for c in context}
         product_docs = [c.doc for c in context if c.doc.startswith("20-products/")]
-        if not product_docs:
-            return context
         dialog = "\n".join(t["content"] for t in turns)
-        # Граф по ссылкам разделов (двусторонний).
-        graph = {}
-        for c in self.kb.chunks:
-            graph.setdefault(c.doc, set()).update(c.links)
-            for l in c.links:
-                graph.setdefault(l, set()).add(c.doc)
-        # Ключевые слова продукта из DIALOG_PRODUCT (порядок слотов в slots.py).
-        pat_by_product = dict(DIALOG_PRODUCT)
-        doc_product = {f"20-products/{name}": p for name, p in PRODUCT_BY_DOC.items()}
         added = 0
-        for doc in dict.fromkeys(product_docs):
-            for linked in graph.get(doc, ()):
-                if added >= 2:
-                    break
-                linked_full = linked if "/" in linked else f"20-products/{linked}"
-                lprod = doc_product.get(linked_full, "")
-                pat = pat_by_product.get(lprod)
-                if not pat or not _re.search(pat, dialog, _re.I):
-                    continue  # ветка не активна в диалоге
-                key = next((c for c in self.kb.chunks
-                            if c.doc == linked_full and c.path in ("Что это", "Какую задачу закрывает")), None)
-                if key and key.id not in seen:
-                    context.append(key)
-                    seen.add(key.id)
-                    added += 1
+        if product_docs:
+            # Граф по ссылкам разделов (двусторонний).
+            graph = {}
+            for c in self.kb.chunks:
+                graph.setdefault(c.doc, set()).update(c.links)
+                for l in c.links:
+                    graph.setdefault(l, set()).add(c.doc)
+            # Ключевые слова продукта из DIALOG_PRODUCT (порядок слотов в slots.py).
+            pat_by_product = dict(DIALOG_PRODUCT)
+            doc_product = {f"20-products/{name}": p for name, p in PRODUCT_BY_DOC.items()}
+            for doc in dict.fromkeys(product_docs):
+                for linked in graph.get(doc, ()):
+                    if added >= 2:
+                        break
+                    linked_full = linked if "/" in linked else f"20-products/{linked}"
+                    lprod = doc_product.get(linked_full, "")
+                    pat = pat_by_product.get(lprod)
+                    if not pat or not _re.search(pat, dialog, _re.I):
+                        continue  # ветка не активна в диалоге
+                    key = next((c for c in self.kb.chunks
+                                if c.doc == linked_full and c.path in ("Что это", "Какую задачу закрывает")), None)
+                    if key and key.id not in seen:
+                        context.append(key)
+                        seen.add(key.id)
+                        added += 1
         # Типизированные смысловые ребра (ветвление/предусловие/альтернатива) — docs/kb-graph.md.
-        product_now = product_from_dialog(dialog) or (
-            doc_product.get(product_docs[0], "") if product_docs else "")
+        # Работают и без продуктового документа в контексте: тарифные вопросы живут в 10-energy.
+        product_now = product_from_dialog(dialog) or product_of([c.doc for c in context])
         for src, target_doc, target_path, pattern in EXTRA_EDGES:
             if added >= 2:
                 break
