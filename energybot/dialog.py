@@ -41,5 +41,8 @@ def search_queries(turns: list) -> tuple:
     prev_assistant = next((t["content"] for t in reversed(turns[:-1]) if t["role"] == "assistant"), "")
     lexical = " ".join([last, last] + users + [prev_assistant])
     # Для эмбеддинга и реранкера — связный текст ситуации клиента.
-    semantic = " ".join(users[-2:] + ([prev_assistant] if prev_assistant else []) + [last])
+    # Первая реплика пользователя обязательна: она несёт тему («автоматический учёт»),
+    # а окно последних двух её вытесняет (demo-18 терял предмет из-за этого).
+    anchor = [users[0]] if users and users[0] not in users[-2:] else []
+    semantic = " ".join(anchor + users[-2:] + ([prev_assistant] if prev_assistant else []) + [last])
     return lexical, semantic, last
