@@ -267,12 +267,19 @@ class SolutionEndToEndTest(unittest.TestCase):
     def test_dialog_history_is_passed_as_turns(self):
         with MockApi(reject_template_kwargs=False) as mock:
             self._run(mock, [("1", "Пользователь: Мы СНТ.\nАссистент: Какая задача?\nПользователь: Учёт.")])
-        # Исходные реплики идут первыми и в том же порядке; дальше могут следовать
-        # сообщения второго прохода (черновик + проверка).
-        roles = [m["role"] for m in mock.last_messages]
-        self.assertEqual(roles[:4], ["system", "user", "assistant", "user"])
-        self.assertEqual(mock.last_messages[1]["content"], "Мы СНТ.")
-        self.assertEqual(mock.last_messages[3]["content"], "Учёт.")
+        # Реплики диалога идут после системного промпта и few-shot примеров,
+        # в исходном порядке (могут следовать служебные сообщения второго прохода).
+        self.assertEqual(mock.last_messages[0]["role"], "system")
+        contents = [m["content"] for m in mock.last_messages]
+        for j, c in enumerate(contents):
+            if c == "Мы СНТ.":
+                self.assertEqual(contents[j + 1], "Какая задача?")
+                self.assertEqual(contents[j + 2], "Учёт.")
+                self.assertEqual([m["role"] for m in mock.last_messages[j:j + 3]],
+                                 ["user", "assistant", "user"])
+                break
+        else:
+            self.fail("реплики диалога не дошли до модели")
 
     def test_flat_zip_runs_like_on_platform(self):
         """Сабмит из распакованного ZIP: только корневые .py и requirements.txt, без energybot/."""

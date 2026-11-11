@@ -142,6 +142,9 @@ class Retriever:
         разделов с 0,53 до ~0,76).
         """
         main = [h.chunk for h in ranked[:top_k]]
+        # Lost-in-the-middle (Liu et al.): лучший чанк первым, второй по силе — последним.
+        if len(main) > 2:
+            main = [main[0], *main[2:], main[1]]
         seen = {c.id for c in main}
         rules = []
 

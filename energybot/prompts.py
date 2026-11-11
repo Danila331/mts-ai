@@ -48,8 +48,21 @@ EXAMPLES = """
 Консультант: Да, годовой глубины достаточно — минимум по материалам один год, а суточные данные подходят, если есть разбивка на день и ночь. Почасовые данные повышают точность приоритизации проверок. Учтите: система выдаёт приоритетный список проверок, а не установленный факт хищения. Как приборы передают показания сейчас?"""
 
 
-def system_prompt(materials: str, mode: str = "eval", examples: str = "") -> str:
+def static_example_pairs() -> list:
+    """Статические примеры EXAMPLES как пары (вопрос, ответ) — для подачи сообщениями."""
+    import re as _re
+    pairs = []
+    for m in _re.finditer(r"Клиент: (.+?)\nКонсультант: (.+?)(?=\n\nКлиент:|\Z)", EXAMPLES, _re.S):
+        pairs.append((" ".join(m.group(1).split()), " ".join(m.group(2).split())))
+    return pairs
+
+
+def system_prompt(materials: str, mode: str = "eval", examples: str | None = None) -> str:
+    """examples: None — статический текстовый блок (фолбэк); "" — без блока (примеры идут сообщениями)."""
     mode_rules = CHAT_MODE if mode == "chat" else EVAL_MODE
-    # Динамические примеры (ближайшие эталоны жюри) важнее статических; фолбэк — EXAMPLES.
-    block = examples or EXAMPLES
-    return f"{BASE_RULES}{mode_rules}\n{block}\n\nМАТЕРИАЛЫ\n{materials}"
+    if examples is None:
+        block = EXAMPLES
+    else:
+        block = examples
+    sep = f"\n{block}\n" if block else "\n"
+    return f"{BASE_RULES}{mode_rules}{sep}\nМАТЕРИАЛЫ\n{materials}"
