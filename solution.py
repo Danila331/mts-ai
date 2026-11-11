@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -89,6 +90,32 @@ def read_questions(path: Path) -> list:
         return [(str(row[id_col]).strip(), str(row[q_col] or "")) for row in reader]
 
 
+class Snapshot:
+    """Периодическая атомарная перезапись submission.csv: при тайм-ауте остаётся
+    последний полный снимок, а не обрезанный файл."""
+
+    def __init__(self, path: Path, questions: list, every_sec: float):
+        self.path, self.questions, self.every_sec = path, questions, every_sec
+        self.answers = [FALLBACK] * len(questions)
+        self.lock = threading.Lock()
+        self.last_write = 0.0
+
+    def write(self):
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        write_answers(tmp, [(qid, a) for (qid, _), a in zip(self.questions, self.answers)])
+        os.replace(tmp, self.path)
+
+    def update(self, i: int, text: str, force: bool = False) -> bool:
+        with self.lock:
+            self.answers[i] = text
+            now = time.perf_counter()
+            if not force and now - self.last_write < self.every_sec:
+                return False
+            self.write()
+            self.last_write = now
+            return True
+
+
 def write_answers(path: Path, rows: list):
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator="\n")
@@ -102,9 +129,9 @@ def main():
     started = time.perf_counter()
     questions = read_questions(find("questions.csv", "train.csv", "test.csv", "demo_questions.csv"))
     kb_path = find("knowledge-base.zip", "knowledge_base.zip", "kb.zip", "knowledge-base")
-    answers = [FALLBACK] * len(questions)
-    # Файл с запасными ответами пишем сразу: даже при падении сабмит будет валидным.
-    write_answers(OUTPUT, [(qid, a) for (qid, _), a in zip(questions, answers)])
+    # Файл пишется сразу и обновляется атомарными снимками: при падении остаётся последний полный.
+    snapshot = Snapshot(OUTPUT, questions, env_num("EB_SNAPSHOT_SEC", 15.0, 1.0, 300.0, float))
+    snapshot.write()
 
     api = Api()
     api.deadline = started + DEADLINE_SEC
@@ -114,7 +141,7 @@ def main():
     print(f"Вопросов: {len(questions)}; потоков: {MAX_WORKERS}", file=sys.stderr, flush=True)
 
     debug_path = env("DEBUG_JSONL")
-    debug = []
+    debug = [None] * len(questions)
     budget = Budget(len(questions), started, DEADLINE_SEC, MAX_WORKERS)
 
     def work(i):
@@ -126,7 +153,7 @@ def main():
                                 fast=mode == "fast", offline=mode == "offline")
         except Exception as exc:  # noqa: BLE001
             print(f"[{qid}] {type(exc).__name__}: {exc}", file=sys.stderr)
-            return qid, FALLBACK, {"id": qid, "error": str(exc), "mode": mode}
+            return i, FALLBACK, {"id": qid, "error": str(exc), "mode": mode}
         finally:
             if mode != "offline":
                 budget.record(time.perf_counter() - t0)
@@ -134,23 +161,26 @@ def main():
                 "error": result.error, "guard": result.guard}
         print(f"[{qid}] {mode} {result.timings.get('total', 0):.1f} c"
               f"{' guard=' + ','.join(result.guard) if result.guard else ''}", file=sys.stderr, flush=True)
-        return qid, result.text, info
+        return i, result.text, info
 
+    saves = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        for i, (qid, text, info) in enumerate(pool.map(work, range(len(questions)))):
-            answers[i] = text
-            debug.append(info)
+        futures = [pool.submit(work, i) for i in range(len(questions))]
+        for fut in as_completed(futures):
+            i, text, info = fut.result()
+            debug[i] = info
+            saves += snapshot.update(i, text)
 
-    write_answers(OUTPUT, [(qid, a) for (qid, _), a in zip(questions, answers)])
+    snapshot.write()
     if debug_path:
         with open(debug_path, "w", encoding="utf-8") as f:
             for row in debug:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    fails = sum(1 for a in answers if a == FALLBACK)
-    modes = {m: sum(1 for d in debug if d.get("mode") == m) for m in ("normal", "fast", "offline")}
-    guarded = sum(1 for d in debug if d.get("guard"))
+    fails = sum(1 for a in snapshot.answers if a == FALLBACK)
+    modes = {m: sum(1 for d in debug if d and d.get("mode") == m) for m in ("normal", "fast", "offline")}
+    guarded = sum(1 for d in debug if d and d.get("guard"))
     print(f"Готово: {OUTPUT} ({len(questions)} ответов, запасных: {fails}, режимы: {modes}, "
-          f"исправлено проверкой: {guarded}) за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
+          f"исправлено проверкой: {guarded}, снимков CSV: {saves + 1}) за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":

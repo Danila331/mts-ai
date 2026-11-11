@@ -221,19 +221,29 @@ class Consultant:
         note = ""
         if not fast and env("EB_AMBIGUITY", "0") != "0":
             note = decision_note(self.ambiguity.classify(turns, materials, fast=fast))
-        if not note and env("EB_SLOTS", "1") != "0":
+        # Интент последней реплики → обязательная открывашка и правило вопроса (типы А–К).
+        dialog_text = "\n".join(t["content"] for t in turns)
+        last_user = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
+        _, _, intent_ask = ("", "", None)
+        if env("EB_INTENT", "1") != "0":
+            from .intent import classify_intent, intent_note
+            _, _, intent_ask = classify_intent(last_user)
+            inote = intent_note(last_user)
+            if inote:
+                note = inote
+        if env("EB_SLOTS", "1") != "0":
             # Детерминированная очередь слотов продукта: вопрос из базы, не из головы.
-            dialog_text = "\n".join(t["content"] for t in turns)
             product = product_from_dialog(dialog_text) or product_of([h.chunk.doc for h in hits])
-            last_user = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
             question = choose_question(product, dialog_text, last_user)
-            if question:
-                note = ("ОБЯЗАТЕЛЬНО закончи ответ уточняющим вопросом именно на эту тему "
-                        f"(своими словами): «{question}». Даже если примеры выше заканчиваются "
-                        "другим вопросом — тема важнее примера.")
-            elif product:
-                note = ("КАТЕГОРИЧЕСКИ не задавай уточняющий вопрос в конце: ответ закрыт "
-                        "или спрашивать нечего. Закончи утверждением.")
+            if question and intent_ask is not False:
+                note = (note + " " if note else "") + (
+                    "ОБЯЗАТЕЛЬНО закончи ответ уточняющим вопросом именно на эту тему "
+                    f"(своими словами): «{question}». Даже если примеры выше заканчиваются "
+                    "другим вопросом — тема важнее примера.")
+            elif product and intent_ask is not False:
+                note = (note + " " if note else "") + (
+                    "КАТЕГОРИЧЕСКИ не задавай уточняющий вопрос в конце: ответ закрыт "
+                    "или спрашивать нечего. Закончи утверждением.")
         prompt_text = system_prompt(materials, mode, examples="")  # примеры — сообщениями ниже
         if note:
             prompt_text += "\n\nРЕШЕНИЕ ПО ЭТОМУ ХОДУ\n" + note

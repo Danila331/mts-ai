@@ -33,6 +33,14 @@ EXPECTED = {
 }
 NO_QUESTION = {"demo-8", "demo-9", "demo-11", "demo-13", "demo-16"}
 
+# Обязательная открывашка эталона (первая строка ответа жюри), дословно.
+OPENINGS = {
+    "demo-1": "Да", "demo-2": "Да", "demo-3": "Да", "demo-4": "Старую", "demo-5": "Нет",
+    "demo-6": "Да", "demo-7": "Да", "demo-8": "Да", "demo-9": "Да", "demo-10": "Да",
+    "demo-11": "Да", "demo-12": "Да", "demo-13": "Да", "demo-14": "Может", "demo-15": "Начать",
+    "demo-16": "Да", "demo-17": "Для", "demo-18": "Конечно",
+}
+
 
 def main(path: str):
     answers = {r["id"]: r["answer"] for r in csv.DictReader(open(path, encoding="utf-8-sig"))}
@@ -57,6 +65,15 @@ def main(path: str):
     total = len(EXPECTED) + len(NO_QUESTION)
     print(f"\nтема вопроса совпала: {hit}/{len(EXPECTED)}; без лишних вопросов: {ok_none}/{len(NO_QUESTION)}; "
           f"итого: {hit + ok_none}/{total}")
+    # Открывашки против эталона (первая строка)
+    op_ok = 0
+    for qid, opening in OPENINGS.items():
+        a = answers.get(qid, "").strip()
+        if a.split()[0].rstrip(",.") == opening if a else False:
+            op_ok += 1
+        else:
+            print(f"✗ {qid}: открывашка «{a.split()[0] if a else '—'}» вместо «{opening}»")
+    print(f"открывашки совпали: {op_ok}/{len(OPENINGS)}")
 
 
 if __name__ == "__main__":
