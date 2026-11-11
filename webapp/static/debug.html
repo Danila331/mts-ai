@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Отладка — МТС EnergyTool</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 24px; color: #1d2023; }
+  h1 { font-size: 20px; } h2 { font-size: 16px; margin-top: 24px; }
+  .session { border: 1px solid #e3e4e8; border-radius: 12px; padding: 14px 16px; margin: 12px 0; }
+  .turn { border-top: 1px dashed #ddd; padding: 8px 0; font-size: 14px; }
+  .u { color: #6b7280; } .b { margin: 4px 0; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .err { color: #e30611; } table { border-collapse: collapse; } td, th { border: 1px solid #ddd; padding: 6px 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Экран проверки: сессии, ходы, заявки</h1>
+<div id="root">Загрузка…</div>
+<script>
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+fetch("/api/debug/overview").then(r => r.json()).then(data => {
+  const root = document.getElementById("root");
+  let html = `<h2>Заявки (${data.leads.length})</h2>`;
+  if (data.leads.length) {
+    html += "<table><tr><th>#</th><th>ФИО</th><th>Телефон</th><th>Компания</th><th>Резюме</th></tr>";
+    for (const l of data.leads)
+      html += `<tr><td>${l.id}</td><td>${esc(l.name)}</td><td>${esc(l.phone)}</td><td>${esc(l.company)}</td><td>${esc(l.summary)}</td></tr>`;
+    html += "</table>";
+  } else html += "<p>Заявок пока нет.</p>";
+  html += `<h2>Сессии (${data.sessions.length})</h2>`;
+  for (const s of data.sessions) {
+    html += `<div class="session"><b>${esc(s.id)}</b> · ${new Date(s.created_at*1000).toLocaleString()} ${s.closed ? "· закрыта" : ""}`;
+    for (const t of s.turns) {
+      const tm = t.timings && t.timings.total ? ` · ${(t.timings.total*1000)|0} мс` : "";
+      const src = (t.sources||[]).map(x => `<code>${esc(x[0])} · ${esc(x[1])}</code>`).join(" ");
+      html += `<div class="turn"><div class="u">👤 ${esc(t.user)}</div><div class="b">🤖 ${esc(t.bot)}</div>
+        <div class="u">${esc(t.status)} · ${esc(t.action)}${tm} ${t.error ? '· <span class="err">' + esc(t.error) + '</span>' : ""}</div>
+        <div>${src}</div></div>`;
+    }
+    html += "</div>";
+  }
+  root.innerHTML = html;
+});
+</script>
+</body>
+</html>

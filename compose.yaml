@@ -1,0 +1,19 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_BASE_URL
+      - LLM_API_KEY
+      - LLM_MODEL
+      - EMB_MODEL
+      - RERANKER_MODEL
+      - EB_USE_EMBEDDINGS
+      - EB_USE_RERANKER
+    volumes:
+      - webapp-data:/data
+    restart: unless-stopped
+
+volumes:
+  webapp-data:

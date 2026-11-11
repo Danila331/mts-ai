@@ -46,6 +46,35 @@ class Answer:
     timings: dict = field(default_factory=dict)
     error: str = ""
     guard: dict = field(default_factory=dict)  # что сработало в проверке ответа (для отладки)
+    action: str = ""  # answer | answer_clarify | boundary | specialist | error — исход хода
+    used_sources: list = field(default_factory=list)  # источники, чьи числа реально вошли в ответ
+
+
+def classify_action(text: str, error: str) -> str:
+    """Машинный исход ответа: веб и стенд различают ответ/границу/сбой без разбора текста."""
+    if error:
+        return "error"
+    if text == FALLBACK or "в моих материалах нет" in text:
+        return "boundary"
+    if "специалист" in text.lower():
+        return "specialist"
+    if text.rstrip().endswith("?"):
+        return "answer_clarify"
+    return "answer"
+
+
+def used_sources(sources: list, chunks: list, answer: str) -> list:
+    """Источники, реально использованные в ответе: числа раздела встречаются в тексте ответа
+    либо совпадает заголовок раздела. Проверяемо, в отличие от «модель сказала источник»."""
+    from .guard import numbers
+    ans_nums = numbers(answer)
+    used = []
+    for c in chunks:
+        shared = ans_nums & numbers(c.text)
+        if shared or (c.path and c.path.split(">")[0].strip().lower() in answer.lower()):
+            used.append((c.doc, c.path, sorted(shared)))
+    source_ids = {(d, p) for d, p, _ in sources}
+    return [u for u in used if (u[0], u[1]) in source_ids]
 
 
 def extractive(chunks: list, max_words: int = 55) -> str:
@@ -143,7 +172,9 @@ class Consultant:
             materials = self.add_key_sentences(materials, chunks, turns)
         if offline:
             timings["total"] = time.perf_counter() - t0
-            return Answer(extractive(chunks) or FALLBACK, sources, timings, "без модели: лимит времени")
+            text_off = extractive(chunks) or FALLBACK
+            return Answer(text_off, sources, timings, "без модели: лимит времени",
+                          action=classify_action(text_off, "offline"))
         # Классификатор неоднозначности: что известно, чего нет, какой вопрос задать.
         note = ""
         if not fast and env("EB_AMBIGUITY", "0") != "0":
@@ -193,8 +224,11 @@ class Consultant:
             timings["guard"] = time.perf_counter() - t2
         timings["total"] = time.perf_counter() - t0
         if not text:
-            return Answer(extractive(chunks) or FALLBACK, sources, timings, error or "пустой ответ", guard)
-        return Answer(text, sources, timings, "", guard)
+            fallback = extractive(chunks) or FALLBACK
+            err = error or "пустой ответ"
+            return Answer(fallback, sources, timings, err, guard, classify_action(fallback, err))
+        return Answer(text, sources, timings, "", guard, classify_action(text, ""),
+                      used_sources(sources, chunks, text))
 
     def try_calc(self, turns: list) -> str:
         """Детерминированный расчёт (calc.py): если вопрос распознан как операция,
