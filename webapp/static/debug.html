@@ -15,7 +15,15 @@
 </head>
 <body>
 <h1>Экран проверки: сессии, ходы, заявки</h1>
+<div id="stats"></div>
+<p><a href="/api/debug/leads.csv">⬇ Экспорт заявок (CSV)</a></p>
 <div id="root">Загрузка…</div>
+<script>
+fetch("/api/debug/stats").then(r => r.json()).then(s => {
+  document.getElementById("stats").innerHTML =
+    `<b>Сессий:</b> ${s.sessions} · <b>с диалогом:</b> ${s.sessions_with_turns} · <b>заявок:</b> ${s.leads} · <b>resolution rate:</b> ${s.resolution_rate ?? "—"}`;
+});
+</script>
 <script>
 function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
 fetch("/api/debug/overview").then(r => r.json()).then(data => {

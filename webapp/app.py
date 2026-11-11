@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -21,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from energybot.llm import Api, env, env_num
 from energybot.pipeline import Consultant
+from energybot.slots import QUEUES, product_of
 
 from .db import Store
 
@@ -36,6 +38,17 @@ SUMMARY_PROMPT = """Составь краткое резюме диалога к
 {dialog}"""
 
 PHONE = re.compile(r"^[+0-9][\d\s()\-]{6,20}$")
+
+
+def lead_ready(turns: list, sources: list) -> bool:
+    """Заявка уместна, когда из диалога подтверждены ≥2 слота продукта (практика B2B:
+    предлагать форму после пары собранных фактов, а не на первой реплике)."""
+    product = product_of([s[0] for s in sources if s and s[0]])
+    if not product or product not in QUEUES:
+        return False
+    dialog = "\n".join(t["content"] for t in turns)
+    known = sum(1 for _, _, known_re in QUEUES[product] if re.search(known_re, dialog, re.I))
+    return known >= 2
 
 
 def is_boundary(text: str, error: str) -> bool:
@@ -173,6 +186,8 @@ def create_app(consultant: Consultant, store: Store) -> FastAPI:
                     suggest_lead = True
             return {"text": result.text, "sources": result.sources,
                     "used_sources": result.used_sources, "suggest_lead": suggest_lead,
+                    "lead_ready": lead_ready(history + [{"role": "user", "content": body.message}],
+                                             result.sources),
                     "timings_ms": {k: round(v * 1000) for k, v in result.timings.items()},
                     "error": result.error, "status": "done", "request_id": body.request_id}
         finally:
@@ -202,6 +217,40 @@ def create_app(consultant: Consultant, store: Store) -> FastAPI:
     @app.get("/api/debug/overview")
     def debug_overview():
         return store.overview()
+
+    @app.get("/api/debug/stats")
+    def debug_stats():
+        """Resolution rate: доля сессий, где диалог завершился заявкой или без единой
+        границы/сбоя. Метрика для финальной защиты и еженедельного разбора."""
+        data = store.overview()
+        sessions = data["sessions"]
+        resolved = 0
+        for s in sessions:
+            turns = [t for t in s["turns"] if t["status"] == "done"]
+            if not turns:
+                continue
+            boundaries = sum(1 for t in turns if is_boundary(t["bot"], t["error"]))
+            has_lead = any(l["session_id"] == s["id"] for l in data["leads"])
+            if has_lead or boundaries == 0:
+                resolved += 1
+        active = sum(1 for s in sessions if s["turns"])
+        return {"sessions": len(sessions), "sessions_with_turns": active,
+                "resolved": resolved, "leads": len(data["leads"]),
+                "resolution_rate": round(resolved / active, 3) if active else None}
+
+    @app.get("/api/debug/leads.csv")
+    def leads_csv():
+        """Экспорт заявок для менеджера (CSV, UTF-8 BOM для Excel)."""
+        import io
+        import csv as _csv
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(["id", "session_id", "name", "phone", "company", "summary", "created_at"])
+        for l in store.overview()["leads"]:
+            w.writerow([l["id"], l["session_id"], l["name"], l["phone"], l["company"],
+                        l["summary"], time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(l["created_at"]))])
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8")
 
     return app
 

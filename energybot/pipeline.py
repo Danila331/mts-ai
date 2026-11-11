@@ -142,6 +142,17 @@ class Consultant:
         turns = parse(question) if isinstance(question, str) else question
         hits, chunks = self.retrieve(turns, query_vec, fast=fast or offline)
         timings["retrieval"] = time.perf_counter() - t0
+        # Порог релевантности + корректирующий повтор (CRAG-lite): «лучше ноль чанков,
+        # чем слабые». Если топ ниже порога — один перезапрос с переформулировкой;
+        # всё ещё слабо — честная граница без генерации из мусора.
+        min_score = env_num("EB_MIN_SCORE", 0.01, 0.0, 1.0, float)
+        if not fast and not offline and hits and float(hits[0].score) < min_score:
+            hits2, chunks2 = self.corrective_retry(turns)
+            if hits2 and float(hits2[0].score) >= min_score:
+                hits, chunks = hits2, chunks2
+            else:
+                timings["total"] = time.perf_counter() - t0
+                return Answer(FALLBACK, [], timings, "")
         # Эксперимент 3: LLM-отбор фрагментов перед генерацией (EB_LLM_SELECT=1).
         if not fast and not offline and env("EB_LLM_SELECT") == "1":
             chunks = self.select_chunks(chunks, turns)
@@ -292,6 +303,24 @@ class Consultant:
             return tidy(self.api.chat(gen_messages)), ""
         except Exception as exc:  # noqa: BLE001
             return "", f"{type(exc).__name__}: {exc}"
+
+    def corrective_retry(self, turns: list):
+        """Одна переформулировка запроса и повторный поиск (при слабом ретриве)."""
+        from .dialog import search_queries
+        last = search_queries(turns)[2]
+        try:
+            rewritten = tidy(self.api.chat([
+                {"role": "system", "content": "Переформулируй запрос клиента для поиска по базе знаний "
+                                              "энергетических продуктов: коротко, терминами, без ответа."},
+                {"role": "user", "content": last},
+            ], max_tokens=150))
+            if not rewritten or rewritten.lower() == last.lower():
+                return [], []
+            print(f"[retrieval] корректирующий перезапрос: {rewritten[:80]}", file=sys.stderr)
+            return self.retrieve([{"role": "user", "content": rewritten}], fast=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[retrieval] перезапрос не удался: {exc}", file=sys.stderr)
+            return [], []
 
     def verify(self, messages: list, draft_a: str, ensemble: bool = True) -> str:
         """Второй проход: при наличии времени — второй черновик при другой температуре,
