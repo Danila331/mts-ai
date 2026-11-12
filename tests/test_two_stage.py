@@ -95,6 +95,18 @@ class TwoStageTest(unittest.TestCase):
                     "1 000 кВт·ч по 8 ₽/кВт·ч за месяц.")
         self.assertIn("8 000 ₽", self.bot.try_calc(parse(question)))
 
+    def test_solar_roof_variants_use_the_indicative_calculator(self):
+        for roof in ("скатной кровле", "плоской кровле", "плоской крыше", "крыше"):
+            with self.subTest(roof=roof):
+                note = self.bot.try_calc(parse(f"Сколько стоит сетевая солнечная станция на 60 кВт на {roof}?"))
+                self.assertIn("ДЕТЕРМИНИРОВАННЫЙ РАСЧЁТ", note)
+                self.assertIn("4 200 000 ₽", note)
+                self.assertIn("не итоговая цена", note)
+        for config in ("гибридная солнечная станция на 60 кВт на крыше",
+                       "сетевая солнечная станция на 60 кВт на фасаде"):
+            with self.subTest(config=config):
+                self.assertIn("ГРАНИЦА РАСЧЁТА", self.bot.try_calc(parse(f"Сколько стоит {config}?")))
+
     def test_calculator_resumes_after_customer_provides_rate(self):
         turns = parse("Клиент: Посчитайте экономию при замещении 1 000 кВт·ч.\n"
                       "Ассистент: Какая ставка и период?\n"
