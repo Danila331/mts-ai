@@ -132,6 +132,59 @@ class TwoStageTest(unittest.TestCase):
         spoken = parse("Можно на оптовый рынок? Мощность семьсот двадцать кВт.")
         self.assertIn("720 кВт", self.bot.try_calc(spoken))
 
+    def test_threshold_uses_power_from_previous_turn(self):
+        turns = parse("Клиент: У нас присоединённая мощность 900 кВт.\n"
+                      "Ассистент: Какая у вас задача?\n"
+                      "Клиент: Можем выйти на оптовый рынок?")
+        note = self.bot.try_calc(turns)
+        self.assertIn("900 кВт", note)
+        self.assertIn("посредника", note)
+
+    def test_threshold_requests_power_when_unknown(self):
+        note = self.bot.try_calc(parse("Можем выйти на оптовый рынок?"))
+        self.assertIn("ДЛЯ РАСЧЁТА НЕ ХВАТАЕТ", note)
+        self.assertIn("мощность", note)
+
+    def test_threshold_requires_connection_for_multiple_sites(self):
+        turns = parse("У нас две площадки, суммарная присоединённая мощность 900 кВт. "
+                      "Можем выйти на оптовый рынок?")
+        note = self.bot.try_calc(turns)
+        self.assertIn("ДЛЯ РАСЧЁТА НЕ ХВАТАЕТ", note)
+        self.assertIn("электрическая связность", note)
+        turns = parse("У нас две площадки по 400 и 500 кВт. Можно объединить для выхода на оптовый рынок?")
+        self.assertIn("электрическая связность", self.bot.try_calc(turns))
+        turns += [{"role": "assistant", "content": "Есть ли электрическая связность?"},
+                  {"role": "user", "content": "Площадки электрически не связаны."}]
+        self.assertIn("проверка выполняется отдельно", self.bot.try_calc(turns))
+        turns[-1]["content"] = "Площадки электрически связаны."
+        self.assertIn("связность", self.bot.try_calc(turns))
+        turns[-1]["content"] = "Площадки электрически связаны. К сети подключены на 10 кВ."
+        self.assertIn("связность", self.bot.try_calc(turns))
+        turns[-1]["content"] = "Площадки электрически связаны по 0,4 кВ."
+        self.assertIn("мощность", self.bot.try_calc(turns))
+
+    def test_threshold_combines_only_confirmed_connected_total(self):
+        turns = parse("Клиент: Две площадки суммарно имеют 900 кВт. Можем выйти на оптовый рынок?\n"
+                      "Ассистент: Есть ли электрическая связность хотя бы по 0,4 кВ?\n"
+                      "Клиент: Да, площадки электрически связаны по 0,4 кВ.")
+        note = self.bot.try_calc(turns)
+        self.assertIn("900 кВт", note)
+        self.assertIn("посредника", note)
+
+    def test_threshold_checks_plural_sites_and_individual_power(self):
+        turns = parse("Можем выйти на оптовый рынок, если объединить площадки общей мощностью 900 кВт?")
+        self.assertIn("связность", self.bot.try_calc(turns))
+        turns = parse("Две площадки электрически связаны по 0,4 кВ. "
+                      "У каждой по 500 кВт. Можем выйти на оптовый рынок?")
+        self.assertIn("мощность", self.bot.try_calc(turns))
+        self.assertIn("НЕ ХВАТАЕТ", self.bot.try_calc(turns))
+
+    def test_threshold_in_isolated_region_needs_no_power(self):
+        note = self.bot.try_calc(parse("Можем выйти на оптовый рынок на Камчатке?"))
+        self.assertIn("оптовый рынок не функционирует", note)
+        note = self.bot.try_calc(parse("Мы не на Камчатке, мощность 900 кВт. Можем выйти на оптовый рынок?"))
+        self.assertIn("регион не указан", note)
+
     def test_calculator_is_not_blocked_by_low_retrieval_score(self):
         hits, chunks = self.bot.retrieve()
         self.bot.retrieve.return_value = [Hit(hits[0].chunk, 0.001, "rerank")], chunks

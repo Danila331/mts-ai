@@ -9,7 +9,7 @@ OPERATIONS = {
     "threshold_check", "solar_indicative_cost", "platform_indicative_cost",
     "energy_savings", "bill_compare", "simple_payback", "solar_maintenance",
 }
-ISOLATED = {"камчатка", "магадан", "сахалин", "чукотка"}
+ISOLATED = {"камчат", "магадан", "сахалин", "чукот"}
 FIELD_QUESTIONS = {
     "power_value": "Какая у вас присоединённая мощность и в каких единицах она указана?",
     "station_type": "Какая станция нужна: сетевая для снижения платежа или гибридная с накопителями?",
@@ -29,7 +29,7 @@ FIELD_QUESTIONS = {
 AMOUNT = r"(-?\d+(?:[ \u202f\u00a0]\d{3})*(?:[.,]\d+)?)"
 RUBLES = r"\s*(?:₽|руб(?:\.|ль|ля|лей)?)(?!\w)"
 PARAMETERS_BY_OPERATION = {
-    "threshold_check": {"power_value", "power_unit", "region"},
+    "threshold_check": {"power_value", "power_unit", "region", "sites", "electrically_connected"},
     "solar_indicative_cost": {"power_value", "power_unit", "station_type", "placement"},
     "platform_indicative_cost": {"device_count", "explicit_scenario"},
     "energy_savings": {"replaced_kwh", "rate_rub_per_kwh", "period"},
@@ -51,8 +51,7 @@ def infer_operation(text: str) -> str:
             and re.search(r"сравни|разниц|измен|вырос|подорож|сниз|было[^\n]*стало", q) \
             and re.search(r"плат[её]ж|сч[её]т(?:[ауе]|ов|ами)?\b|было[^\n]*стало", q):
         return "bill_compare"
-    if re.search(r"\bопт\b|оптов", q) and re.search(r"можно|можем|допуск|пройд|проходим|хватит|достаточ|подход", q) \
-            and re.search(r"\d", q) and not re.search(r"суммир|площад|объект[ыо]в|по отдельн", q):
+    if re.search(r"\bопт\b|оптов", q) and re.search(r"можно|можем|допуск|пройд|проходим|хватит|достаточ|подход", q):
         return "threshold_check"
     if requested and re.search(r"обслуж|очистк", q) and re.search(r"панел|станц", q):
         return "solar_maintenance"
@@ -77,7 +76,16 @@ def extract_parameters(operation: str, text: str) -> dict:
         AMOUNT + r"\s*(кВт|МВт|киловатт|мегаватт)(?![·*\-]?\s*ч)",
         text, re.I,
     ))
-    power = next(iter(powers)) if len(powers) == 1 else None
+    shared_unit = re.search(
+        r"\d+(?:[.,]\d+)?\s+(?:и|или)\s+\d+(?:[.,]\d+)?\s*"
+        r"(?:кВт|МВт|киловатт|мегаватт)(?![·*\-]?\s*ч)",
+        text, re.I,
+    )
+    per_site = re.search(
+        r"\bпо\s+\d+(?:[.,]\d+)?\s*(?:кВт|МВт|киловатт|мегаватт)(?![·*\-]?\s*ч)",
+        text, re.I,
+    )
+    power = next(iter(powers)) if len(powers) == 1 and not shared_unit and not per_site else None
     if power:
         params["power_value"] = "".join(power[0].split()).replace(",", ".")
         params["power_unit"] = "MW" if power[1].lower().startswith("м") else "kW"
@@ -102,9 +110,29 @@ def extract_parameters(operation: str, text: str) -> dict:
     if after is not None:
         params["after_total"] = after
     if operation == "threshold_check":
-        region = next((name for name in ISOLATED if name in text.lower()), "")
+        region = ""
+        for match in re.finditer(r"\b(?:камчат|магадан|сахалин|чукот)\w*", text, re.I):
+            prefix = text[max(0, match.start() - 12):match.start()].lower()
+            if not re.search(r"\bне\s+(?:на\s+|в\s+)?$", prefix):
+                region = match.group()
+                break
         if region:
             params["region"] = region
+        sites = _number(r"(\d+)\s*(?:площадк\w*|объект\w*|завод\w*)", text)
+        if sites:
+            params["sites"] = sites
+        elif re.search(r"(?:суммир|объедин|сложи)\w*[^.!?\n]*"
+                       r"(?:площадк\w*|объект\w*|завод\w*)|"
+                       r"(?:площадок|площадки|объектов|объекты|заводов|заводы)"
+                       r"[^.!?\n]*(?:суммир|объедин|сложи)", text, re.I):
+            params["sites"] = 2
+        if re.search(r"(?:нет\s+электрическ\w*\s+связ|электрическ\w*\s+не\s+связан)", text, re.I):
+            params["electrically_connected"] = False
+        elif re.search(r"электрическ\w*\s+связан", text, re.I):
+            voltage = _number(r"электрическ\w*\s+связан\w*\s+(?:по|на)\s*"
+                              r"(\d+(?:[.,]\d+)?)\s*кВ\b", text)
+            if voltage is not None:
+                params["electrically_connected"] = Decimal(voltage) >= Decimal("0.4")
     if operation == "solar_indicative_cost":
         if re.search(r"гибрид|накопител", text, re.I):
             params["station_type"] = "hybrid"
@@ -208,6 +236,14 @@ def calculate(request: dict) -> dict:
             params[key] = request[key]
     try:
         if operation == "threshold_check":
+            region = str(params.get("region", "")).lower()
+            if any(name in region for name in ISOLATED):
+                return _result(operation, False, "eligible", "В этой изолированной энергосистеме оптовый рынок не функционирует, поэтому выход на него недоступен.")
+            sites = params.get("sites", 1)
+            if int(sites) > 1 and params.get("electrically_connected") is not True:
+                if params.get("electrically_connected") is False:
+                    return _result(operation, False, "eligible", "Без электрической связности начиная с 0,4 кВ нельзя суммировать мощность площадок: проверка выполняется отдельно для каждой.")
+                return _needs(operation, ["electrical_connection"])
             if params.get("power_kw") is None and params.get("power_value") is None:
                 return _needs(operation, ["power_value"])
             try:
@@ -216,14 +252,6 @@ def calculate(request: dict) -> dict:
                 return _invalid(operation, "Для порога нужна присоединённая мощность в кВт или МВт, а не потребление в кВт·ч.", ["power_value"])
             if kw < 0:
                 return _invalid(operation, "Мощность не может быть отрицательной.", ["power_value"])
-            sites = params.get("sites", 1)
-            if int(sites) > 1 and params.get("electrically_connected") is not True:
-                if params.get("electrically_connected") is False:
-                    return _result(operation, False, "eligible", "Площадки без электрической связности нельзя суммировать по мощности: проверка выполняется отдельно для каждой.")
-                return _needs(operation, ["electrical_connection"])
-            region = str(params.get("region", "")).lower()
-            if any(name in region for name in ISOLATED):
-                return _result(operation, False, "eligible", "В этой изолированной энергосистеме оптовый рынок не функционирует, поэтому выход на него недоступен.")
             if kw < 750:
                 mode = "ниже порога 750 кВт: выход на оптовый рынок невозможен"
             elif kw < 20000:

@@ -352,7 +352,10 @@ class Consultant:
             for previous in reversed(users[:-1]):
                 previous_op = infer_operation(normalize_user_quantities(previous))
                 if previous_op:
-                    if any(extract_parameters(previous_op, last).values()):
+                    updates = extract_parameters(previous_op, last)
+                    if (any(value is not None and (value is not False or key == "electrically_connected")
+                            for key, value in updates.items())
+                            or (previous_op == "threshold_check" and re.search(r"электрическ\w*\s+связан", last, re.I))):
                         op = previous_op
                     break
                 if "?" in previous:
@@ -366,7 +369,8 @@ class Consultant:
             0,
         )
         params = extract_parameters(op, normalize_user_quantities("\n".join(users[scope_start:])))
-        params.update((key, value) for key, value in extract_parameters(op, last).items() if value)
+        params.update((key, value) for key, value in extract_parameters(op, last).items()
+                      if value is not None and (value is not False or key == "electrically_connected"))
         result = calculate({"operation": op, "parameters": params})
         status = result.get("status")
         if status == "ok":
