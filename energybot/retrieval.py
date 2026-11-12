@@ -101,15 +101,17 @@ class Retriever:
     # ---------- поиск ----------
     def candidates(self, query: str, query_vec=None, n: int = 20) -> list:
         lex = self.bm25.scores(tokens(query, expand=True))
-        ranks = [np.argsort(-lex)]
+        matched = np.flatnonzero(lex > 0)
+        ranks = [matched[np.argsort(-lex[matched], kind="stable")]]
         # Несовпадение размерности = индекс посчитан другой моделью: работаем на BM25.
         if self.vectors is not None and query_vec is not None \
                 and len(query_vec) == self.vectors.shape[1]:
             q = np.asarray(query_vec, dtype=np.float32)
-            q /= np.linalg.norm(q) + 1e-9
-            with np.errstate(all="ignore"):
-                sims = np.nan_to_num(self.vectors @ q, nan=0.0, posinf=0.0, neginf=0.0)
-            ranks.append(np.argsort(-sims))
+            norm = np.linalg.norm(q)
+            if np.isfinite(norm) and norm > 0:
+                with np.errstate(all="ignore"):
+                    sims = np.nan_to_num(self.vectors @ (q / norm), nan=0.0, posinf=0.0, neginf=0.0)
+                ranks.append(np.argsort(-sims, kind="stable"))
         # Reciprocal Rank Fusion.
         fused = Counter()
         for order in ranks:
@@ -124,8 +126,10 @@ class Retriever:
         if rerank and self.api is not None and self.api.can_rerank and hits:
             try:
                 scores = self.api.rerank(rerank_query or query, [h.chunk.render() for h in hits])
-                hits = [Hit(h.chunk, scores[i], "rerank") for i, h in enumerate(hits)]
-                hits.sort(key=lambda h: -h.score)
+                ranked = [Hit(h.chunk, score, "rerank")
+                          for h, score in zip(hits, scores) if math.isfinite(score)]
+                if ranked:
+                    return sorted(ranked, key=lambda h: -h.score)
             except Exception as exc:  # noqa: BLE001
                 print(f"[retrieval] реранкер недоступен: {exc}", file=sys.stderr)
         return hits
@@ -164,12 +168,12 @@ class Retriever:
         for c in self.kb.chunks:
             if c.doc.endswith(ALWAYS_DOC) and c.path in ALWAYS_SECTIONS:
                 add(rules, c)
-        # Лучший справочный раздел по запросу (карта продуктов, цифры, границы, расчёт).
+        # Справочные разделы могут дополнять друг друга: условия и входные данные.
         if ref_query and self.ref_bm25:
             scores = self.ref_bm25.scores(tokens(ref_query, expand=True))
-            best = int(np.argmax(scores)) if scores.size else -1
-            if best >= 0 and scores[best] > 0:
-                add(rules, self.ref_chunks[best])
+            for index in np.argsort(-scores, kind="stable")[:2]:
+                if scores[index] > 0:
+                    add(rules, self.ref_chunks[index])
 
         extra = []
         if expand_docs > 0:
@@ -180,7 +184,8 @@ class Retriever:
             top_docs = [d for d, _ in sorted(doc_score.items(), key=lambda x: -x[1])[:expand_docs]]
             rank_pos = {h.chunk.id: i for i, h in enumerate(ranked)}
             pool = [c for c in self.kb.chunks if c.doc in top_docs and c.id not in seen]
-            pool.sort(key=lambda c: rank_pos.get(c.id, len(ranked) + self.order[c.id]))
+            lexical = self.bm25.scores(tokens(ref_query, expand=True))
+            pool.sort(key=lambda c: (rank_pos.get(c.id, len(ranked)), -lexical[self.order[c.id]]))
             size = sum(len(c.render()) for c in main + rules)
             for c in pool:
                 length = len(c.render())

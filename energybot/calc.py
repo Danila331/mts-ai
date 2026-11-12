@@ -26,21 +26,38 @@ FIELD_QUESTIONS = {
     "electrical_connection": "Есть ли электрическая связность между площадками хотя бы по 0,4 кВ?",
 }
 
+AMOUNT = r"(-?\d+(?:[ \u202f\u00a0]\d{3})*(?:[.,]\d+)?)"
+RUBLES = r"\s*(?:₽|руб(?:\.|ль|ля|лей)?)(?!\w)"
+PARAMETERS_BY_OPERATION = {
+    "threshold_check": {"power_value", "power_unit", "region"},
+    "solar_indicative_cost": {"power_value", "power_unit", "station_type", "placement"},
+    "platform_indicative_cost": {"device_count", "explicit_scenario"},
+    "energy_savings": {"replaced_kwh", "rate_rub_per_kwh", "period"},
+    "bill_compare": {"before_total", "after_total"},
+    "simple_payback": {"investment_rub", "annual_net_effect_rub", "explicit_scenario"},
+    "solar_maintenance": {"panel_cost_rub"},
+}
+
 
 def infer_operation(text: str) -> str:
     q = text.lower()
-    if re.search(r"окуп|payback", q) and re.search(r"посчит|рассчит|какая|какой|сколько", q) \
+    requested = re.search(r"посчит|рассчит|подсчит|вычисл|сколько|во сколько|на сколько|насколько|какая разниц", q)
+    if re.search(r"окуп|payback", q) and requested \
             and re.search(r"сценар|условн|допустим|пусть|инвестиц|вложен", q):
         return "simple_payback"
-    if re.search(r"вырос|измен|было.*стало|сравни.*сч[её]т|разниц.*сч[её]т", q):
-        return "bill_compare"
-    if re.search(r"сэконом|сниж|замест|замен", q) and re.search(r"квт|ставк|тариф|₽|руб", q):
+    if requested and re.search(r"сэконом|экономи|замест|замен|снижен", q) and re.search(r"квт|ставк|тариф|₽|руб", q):
         return "energy_savings"
-    if re.search(r"опт|оптов|проходим|подходим.*мощност|750", q) and re.search(r"\d", q):
+    if (requested or re.search(r"\bсравни(?:те)?\b", q)) \
+            and re.search(r"сравни|разниц|измен|вырос|подорож|сниз|было[^\n]*стало", q) \
+            and re.search(r"плат[её]ж|сч[её]т(?:[ауе]|ов|ами)?\b|было[^\n]*стало", q):
+        return "bill_compare"
+    if re.search(r"\bопт\b|оптов", q) and re.search(r"можно|можем|допуск|пройд|проходим|хватит|достаточ|подход", q) \
+            and re.search(r"\d", q) and not re.search(r"суммир|площад|объект[ыо]в|по отдельн", q):
         return "threshold_check"
-    if re.search(r"обслуж|очистк", q) and re.search(r"панел|станц", q):
+    if requested and re.search(r"обслуж|очистк", q) and re.search(r"панел|станц", q):
         return "solar_maintenance"
-    if re.search(r"панел|станц|солнеч", q) and re.search(r"сколько|стоим|цен", q):
+    if re.search(r"панел|станц|солнеч", q) and re.search(r"стоим|стоит|цен|ценник", q) \
+            and re.search(r"\d+\s*(?:кВт|МВт)\b", text, re.I):
         return "solar_indicative_cost"
     if re.search(r"прибор|сч[её]тчик|платформ", q) and re.search(r"сколько|стоим|цен", q) \
             and re.search(r"сценар|условн|допустим|пусть|по справочному ориентиру|по ориентиру", q):
@@ -49,28 +66,37 @@ def infer_operation(text: str) -> str:
 
 
 def _number(pattern: str, text: str):
-    match = re.search(pattern, text, re.I)
-    return match.group(1).replace(" ", "").replace(",", ".") if match else None
+    values = {"".join(match.group(1).split()).replace(",", ".") for match in re.finditer(pattern, text, re.I)}
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def extract_parameters(operation: str, text: str) -> dict:
     """Осторожное извлечение явно названных значений для fallback-ветки."""
     params = {}
-    power = re.search(r"(\d+(?:[.,]\d+)?)\s*(кВт|МВт|киловатт|мегаватт)(?![·*\-]?\s*ч)", text, re.I)
+    powers = set(re.findall(
+        AMOUNT + r"\s*(кВт|МВт|киловатт|мегаватт)(?![·*\-]?\s*ч)",
+        text, re.I,
+    ))
+    power = next(iter(powers)) if len(powers) == 1 else None
     if power:
-        params["power_value"] = power.group(1).replace(",", ".")
-        params["power_unit"] = "MW" if power.group(2).lower().startswith(("м", "m")) else "kW"
-    energy = _number(r"(\d[\d\s]*(?:[.,]\d+)?)\s*кВт[·*]?ч", text)
+        params["power_value"] = "".join(power[0].split()).replace(",", ".")
+        params["power_unit"] = "MW" if power[1].lower().startswith("м") else "kW"
+    energy = _number(
+        r"(?:замещ\w*|замен\w*|снижен\w*\s+на)\s+" + AMOUNT + r"\s*кВт[·*\-]?ч", text,
+    )
     if energy:
         params["replaced_kwh"] = energy
-    rate = _number(r"(\d+(?:[.,]\d+)?)\s*(?:₽|руб)[/\s]*(?:за)?\s*кВт[·*]?ч", text)
+    rate = _number(AMOUNT + RUBLES + r"\s*(?:/|за)\s*кВт[·*\-]?ч", text)
     if rate:
         params["rate_rub_per_kwh"] = rate
+    period = re.search(r"\b(?:за|в)\s+(месяц|год|сутки|неделю)\b", text, re.I)
+    if period:
+        params["period"] = period.group(1).lower()
     devices = _number(r"(\d+)\s*(?:прибор|сч[её]тчик)", text)
     if devices:
         params["device_count"] = devices
-    before = _number(r"(?:было|был)[^\d]*(\d[\d\s]*(?:[.,]\d+)?)", text)
-    after = _number(r"(?:стало|стала)[^\d]*(\d[\d\s]*(?:[.,]\d+)?)", text)
+    before = _number(r"\bбыл[оаи]?\s+" + AMOUNT + RUBLES, text)
+    after = _number(r"\bстал[оаи]?\s+" + AMOUNT + RUBLES, text)
     if before is not None:
         params["before_total"] = before
     if after is not None:
@@ -97,7 +123,15 @@ def extract_parameters(operation: str, text: str) -> dict:
     if operation in ("simple_payback", "platform_indicative_cost"):
         params["explicit_scenario"] = bool(re.search(
             r"сценар|условн|допустим|пусть|по справочному ориентиру|по ориентиру", text, re.I))
-    return params
+    if operation == "simple_payback":
+        params["investment_rub"] = _number(r"(?:инвестици\w*|вложени\w*)\s*[—:–]?\s*" + AMOUNT + RUBLES, text)
+        params["annual_net_effect_rub"] = _number(
+            r"(?:чист\w*\s+эффект|чист\w*\s+экономи\w*)\s*[—:–]?\s*" + AMOUNT + RUBLES + r"\s+в год",
+            text,
+        )
+    if operation == "solar_maintenance":
+        params["panel_cost_rub"] = _number(r"панели\s+сто[ия]т\s+" + AMOUNT + RUBLES, text)
+    return {key: value for key, value in params.items() if key in PARAMETERS_BY_OPERATION.get(operation, ())}
 
 
 def decimal_value(value) -> Decimal:

@@ -20,9 +20,10 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from energybot.dialog import parse, search_queries  # noqa: E402
+from energybot.guard import normalize_user_quantities, strip_sentences, unknown_numbers  # noqa: E402
 from energybot.kb import KnowledgeBase, normalize_tables  # noqa: E402
 from energybot.llm import strip_thinking  # noqa: E402
-from energybot.pipeline import tidy  # noqa: E402
+from energybot.pipeline import Consultant, tidy  # noqa: E402
 from mock_api import MockApi  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "eval"))
@@ -83,6 +84,37 @@ class DialogTest(unittest.TestCase):
 
 
 class PostprocessTest(unittest.TestCase):
+    def test_guard_keeps_equivalent_units_and_ranges(self):
+        self.assertEqual(unknown_numbers("От 5 до 10 лет и 25 000 рублей.",
+                                         "5–10 лет, цена 25 000 ₽."), [])
+        self.assertEqual(unknown_numbers("Расход 850 кВт·ч.", "Расход 850 кВт-ч."), [])
+        self.assertEqual(unknown_numbers("Обслуживается более 6 000 приборов.",
+                                         "- Показатель: Приборы в системе; Значение: более 6 000; Оговорка: Архив."), [])
+
+    def test_guard_distinguishes_energy_and_power_including_small_values(self):
+        answer = "Мощность 2 МВт. Расход 850 кВт·ч. Мощность на шине 850 кВт."
+        bad = unknown_numbers(answer, "2 прибора. Мощность на шине 850 кВт.")
+        self.assertEqual(bad, ["2 мвт", "850 квтч"])
+        self.assertEqual(strip_sentences(answer, bad), "Мощность на шине 850 кВт.")
+
+    def test_guard_expands_numeric_scales(self):
+        answer = "Стоимость составит 2,5 млн рублей. Итог согласуют отдельно."
+        bad = unknown_numbers(answer, "Ориентир — 5 000 рублей за прибор.")
+        self.assertIn("2500000", bad)
+        self.assertEqual(strip_sentences(answer, bad), "Итог согласуют отдельно.")
+        self.assertEqual(unknown_numbers("Потребление 2,5 млн кВт·ч.", "Потребление 2 500 000 кВт·ч."), [])
+        self.assertEqual(unknown_numbers("400 тыс. кВт·ч.", "400 тысяч киловатт-часов."), [])
+        self.assertEqual(unknown_numbers("3–5 млн рублей.", "От 3 000 000 до 5 000 000 ₽."), [])
+
+    def test_spoken_quantities_from_customer_allow_matching_digits(self):
+        facts = normalize_user_quantities("Около сорока приборов и семьдесят пять объектов. Два года архива.")
+        self.assertEqual(unknown_numbers("У вас около 40 приборов, 75 объектов и 2 года архива.", facts), [])
+        self.assertEqual(unknown_numbers("Около 40 кВт.", facts), ["40 квт"])
+        self.assertIn("двадцать тридцать приборов", normalize_user_quantities("двадцать тридцать приборов"))
+        facts = normalize_user_quantities("Нужна станция кВт на 320.")
+        self.assertEqual(unknown_numbers("Мощность станции 320 кВт.", facts), [])
+        self.assertIn("кВт на 320 приборов", normalize_user_quantities("кВт на 320 приборов"))
+
     def test_strip_thinking(self):
         self.assertEqual(strip_thinking("<think>a\nb</think>\nОтвет"), "Ответ")
         self.assertEqual(strip_thinking("<think>не закрыто"), "")
@@ -190,6 +222,17 @@ class GuardTest(unittest.TestCase):
     BAD = "Ориентир — 25 000 руб в год за прибор. Итого проект обойдётся в 3 750 000 рублей. Сколько у вас объектов?"
     GOOD = "Ориентир — 25 000 руб в год за прибор, на объёмных внедрениях стоимость считается отдельно. Сколько у вас объектов?"
 
+    def test_assistant_history_is_not_a_numeric_source(self):
+        turns = [
+            {"role": "assistant", "content": "Проект стоит 987 654 рублей."},
+            {"role": "user", "content": "Это окончательная цена?"},
+        ]
+        text, guard = Consultant.check(
+            None, "Окончательная цена — 987 654 рублей.", [], "", turns, fast=True,
+        )
+        self.assertNotIn("987 654", text)
+        self.assertEqual(guard["stripped"], ["987654"])
+
     def test_invented_number_triggers_repair(self):
         def responder(messages):
             # Хороший ответ отдаём только на ремонт guard'а; черновики и проверка — плохие.
@@ -213,7 +256,7 @@ class GuardTest(unittest.TestCase):
             result = _consultant(mock).answer(self.QUESTION)
             calls = mock.calls["chat"]
         self.assertEqual((result.text, result.guard), (self.GOOD, {}))
-        self.assertEqual(calls, 4)  # фактическая основа, ответ, ансамбль и самопроверка
+        self.assertEqual(calls, 3)  # ответ, ансамбль и самопроверка
 
 
 class EmbeddingBatchTest(unittest.TestCase):

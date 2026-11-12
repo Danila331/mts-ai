@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from energybot.dialog import parse
 from energybot.kb import Chunk
 from energybot.pipeline import Consultant
-from energybot.prompts import ORGANIZER_EXAMPLES, build_write_messages, filter_examples
+from energybot.prompts import build_write_messages, filter_examples, static_example_pairs
 from energybot.retrieval import Hit
 
 
@@ -73,14 +73,85 @@ class TwoStageTest(unittest.TestCase):
                 self.assertEqual(answer.draft, "")
                 self.assertEqual(self.bot.api.chat.call_count, 1)
 
-    def test_leave_one_out_for_every_demo_and_dialog_turn(self):
-        for question, answer in ORGANIZER_EXAMPLES:
+    def test_single_stage_does_not_pass_other_customer_examples(self):
+        self.bot.api.chat.return_value = "Платформа собирает данные."
+        with patch.dict("os.environ", {"EB_TWO_STAGE": "0"}):
+            self.bot.answer("Что делает платформа?")
+        messages = self.bot.api.chat.call_args.args[0]
+        self.assertEqual([message["role"] for message in messages], ["system", "user"])
+
+    def test_calculator_reads_only_customer_values_and_current_request(self):
+        turns = parse("Клиент: Посчитайте экономию за месяц.\n"
+                      "Ассистент: Возьмём ставку 11 ₽/кВт·ч.\n"
+                      "Клиент: Посчитайте экономию от замещения 1 000 кВт·ч.")
+        note = self.bot.try_calc(turns)
+        self.assertIn("ДЛЯ РАСЧЁТА НЕ ХВАТАЕТ", note)
+        self.assertIn("ставку", note)
+        turns.append({"role": "user", "content": "Почему вообще растут счета?"})
+        self.assertEqual(self.bot.try_calc(turns), "")
+
+    def test_calculator_uses_replaced_energy_and_explicit_rate(self):
+        question = ("Потребляем 3 000 кВт·ч в месяц. Посчитайте экономию при замещении "
+                    "1 000 кВт·ч по 8 ₽/кВт·ч за месяц.")
+        self.assertIn("8 000 ₽", self.bot.try_calc(parse(question)))
+
+    def test_calculator_resumes_after_customer_provides_rate(self):
+        turns = parse("Клиент: Посчитайте экономию при замещении 1 000 кВт·ч.\n"
+                      "Ассистент: Какая ставка и период?\n"
+                      "Клиент: 8 ₽/кВт·ч за месяц.")
+        self.assertIn("8 000 ₽", self.bot.try_calc(turns))
+        with patch.dict("os.environ", {"EB_CALC": "1"}):
+            self.assertIn("8 000 ₽", self.bot.answer(turns, offline=True).text)
+
+    def test_calculator_resumes_after_multiple_answers(self):
+        turns = parse("Клиент: Посчитайте экономию при замещении 1 000 кВт·ч.\n"
+                      "Ассистент: Какая ставка?\n"
+                      "Клиент: 8 ₽/кВт·ч.\n"
+                      "Ассистент: За какой период?\n"
+                      "Клиент: За месяц.")
+        self.assertIn("8 000 ₽", self.bot.try_calc(turns))
+
+    def test_offline_calculator_returns_missing_input(self):
+        question = "Посчитайте экономию при замещении 1 000 кВт·ч за месяц."
+        with patch.dict("os.environ", {"EB_CALC": "1"}):
+            answer = self.bot.answer(question, offline=True)
+        self.assertIn("ставку", answer.text)
+
+    def test_calculator_does_not_reuse_inputs_for_another_object(self):
+        turns = parse("Клиент: Посчитайте экономию при замещении 1 000 кВт·ч по 8 ₽/кВт·ч за месяц.\n"
+                      "Ассистент: Экономия по сценарию рассчитана.\n"
+                      "Клиент: Для другого объекта посчитайте экономию при замещении 500 кВт·ч за месяц.")
+        note = self.bot.try_calc(turns)
+        self.assertIn("ДЛЯ РАСЧЁТА НЕ ХВАТАЕТ", note)
+        self.assertIn("ставку", note)
+
+    def test_calculator_reads_power_when_unit_precedes_number(self):
+        turns = parse("Можно на оптовый рынок? Присоединение кВт на 720.")
+        self.assertIn("720 кВт", self.bot.try_calc(turns))
+        self.assertIn("невозможен", self.bot.try_calc(turns))
+        spoken = parse("Можно на оптовый рынок? Мощность семьсот двадцать кВт.")
+        self.assertIn("720 кВт", self.bot.try_calc(spoken))
+
+    def test_calculator_is_not_blocked_by_low_retrieval_score(self):
+        hits, chunks = self.bot.retrieve()
+        self.bot.retrieve.return_value = [Hit(hits[0].chunk, 0.001, "rerank")], chunks
+        self.bot.corrective_retry = Mock()
+        self.bot.api.chat.return_value = "Расчётная экономия — 8 000 ₽."
+        question = "Посчитайте экономию при замещении 1 000 кВт·ч по 8 ₽/кВт·ч за месяц."
+        with patch.dict("os.environ", {"EB_CALC": "1", "EB_TWO_STAGE": "0"}):
+            answer = self.bot.answer(question)
+        self.bot.corrective_retry.assert_not_called()
+        self.assertIn("8 000 ₽", answer.text)
+
+    def test_leave_one_out_for_style_examples_and_dialog_turn(self):
+        examples = static_example_pairs()
+        for question, answer in examples:
             with self.subTest(question=question[:60]):
                 turns = parse(question)
-                self.assertNotIn((question, answer), filter_examples(ORGANIZER_EXAMPLES, turns))
+                self.assertNotIn((question, answer), filter_examples(examples, turns))
                 self.assertNotIn(answer, build_write_messages("материалы", turns, "черновик")[0]["content"])
-                if len(turns) > 1:
-                    self.assertNotIn((question, answer), filter_examples(ORGANIZER_EXAMPLES, [turns[-1]]))
+        question = "Пользователь: Какая у вас кровля?\nАссистент: Уточните тип.\nПользователь: Плоская."
+        self.assertEqual(filter_examples([(question, "Пример")], parse("Плоская.")), [])
 
 
 if __name__ == "__main__":

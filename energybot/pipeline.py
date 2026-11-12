@@ -11,12 +11,11 @@ from pathlib import Path
 from .ambiguity import AmbiguityClassifier, decision_note
 from .calc import calculate, extract_parameters, infer_operation
 from .dialog import parse, search_queries
-from .gold_examples import GoldenExamples
 from .slots import choose_question, product_from_dialog, product_of
-from .guard import MAX_WORDS, SENTENCE, repair_instruction, strip_sentences, unknown_numbers, word_count
+from .guard import MAX_WORDS, SENTENCE, normalize_user_quantities, repair_instruction, strip_sentences, unknown_numbers, word_count
 from .kb import KnowledgeBase
 from .llm import Api, env, env_num
-from .prompts import build_draft_messages, build_write_messages, filter_examples, system_prompt
+from .prompts import build_draft_messages, build_write_messages, system_prompt
 from .retrieval import Retriever
 
 FALLBACK = (
@@ -30,7 +29,7 @@ VERIFY_INSTRUCTION = """[Служебная проверка.] Выше — мо
 2. Ответ должен прямо отвечать на ПОСЛЕДНЮЮ реплику клиента; если в ней несколько вопросов — закрыть все.
 3. Полнота: если в МАТЕРИАЛАХ есть важная оговорка или ограничение по теме вопроса, а ответ её упустил — добавь. Второстепенные факты не добавляй.
 4. Тональность — как в МАТЕРИАЛАХ: не категоричнее и не мягче.
-5. 25–40 слов, обычный текст; уточняющий вопрос в конце — только если для следующего шага нужны данные клиента.
+5. Сохрани прямой вывод, все части ответа и условия, важные для клиента. Уточняющий вопрос уместен, когда недостающие данные меняют вывод или следующий шаг.
 Выбери более точный черновик или объедини их, исправь найденные ошибки и выведи только итоговый ответ клиенту, без пояснений.
 
 Черновик А:
@@ -121,14 +120,8 @@ class Consultant:
         self.dense = self.retriever.vectors is not None
         self.top_k = env_num("EB_TOP_K", 10, 1, 30)
         self.n_candidates = env_num("EB_N_CANDIDATES", 20, 5, 60)
-        self.expand_docs = env_num("EB_EXPAND_DOCS", 1, 0, 3)
-        self.context_chars = env_num("EB_CONTEXT_CHARS", 10000, 2000, 60000)
-        # Динамический few-shot: ближайшие эталоны жюри по эмбеддингу вопроса.
-        self.golden = None
-        if env("EB_DYNAMIC_FEWSHOT", "1") != "0" and self.api.configured:
-            self.golden = GoldenExamples(self.api)
-            if self.golden.vecs is None:
-                self.golden = None
+        self.expand_docs = env_num("EB_EXPAND_DOCS", 2, 0, 3)
+        self.context_chars = env_num("EB_CONTEXT_CHARS", 18000, 2000, 60000)
         self.ambiguity = AmbiguityClassifier(self.api)
         print(
             f"[consultant] фрагментов: {len(self.kb.chunks)}, dense: {self.dense}, "
@@ -146,15 +139,14 @@ class Consultant:
             return [None] * len(semantic_queries)
 
     def retrieve(self, turns: list, query_vec=None, fast: bool = False):
-        lexical, semantic, last = search_queries(turns)
+        lexical, semantic, _ = search_queries(turns)
         if query_vec is None and self.dense and not fast:
             query_vec = self.embed_queries([semantic])[0]
-        self._last_qvec = query_vec  # для динамического few-shot
         ranked = self.retriever.search(lexical, query_vec, rerank_query=semantic, n_candidates=self.n_candidates,
                                        rerank=not fast)
         # CRAG PARTIAL: после реранкера выбрасываем INCORRECT-чанки (скор ниже порога)
         # из контекста всегда — мусор в контексте становится выдумкой в ответе.
-        if not fast:
+        if not fast and ranked and ranked[0].stage == "rerank":
             min_chunk = env_num("EB_CHUNK_MIN", 0.05, 0.0, 1.0, float)
             filtered = [h for h in ranked if float(h.score) >= min_chunk]
             if filtered:
@@ -186,7 +178,7 @@ class Consultant:
             pat_by_product = dict(DIALOG_PRODUCT)
             doc_product = {f"20-products/{name}": p for name, p in PRODUCT_BY_DOC.items()}
             for doc in dict.fromkeys(product_docs):
-                for linked in graph.get(doc, ()):
+                for linked in sorted(graph.get(doc, ())):
                     if added >= 2:
                         break
                     linked_full = linked if "/" in linked else f"20-products/{linked}"
@@ -223,15 +215,16 @@ class Consultant:
         timings = {}
         t0 = time.perf_counter()
         turns = parse(question) if isinstance(question, str) else question
+        calc_note = self.try_calc(turns) if env("EB_CALC", "1") != "0" else ""
         hits, chunks = self.retrieve(turns, query_vec, fast=fast or offline)
         timings["retrieval"] = time.perf_counter() - t0
         # Порог релевантности + корректирующий повтор (CRAG-lite): «лучше ноль чанков,
         # чем слабые». Если топ ниже порога — один перезапрос с переформулировкой;
         # всё ещё слабо — честная граница без генерации из мусора.
         min_score = env_num("EB_MIN_SCORE", 0.01, 0.0, 1.0, float)
-        if not fast and not offline and hits and float(hits[0].score) < min_score:
+        if not fast and not offline and not calc_note and hits and hits[0].stage == "rerank" and hits[0].score < min_score:
             hits2, chunks2 = self.corrective_retry(turns)
-            if hits2 and float(hits2[0].score) >= min_score:
+            if hits2 and hits2[0].stage == "rerank" and hits2[0].score >= min_score:
                 hits, chunks = hits2, chunks2
             else:
                 timings["total"] = time.perf_counter() - t0
@@ -240,62 +233,58 @@ class Consultant:
         if not fast and not offline and env("EB_LLM_SELECT") == "1":
             chunks = self.select_chunks(chunks, turns)
         sources = [(h.chunk.doc, h.chunk.path, round(float(h.score), 4)) for h in hits]
-        sources += [(c.doc, c.path, None) for c in chunks[len(hits):]]
-        materials = "\n\n".join(c.render() for c in chunks)
-        # Детерминированный калькулятор: распознанные расчёты идут мимо LLM-арифметики.
-        calc_note = ""
-        if env("EB_CALC", "1") != "0":
-            calc_note = self.try_calc(turns)
-            if calc_note:
-                materials = calc_note + "\n\n" + materials
+        ranked_ids = {h.chunk.id for h in hits}
+        sources += [(c.doc, c.path, None) for c in chunks if c.id not in ranked_ids]
+        materials = self.render_materials(chunks)
+        if calc_note:
+            materials = calc_note + "\n\n" + materials
+        if not hits and not calc_note:
+            timings["total"] = time.perf_counter() - t0
+            return Answer(FALLBACK, [], timings, "")
         # Эксперимент 2: реранкер по предложениям топ-чанков (EB_SENT_RERANK=1).
         if not fast and not offline and env("EB_SENT_RERANK") == "1":
             materials = self.add_key_sentences(materials, chunks, turns)
         if offline:
             timings["total"] = time.perf_counter() - t0
-            text_off = extractive(chunks) or FALLBACK
+            if calc_note:
+                text_off = calc_note.partition("\n")[2] or calc_note.partition("): ")[2]
+            else:
+                text_off = extractive(chunks) or FALLBACK
             return Answer(text_off, sources, timings, "без модели: лимит времени")
         # Классификатор неоднозначности: что известно, чего нет, какой вопрос задать.
         note = ""
         if not fast and env("EB_AMBIGUITY", "0") != "0":
             note = decision_note(self.ambiguity.classify(turns, materials, fast=fast))
         # Интент последней реплики → обязательная открывашка и правило вопроса (типы А–К).
-        dialog_text = "\n".join(t["content"] for t in turns)
-        last_user = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
+        user_turns = [t["content"] for t in turns if t["role"] == "user"]
+        dialog_text = "\n".join(user_turns)
+        last_user = user_turns[-1] if user_turns else ""
         _, _, intent_ask = ("", "", None)
-        if env("EB_INTENT", "1") != "0":
+        if env("EB_INTENT", "0") != "0":
             from .intent import classify_intent, intent_note
             _, _, intent_ask = classify_intent(last_user)
             inote = intent_note(last_user)
             if inote:
-                note = inote
+                note = " ".join(part for part in (note, inote) if part)
         if env("EB_SLOTS", "1") != "0":
             # Детерминированная очередь слотов продукта: вопрос из базы, не из головы.
             product = product_from_dialog(dialog_text) or product_of([h.chunk.doc for h in hits])
             question = choose_question(product, dialog_text, last_user)
-            if question and intent_ask is not False:
+            if question and intent_ask is not False and not calc_note:
                 note = (note + " " if note else "") + (
-                    "ОБЯЗАТЕЛЬНО закончи ответ уточняющим вопросом именно на эту тему "
-                    f"(своими словами): «{question}». Даже если примеры выше заканчиваются "
-                    "другим вопросом — тема важнее примера.")
-            elif product and intent_ask is not False:
-                note = (note + " " if note else "") + (
-                    "КАТЕГОРИЧЕСКИ не задавай уточняющий вопрос в конце: ответ закрыт "
-                    "или спрашивать нечего. Закончи утверждением.")
+                    "Если этот параметр нужен для вывода или следующего шага, "
+                    f"можно спросить: «{question}». Если вопрос клиента уже закрыт, закончи ответ.")
         prompt_text = system_prompt(materials, mode, examples="")  # примеры — сообщениями ниже
         if note:
             prompt_text += "\n\nРЕШЕНИЕ ПО ЭТОМУ ХОДУ\n" + note
         messages = [{"role": "system", "content": prompt_text}]
-        # Few-shot примеры как user/assistant-пары (LangChain: сообщения > строка в system).
-        for q, a in self._example_pairs(mode, turns):
-            messages += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         messages += turns
         t1 = time.perf_counter()
         text, error, draft, written = "", "", "", ""
-        if not fast and env("EB_TWO_STAGE", "1") != "0":
+        if not fast and env("EB_TWO_STAGE", "0") == "1":
             try:
                 draft_chunks = self._close_graph([h.chunk for h in hits], turns)
-                draft_materials = "\n\n".join(c.render() for c in draft_chunks)
+                draft_materials = self.render_materials(draft_chunks)
                 if calc_note:
                     draft_materials = calc_note + "\n\n" + draft_materials
                 draft = self.api.chat(build_draft_messages(draft_materials, turns)).strip()
@@ -310,7 +299,7 @@ class Consultant:
                 if written:
                     messages = write_messages
                     text = written
-        if not text and not fast and env("EB_TWO_STAGE", "1") == "0" and env("EB_FACTS_COMPOSE") == "1":
+        if not text and not fast and env("EB_TWO_STAGE", "0") == "0" and env("EB_FACTS_COMPOSE") == "1":
             # Эксперимент 4: ответ собирается из извлечённых фактов, без полного контекста.
             text, error = self.compose_from_facts(turns, mode, materials)
         for attempt in range(1 if fast else 2):
@@ -327,13 +316,11 @@ class Consultant:
         # Второй проход ТОЛЬКО по сигналу (Future AGI: рефлексия на всём трафике не окупается):
         # слабый ретрив, обрезанный/длинный ответ, подозрительные числа — иначе пропускаем.
         if text and not fast and env("EB_VERIFY", "1") != "0":
-            dialog = "\n".join(t["content"] for t in turns)
-            weak = bool(hits) and float(hits[0].score) < env_num("EB_VERIFY_SCORE", 0.5, 0.0, 1.0, float)
-            not_direct = self._expects_direct(turns) and not re.match(
-                r"^(да|нет|можно|нельзя|пока нет|начать|начни|конечно|не совсем|не обязательно)\b",
-                text.lower())
-            suspect = bool(unknown_numbers(text, materials, dialog)) or word_count(text) > MAX_WORDS \
-                or not_direct
+            weak = bool(hits) and hits[0].stage == "rerank" and hits[0].score < env_num(
+                "EB_VERIFY_SCORE", 0.5, 0.0, 1.0, float
+            )
+            facts = normalize_user_quantities(dialog_text)
+            suspect = bool(unknown_numbers(text, materials, facts)) or word_count(text) > MAX_WORDS
             if weak or suspect:
                 text = self.verify(messages, text, ensemble=env("EB_ENSEMBLE", "1") != "0")
         timings["generation"] = time.perf_counter() - t1
@@ -349,14 +336,38 @@ class Consultant:
             return Answer(fallback, sources, timings, err, guard, draft=draft, write=written)
         return Answer(text, sources, timings, "", guard, used_sources(sources, chunks, text), draft, written)
 
+    @staticmethod
+    def render_materials(chunks: list) -> str:
+        return "\n\n".join(chunk.render() for chunk in chunks)
+
     def try_calc(self, turns: list) -> str:
         """Детерминированный расчёт (calc.py): если вопрос распознан как операция,
         считает без LLM и возвращает блок для контекста. Ноль — значит не наш случай."""
-        dialog = "\n".join(t["content"] for t in turns)
-        op = infer_operation(dialog)
+        users = [t["content"] for t in turns if t["role"] == "user"]
+        if not users:
+            return ""
+        last = normalize_user_quantities(users[-1])
+        op = infer_operation(last)
+        if not op and len(users) > 1 and "?" not in last:
+            for previous in reversed(users[:-1]):
+                previous_op = infer_operation(normalize_user_quantities(previous))
+                if previous_op:
+                    if any(extract_parameters(previous_op, last).values()):
+                        op = previous_op
+                    break
+                if "?" in previous:
+                    break
         if not op:
             return ""
-        result = calculate({"operation": op, "parameters": extract_parameters(op, dialog)})
+        scope_start = next(
+            (i for i in range(len(users) - 1, -1, -1)
+             if re.search(r"\b(?:друг\w*|нов\w*|следующ\w*)\s+"
+                          r"(?:объект\w*|площадк\w*|регион\w*|филиал\w*)", users[i], re.I)),
+            0,
+        )
+        params = extract_parameters(op, normalize_user_quantities("\n".join(users[scope_start:])))
+        params.update((key, value) for key, value in extract_parameters(op, last).items() if value)
+        result = calculate({"operation": op, "parameters": params})
         status = result.get("status")
         if status == "ok":
             return ("ДЕТЕРМИНИРОВАННЫЙ РАСЧЁТ (посчитано инструментом, не моделью; "
@@ -364,16 +375,9 @@ class Consultant:
         if status == "needs_input":
             return ("ДЛЯ РАСЧЁТА НЕ ХВАТАЕТ (спроси это в уточняющем вопросе, "
                     "сам не додумывай): " + "; ".join(result.get("questions", [])))
-        return ""  # invalid/unsupported — обычный ответ по материалам
-
-    def _example_pairs(self, mode: str, turns: list) -> list:
-        """Пары few-shot: ближайшие эталоны жюри, фолбэк — статические. В eval пропускаем
-        самосовпадение (локально вопрос совпадает с эталонным, на платформе вопросы скрытые)."""
-        from .prompts import static_example_pairs
-        if self.golden is None:
-            return filter_examples(static_example_pairs(), turns)
-        pairs = self.golden.pick_pairs(getattr(self, "_last_qvec", None), skip_self=True)
-        return filter_examples(pairs or static_example_pairs(), turns)
+        if status in ("invalid", "unsupported"):
+            return "ГРАНИЦА РАСЧЁТА (не вычисляй итог самостоятельно): " + result.get("reason", "")
+        return ""
 
     def select_chunks(self, chunks: list, turns: list) -> list:
         """Эксперимент 3: LLM выбирает, какие фрагменты нужны для ответа. Сбой → все."""
@@ -443,7 +447,7 @@ class Consultant:
             if not rewritten or rewritten.lower() == last.lower():
                 return [], []
             print(f"[retrieval] корректирующий перезапрос: {rewritten[:80]}", file=sys.stderr)
-            return self.retrieve([{"role": "user", "content": rewritten}], fast=True)
+            return self.retrieve(turns[:-1] + [{"role": "user", "content": rewritten}])
         except Exception as exc:  # noqa: BLE001
             print(f"[retrieval] перезапрос не удался: {exc}", file=sys.stderr)
             return [], []
@@ -478,22 +482,18 @@ class Consultant:
             return draft_a
 
     def check(self, text: str, messages: list, materials: str, turns: list, fast: bool) -> tuple:
-        """Числа — только из материалов и диалога, длина — в разумных пределах,
-        на вопрос «да/нет» — прямой ответ первым словом (скелет эталона жюри)."""
-        dialog = "\n".join(t["content"] for t in turns)
+        """Проверяет числовые данные и длину ответа."""
+        dialog = normalize_user_quantities("\n".join(t["content"] for t in turns if t["role"] == "user"))
         bad = unknown_numbers(text, materials, dialog)
         too_long = word_count(text) > MAX_WORDS
-        not_direct = self._expects_direct(turns) and not re.match(
-            r"^(да|нет|можно|нельзя|пока нет|начать|начни|конечно|не совсем|не обязательно)\b",
-            text.lower())
-        if not bad and not too_long and not not_direct:
+        if not bad and not too_long:
             return text, {}
-        guard = {"unknown_numbers": bad, "too_long": too_long, "not_direct": not_direct}
+        guard = {"unknown_numbers": bad, "too_long": too_long}
         if not fast:
             try:
                 fixed = tidy(self.api.chat(messages + [
                     {"role": "assistant", "content": text},
-                    {"role": "user", "content": repair_instruction(bad, too_long, not_direct)},
+                    {"role": "user", "content": repair_instruction(bad, too_long)},
                 ]))
                 if fixed:
                     text, guard["repaired"] = fixed, True
@@ -502,13 +502,6 @@ class Consultant:
         still_bad = unknown_numbers(text, materials, dialog)
         if still_bad:
             stripped = strip_sentences(text, still_bad)
-            if word_count(stripped) >= 8:
-                text, guard["stripped"] = stripped, still_bad
+            text = stripped if stripped and not unknown_numbers(stripped, materials, dialog) else FALLBACK
+            guard["stripped"] = still_bad
         return text, guard
-
-    @staticmethod
-    def _expects_direct(turns: list) -> bool:
-        """Последняя реплика — вопрос, предполагающий «да/нет»."""
-        last = next((t["content"] for t in reversed(turns) if t["role"] == "user"), "")
-        return bool(re.search(r"(можно|стоит ли|подойд|подходит|подходим|выгодн|хватит|есть ли|сможете|"
-                              r"предлагаете|разбер[её]т|проверите|переносится|работает|\bли\b)", last.lower()))
