@@ -54,6 +54,7 @@ type Lead struct {
 	Passport           []byte
 	Score              []byte
 	CallbackPreference []byte
+	Kind               string
 }
 
 type Session struct {

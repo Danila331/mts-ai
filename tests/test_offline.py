@@ -150,6 +150,25 @@ class PostprocessTest(unittest.TestCase):
         self.assertIn("ниже откроется форма", CHAT_MODE)
         self.assertIn("Никогда не пиши, что заявка уже отправлена", CHAT_MODE)
 
+    def test_chat_lead_kinds_only_in_chat(self):
+        """Типы заявки (T17): блок только в режиме chat, автопроверка и копилот его не видят; факты — из базы."""
+        from energybot.prompts import CHAT_LEAD_KINDS, build_messages, build_write_messages
+        turns = [{"role": "user", "content": "Нужен учёт на складе"}]
+        block = CHAT_LEAD_KINDS.strip()
+        for style in ("tight", "full", "recipe", "jury", "jury2"):
+            for mode in ("eval", "copilot"):
+                for msgs in (build_messages("СПР", "МАТ", turns, mode, style=style),
+                             build_write_messages("МАТ", turns, "ч", mode)):
+                    self.assertNotIn(block, "\n".join(m["content"] for m in msgs), (style, mode))
+            self.assertIn(block, "\n".join(m["content"] for m in build_messages("СПР", "МАТ", turns, "chat", style=style)))
+        kb = " ".join((KB_DIR / "00-reference/03-calculation-and-requests.md").read_text(encoding="utf-8").split())
+        kb += " " + " ".join((KB_DIR / "20-products/22-askue.md").read_text(encoding="utf-8").split())
+        for fact in ("не является коммерческим предложением", "один прибор из пяти", "Демо-кабинет предоставляется по запросу",
+                     "Конкретное время подготовки результата заранее не обещается",
+                     "если клиенту удобнее устно описать объект или требуется разобрать сложную схему",
+                     "Нельзя обещать точное время звонка, имя специалиста"):
+            self.assertIn(fact, kb)
+
     def test_tidy_removes_markdown(self):
         self.assertEqual(tidy("Консультант: **Да**, можно:\n- раз\n- два\nВопрос?"), "Да, можно: раз два Вопрос?")
 

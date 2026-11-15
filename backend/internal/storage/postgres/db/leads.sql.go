@@ -14,8 +14,8 @@ import (
 
 const createLead = `-- name: CreateLead :one
 INSERT INTO leads (code, name, phone, company, comment, summary, summary_source, messages, request_id,
-                   session_id, passport, score, callback_preference)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                   session_id, passport, score, callback_preference, kind)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 RETURNING id, created_at
 `
 
@@ -33,6 +33,7 @@ type CreateLeadParams struct {
 	Passport           []byte
 	Score              []byte
 	CallbackPreference []byte
+	Kind               string
 }
 
 type CreateLeadRow struct {
@@ -55,6 +56,7 @@ func (q *Queries) CreateLead(ctx context.Context, arg CreateLeadParams) (CreateL
 		arg.Passport,
 		arg.Score,
 		arg.CallbackPreference,
+		arg.Kind,
 	)
 	var i CreateLeadRow
 	err := row.Scan(&i.ID, &i.CreatedAt)

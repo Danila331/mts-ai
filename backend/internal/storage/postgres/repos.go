@@ -121,6 +121,7 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 		Score:         scored,
 		// Предпочтение по времени звонка (T4), не запись на время.
 		CallbackPreference: callback,
+		Kind:               leadKind(l.Kind),
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == "leads_code_uq" {
@@ -150,6 +151,14 @@ func (s *Store) UpdateLeadSummary(ctx context.Context, l *lead.Lead) error {
 		return errLeadNotFound
 	}
 	return nil
+}
+
+// leadKind — пустой тип — обратный звонок, как у заявок до типов.
+func leadKind(k lead.Kind) string {
+	if k == "" {
+		return string(lead.KindCallback)
+	}
+	return string(k)
 }
 
 // summarySource — пустой источник — это список вопросов: так заявка

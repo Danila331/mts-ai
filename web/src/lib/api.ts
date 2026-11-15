@@ -1,4 +1,5 @@
 import type { CallbackPreference } from "./callback";
+import type { LeadKind } from "./lead-kinds";
 import type { PageInfo } from "./page-context";
 import type { AnswerPayload, ChatMode, Health, KbData, Passport, RagSettings, Retrieval, SettingValue, Turn } from "./types";
 
@@ -109,9 +110,11 @@ export async function sendLead(body: {
   session_id?: string;
   /** Удобное время звонка (T4): часть дня и часовой пояс — пожелание, а не запись на время. */
   callback?: CallbackPreference;
+  /** Тип заявки (T17); без него — обратный звонок. */
+  kind?: LeadKind;
   /** Согласие на обработку персональных данных — на том же шаге, что и контакты. */
   consent: boolean;
-}): Promise<{ id: string; summary: string }> {
+}): Promise<{ id: string; summary: string; kind?: LeadKind }> {
   const res = await fetch(`${BASE}/lead`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/Danila331/mts-ai/backend/internal/apperr"
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	"github.com/Danila331/mts-ai/backend/internal/lead/score"
@@ -69,16 +70,22 @@ func (s *Service) WithPassports(p Passports) *Service {
 // контакты, которые клиент подтвердил в карточке. Сессии нет или база не
 // ответила — заявка уходит без паспорта (view == nil): она важнее.
 // Паспорт возвращается и в этом случае — пустой, для скоринга.
-func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) (passport.Passport, *passport.View) {
+//
+// Тип заявки проверяется здесь же, до записи в паспорт: демо-кабинет и
+// пилот годятся, только если в разговоре обсуждали платформу учёта.
+func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) (passport.Passport, *passport.View, error) {
 	empty := passport.Parse(nil)
 	if s.passports == nil || l.SessionID == "" {
-		return empty, nil
+		return empty, nil, checkKind(l.Kind, nil)
 	}
 	log := zerolog.Ctx(ctx)
 	p, err := s.passports.LoadPassport(ctx, l.SessionID)
 	if err != nil {
 		log.Warn().Err(err).Str("session_id", l.SessionID).Msg("заявка без паспорта")
-		return empty, nil
+		return empty, nil, checkKind(l.Kind, nil)
+	}
+	if err := checkKind(l.Kind, p.Candidates); err != nil {
+		return empty, nil, err
 	}
 	now := time.Now()
 	for key, v := range map[string]string{"name": l.Name, "phone": l.Phone, "company": l.Company,
@@ -94,7 +101,21 @@ func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) (passport.Pa
 	if raw, err := json.Marshal(view); err == nil {
 		l.Passport = raw
 	}
-	return p, &view
+	return p, &view, nil
+}
+
+// checkKind — тип заявки годится для продуктов из паспорта (lead.KindsFor).
+func checkKind(k lead.Kind, candidates []passport.Candidate) error {
+	if k.Allowed(candidates) {
+		return nil
+	}
+	return apperr.Invalidf("«" + k.Label() + "» — только для платформы учёта, а в разговоре её не обсуждали. " +
+		"Выберите обратный звонок или предварительную оценку")
+}
+
+// kindLine — тип заявки первой строкой резюме: менеджер видит его сразу.
+func kindLine(k lead.Kind) string {
+	return "Тип заявки: " + k.Label() + "\n"
 }
 
 // callbackLine — удобное время отдельной строкой в конце резюме: его
@@ -154,6 +175,9 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 	if c.Callback, err = c.Callback.Normalize(); err != nil {
 		return lead.Lead{}, err
 	}
+	if c.Kind, err = lead.ParseKind(string(c.Kind)); err != nil {
+		return lead.Lead{}, err
+	}
 
 	// Клиент, закрывший вкладку после «Отправить», заявку уже отправил:
 	// отмена запроса не должна её терять. Потолок свой.
@@ -170,14 +194,17 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 		RequestID:     requestid.From(ctx),
 		SessionID:     sessionID,
 	}
-	p, view := s.attachPassport(ctx, &l)
+	p, view, err := s.attachPassport(ctx, &l)
+	if err != nil {
+		return lead.Lead{}, err
+	}
 	// Скоринг — правилами, до записи: заявка сохраняется сразу с оценкой.
 	// Клиент нажал «Отправить» с согласием — значит, сам просит связаться.
 	l.Score = score.Of(score.Input{Passport: p, Turns: turns, Agreed: true})
 	if line := missingLine(l.Score); line != "" {
 		l.Summary += "\n" + line
 	}
-	l.Summary += callbackLine(l.Callback)
+	l.Summary = kindLine(l.Kind) + l.Summary + callbackLine(l.Callback)
 	for attempt := 0; attempt < codeAttempts; attempt++ {
 		l.Code = lead.NewCode()
 		err = s.repo.CreateLead(ctx, &l)
@@ -194,7 +221,7 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 
 	// Контакты в журнал не пишутся: там телефоны.
 	log.Info().Str("lead_code", l.Code).Str("summary_source", string(l.SummarySource)).
-		Str("grade", string(l.Score.Grade)).Int("points", l.Score.Points).
+		Str("kind", string(l.Kind)).Str("grade", string(l.Score.Grade)).Int("points", l.Score.Points).
 		Int("turns", len(turns)).Dur("took", time.Since(started)).Msg("заявка принята")
 	return l, nil
 }
@@ -227,7 +254,7 @@ func (s *Service) summarize(ctx context.Context, l *lead.Lead, turns []dialog.Tu
 	}
 
 	updated := *l
-	updated.Summary, updated.SummarySource = text+callbackLine(l.Callback), lead.SummaryLLM
+	updated.Summary, updated.SummarySource = kindLine(l.Kind)+text+callbackLine(l.Callback), lead.SummaryLLM
 	if err := s.repo.UpdateLeadSummary(ctx, &updated); err != nil {
 		// Клиенту показываем то же, что увидит менеджер, — то, что в базе.
 		log.Error().Err(err).Str("lead_code", l.Code).Msg("резюме моделью не записано — в заявке список вопросов")

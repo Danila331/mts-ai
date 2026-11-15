@@ -40,7 +40,9 @@ const UI_FILES = [
   "../components/chat/callback-picker.tsx",
   "../components/chat/consent.tsx",
   "../components/chat/chat-view.tsx",
+  "../components/chat/lead-kind-picker.tsx",
   "./callback.ts",
+  "./lead-kinds.ts",
 ];
 
 describe("T4: удобное время вместо записи на время", () => {

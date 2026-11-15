@@ -67,6 +67,8 @@ type Contacts struct {
 	Comment string
 	// Callback — удобное время для звонка (T4): предпочтение, не запись.
 	Callback Callback
+	// Kind — тип заявки (T17); пусто — обратный звонок.
+	Kind Kind
 }
 
 // Normalize подрезает поля до пределов.
@@ -82,6 +84,9 @@ func (c Contacts) Normalize() Contacts {
 		// Часть дня проверяет сценарий (Callback.Normalize): неизвестная —
 		// отказ, а не подрезка.
 		Callback: c.Callback,
+		// Тип проверяет сценарий (ParseKind, KindsFor): он зависит от
+		// продуктов из паспорта.
+		Kind: c.Kind,
 	}
 }
 

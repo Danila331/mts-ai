@@ -31,7 +31,9 @@ export const CALLBACK_PLAIN = "Менеджер свяжется с вами.";
 export const LEAD_SAVED = `${LEAD_SAVED_TITLE}. ${CALLBACK_NOTED}`;
 
 export const callbackNote = (c: CallbackPreference) => (c.time ? CALLBACK_NOTED : CALLBACK_PLAIN);
-export const leadSavedText = (c: CallbackPreference) => `${LEAD_SAVED_TITLE}. ${callbackNote(c)}`;
+/** Текст после отправки; note — оговорка типа заявки (T17, lead-kinds.ts), например про предварительную оценку. */
+export const leadSavedText = (c: CallbackPreference, note = "") =>
+  `${LEAD_SAVED_TITLE}. ${note ? `${note} ` : ""}${callbackNote(c)}`;
 
 /** Часовые пояса России с городом для подписи. Сдвиг от UTC не хранится, а считается браузером (Intl). */
 export const RU_TIMEZONES: { zone: string; city: string }[] = [

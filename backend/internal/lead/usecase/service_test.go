@@ -69,7 +69,10 @@ const dialogJSON = `[{"role":"user","content":"Нужен АСКУЭ"},{"role":"
 const generalMissing = "тип организации, тип объекта, регион, задача, присоединённая мощность, месячное потребление, " +
 	"приборы учёта и сбор показаний"
 
-const digest = "Вопросы клиента: Нужен АСКУЭ\nЧто уточнить менеджеру: " + generalMissing
+// kindDefault — первая строка резюме заявки по умолчанию (T17).
+const kindDefault = "Тип заявки: Обратный звонок\n"
+
+const digest = kindDefault + "Вопросы клиента: Нужен АСКУЭ\nЧто уточнить менеджеру: " + generalMissing
 
 func TestCreateWithModelSummary(t *testing.T) {
 	r, m := &repo{taken: 1}, &model{text: "Задача клиента: АСКУЭ"}
@@ -77,13 +80,13 @@ func TestCreateWithModelSummary(t *testing.T) {
 		lead.Contacts{Name: "  Иван  ", Phone: strings.Repeat("1", 80)}, json.RawMessage(dialogJSON))
 	require.NoError(t, err)
 
-	assert.Equal(t, "Задача клиента: АСКУЭ", l.Summary)
+	assert.Equal(t, kindDefault+"Задача клиента: АСКУЭ", l.Summary)
 	assert.Equal(t, lead.SummaryLLM, l.SummarySource)
 	assert.Equal(t, "Иван", l.Name)
 	assert.Len(t, l.Phone, lead.MaxPhone)
 	assert.Len(t, l.Code, 10)
 	require.Len(t, r.saved, 1, "занятый номер — повтор, а не отказ")
-	assert.Equal(t, "Задача клиента: АСКУЭ", r.saved[0].Summary, "резюме моделью дописано в сохранённую заявку")
+	assert.Equal(t, kindDefault+"Задача клиента: АСКУЭ", r.saved[0].Summary, "резюме моделью дописано в сохранённую заявку")
 	assert.Equal(t, lead.SummaryLLM, r.saved[0].SummarySource)
 	assert.Equal(t, lead.SummarySystem, m.system)
 	assert.Equal(t, "ДИАЛОГ\nНЕ ЗАПОЛНЕНО (спросить на звонке): "+generalMissing+"\n\nКлиент: Нужен АСКУЭ\nКонсультант: Подскажу", m.user)
@@ -120,7 +123,7 @@ func TestCreateFallsBackWithoutModel(t *testing.T) {
 
 	l, err = New(r, nil).Create(context.Background(), lead.Contacts{}, json.RawMessage(`[]`))
 	require.NoError(t, err)
-	assert.Equal(t, "Диалога не было.\nЧто уточнить менеджеру: "+generalMissing, l.Summary)
+	assert.Equal(t, kindDefault+"Диалога не было.\nЧто уточнить менеджеру: "+generalMissing, l.Summary)
 }
 
 func TestCreateRejectsBadMessages(t *testing.T) {
@@ -183,9 +186,56 @@ func TestCreateKeepsCallbackPreference(t *testing.T) {
 	l, err = New(r2, &model{text: "Задача клиента: учёт"}).Create(context.Background(),
 		lead.Contacts{Callback: lead.Callback{Time: "morning"}}, json.RawMessage(dialogJSON))
 	require.NoError(t, err)
-	assert.Equal(t, "Задача клиента: учёт\nУдобное время для звонка: утро", l.Summary)
+	assert.Equal(t, kindDefault+"Задача клиента: учёт\nУдобное время для звонка: утро", l.Summary)
 
 	_, err = New(&repo{}, nil).Create(context.Background(), lead.Contacts{Callback: lead.Callback{Time: "в 15:00"}},
 		json.RawMessage(dialogJSON))
 	require.Error(t, err, "точное время — не вариант выбора")
+}
+
+func TestCreateKindFollowsPassportProducts(t *testing.T) {
+	ctx := context.Background()
+	contacts := func(k lead.Kind) lead.Contacts {
+		return lead.Contacts{Name: "Тестов Тест", Phone: "+7 900 000-00-00", Company: "ООО Учебный склад", Kind: k}
+	}
+	withProduct := func(doc string) *passports {
+		p := passport.Parse(nil)
+		p.AddSections([]passport.SectionRef{{ID: "kb-1", Doc: doc}})
+		return &passports{p: p}
+	}
+
+	// Солнечная станция: демо-кабинета и пилота нет — отказ до записи.
+	r := &repo{}
+	solar := withProduct("20-products/23-solar.md")
+	for _, k := range []lead.Kind{lead.KindDemo, lead.KindPilot} {
+		_, err := New(r, nil).WithPassports(solar).CreateForSession(ctx, contacts(k), json.RawMessage(dialogJSON), "sess-solar")
+		require.Error(t, err, k)
+		assert.Contains(t, err.Error(), "только для платформы учёта")
+	}
+	assert.Empty(t, r.saved, "неподходящий тип — заявки нет")
+	assert.Empty(t, solar.p.Values, "и паспорт не тронут")
+	l, err := New(r, nil).WithPassports(solar).CreateForSession(ctx, contacts(lead.KindAssessment), json.RawMessage(dialogJSON), "sess-solar")
+	require.NoError(t, err)
+	assert.Equal(t, lead.KindAssessment, r.saved[0].Kind)
+	assert.True(t, strings.HasPrefix(l.Summary, "Тип заявки: Бесплатная предварительная оценка\n"), l.Summary)
+
+	// Платформа учёта: все четыре.
+	for _, k := range []lead.Kind{lead.KindCallback, lead.KindAssessment, lead.KindDemo, lead.KindPilot} {
+		r := &repo{}
+		l, err := New(r, &model{text: "Задача клиента: учёт"}).WithPassports(withProduct("20-products/22-askue.md")).
+			CreateForSession(ctx, contacts(k), json.RawMessage(dialogJSON), "sess-askue")
+		require.NoError(t, err, k)
+		assert.Equal(t, k, r.saved[0].Kind)
+		assert.True(t, strings.HasPrefix(l.Summary, "Тип заявки: "+k.Label()+"\n"), "тип виден менеджеру в резюме: %q", l.Summary)
+	}
+
+	// Без сессии продукт неизвестен — только общие типы; пустой тип — звонок.
+	_, err = New(&repo{}, nil).Create(ctx, contacts(lead.KindDemo), json.RawMessage(dialogJSON))
+	require.Error(t, err)
+	_, err = New(&repo{}, nil).Create(ctx, contacts("meeting"), json.RawMessage(dialogJSON))
+	require.Error(t, err, "неизвестный тип — отказ")
+	r = &repo{}
+	_, err = New(r, nil).Create(ctx, contacts(""), json.RawMessage(dialogJSON))
+	require.NoError(t, err)
+	assert.Equal(t, lead.KindCallback, r.saved[0].Kind)
 }

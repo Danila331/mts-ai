@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Loader2, MessagesSquare } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -19,9 +19,11 @@ import {
   LEAD_SAVED_TITLE,
   leadSavedText,
 } from "@/lib/callback";
+import { type LeadKind, kindInfo, sessionKinds } from "@/lib/lead-kinds";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { CallbackPicker } from "./callback-picker";
+import { LeadKindPicker } from "./lead-kind-picker";
 import { Consent } from "./consent";
 
 function plural(n: number, one: string, few: string, many: string) {
@@ -126,6 +128,12 @@ function LeadForm({
   }));
   // Текст после отправки зависит от того, выбрал ли клиент время, — запоминаем выбор на момент отправки.
   const [savedNote, setSavedNote] = useState(CALLBACK_PLAIN);
+  // Тип заявки (T17): только подходящие продуктам из паспорта; предвыбор — по словам клиента.
+  // Паспорт может обновиться, пока карточка открыта, — список считается заново, а выбор клиента остаётся,
+  // если тип всё ещё подходит.
+  const { kinds, guess } = useMemo(() => sessionKinds(session), [session]);
+  const [picked, setKind] = useState<LeadKind | null>(null);
+  const kind = picked && kinds.some((k) => k.kind === picked) ? picked : guess;
   const [consent, setConsent] = useState(false);
   const [touched, setTouched] = useState({ name: false, phone: false });
   const [sending, setSending] = useState(false);
@@ -142,10 +150,10 @@ function LeadForm({
     if (!valid || sending) return;
     setSending(true);
     try {
-      const res = await sendLead({ ...form, messages: toTurns(session.messages), session_id: session.id, callback, consent });
-      setSavedNote(callbackNote(callback));
+      const res = await sendLead({ ...form, messages: toTurns(session.messages), session_id: session.id, callback, kind, consent });
+      setSavedNote([kindInfo(kind).note, callbackNote(callback)].filter(Boolean).join(" "));
       onDone(res);
-      toast.success(leadSavedText(callback), { description: `Номер заявки №${res.id}` });
+      toast.success(leadSavedText(callback, kindInfo(kind).note), { description: `Номер заявки №${res.id}` });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось отправить заявку. Попробуйте ещё раз.");
     } finally {
@@ -258,6 +266,7 @@ function LeadForm({
             />
           </Field>
         </div>
+        <LeadKindPicker id={`lead-kind-${session.id}`} kinds={kinds} value={kind} onChange={setKind} />
         <CallbackPicker id={`lead-callback-${session.id}`} value={callback} onChange={setCallback} />
         <Consent id={`lead-consent-${session.id}`} checked={consent} onChange={setConsent} />
       </div>

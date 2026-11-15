@@ -99,6 +99,16 @@ func TestStore(t *testing.T) {
 		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT callback_preference FROM leads WHERE id = $1", withCallback.ID).Scan(&raw))
 		assert.JSONEq(t, `{"time": "day", "timezone": "Europe/Moscow"}`, string(raw))
 
+		var kind string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT kind FROM leads WHERE id = $1", l.ID).Scan(&kind))
+		assert.Equal(t, "callback", kind, "без типа — обратный звонок")
+		demo := lead.Lead{Code: "7777777777", Summary: "s", Contacts: lead.Contacts{Kind: lead.KindDemo}}
+		require.NoError(t, s.CreateLead(ctx, &demo))
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT kind FROM leads WHERE id = $1", demo.ID).Scan(&kind))
+		assert.Equal(t, "demo", kind)
+		bad := lead.Lead{Code: "8888888888", Summary: "s", Contacts: lead.Contacts{Kind: "meeting"}}
+		assert.Error(t, s.CreateLead(ctx, &bad), "тип вне списка не пройдёт и мимо сервиса: CHECK в базе")
+
 		l.Summary, l.SummarySource = "резюме моделью", lead.SummaryLLM
 		require.NoError(t, s.UpdateLeadSummary(ctx, &l))
 		var summary string

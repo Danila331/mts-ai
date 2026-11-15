@@ -341,6 +341,9 @@ type leadRequest struct {
 	// Callback — когда удобнее звонок (T4): часть дня и часовой пояс
 	// браузера. Предпочтение, а не запись на время.
 	Callback lead.Callback `json:"callback"`
+	// Kind — тип заявки (T17): callback | assessment | demo | pilot;
+	// пусто — обратный звонок.
+	Kind string `json:"kind"`
 	// Consent — согласие на обработку персональных данных, на том же шаге,
 	// что и контакты (раздел базы «Согласие на обработку персональных
 	// данных»). Без него заявки нет.
@@ -350,6 +353,8 @@ type leadRequest struct {
 type leadResponse struct {
 	ID      string `json:"id"`
 	Summary string `json:"summary"`
+	// Kind — тип принятой заявки: фронт показывает подтверждение под него.
+	Kind lead.Kind `json:"kind"`
 }
 
 // lead принимает заявку менеджеру и отвечает номером и резюме.
@@ -367,12 +372,13 @@ func (s *Server) lead(c echo.Context) error {
 	}
 	l, err := s.deps.Leads.CreateForSession(c.Request().Context(), lead.Contacts{
 		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment, Callback: body.Callback,
+		Kind: lead.Kind(body.Kind),
 	}, body.Messages, ref.ID)
 	if err != nil {
 		return s.mapErr(c, err)
 	}
 	s.deps.Metrics.Lead(string(l.SummarySource))
-	return c.JSON(http.StatusOK, leadResponse{ID: l.Code, Summary: l.Summary})
+	return c.JSON(http.StatusOK, leadResponse{ID: l.Code, Summary: l.Summary, Kind: l.Kind})
 }
 
 type feedbackRequest struct {

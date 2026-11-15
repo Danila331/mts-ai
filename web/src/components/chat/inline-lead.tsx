@@ -1,16 +1,18 @@
 "use client";
 
 import { Check, Loader2, UserRoundCheck } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toTurns } from "@/hooks/use-chat";
 import { sendLead } from "@/lib/api";
 import { browserTimezone, type CallbackPreference, guessTime, leadSavedText } from "@/lib/callback";
+import { type LeadKind, kindInfo, sessionKinds } from "@/lib/lead-kinds";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { CallbackPicker } from "./callback-picker";
+import { LeadKindPicker } from "./lead-kind-picker";
 import { Consent } from "./consent";
 
 const value = (s: Session, key: string) => s.passport?.fields.find((f) => f.key === key)?.value ?? "";
@@ -39,6 +41,12 @@ export function InlineLead({
     time: guessTime(value(session, "callback_preference")),
     timezone: browserTimezone(),
   }));
+  // Тип заявки (T17): только подходящие продуктам из паспорта; предвыбор — по словам клиента.
+  // Паспорт может обновиться, пока карточка открыта, — список считается заново, а выбор клиента остаётся,
+  // если тип всё ещё подходит.
+  const { kinds, guess } = useMemo(() => sessionKinds(session), [session]);
+  const [picked, setKind] = useState<LeadKind | null>(null);
+  const kind = picked && kinds.some((k) => k.kind === picked) ? picked : guess;
   const [consent, setConsent] = useState(false);
   const [sending, setSending] = useState(false);
   const digits = form.phone.replace(/\D/g, "").length;
@@ -55,10 +63,11 @@ export function InlineLead({
         messages: toTurns(session.messages),
         session_id: session.id,
         callback,
+        kind,
         consent,
       });
       onDone(lead);
-      toast.success(leadSavedText(callback), { description: `Номер заявки №${lead.id}` });
+      toast.success(leadSavedText(callback, kindInfo(kind).note), { description: `Номер заявки №${lead.id}` });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось отправить заявку");
     } finally {
@@ -105,6 +114,7 @@ export function InlineLead({
           </div>
         ))}
       </div>
+      <LeadKindPicker id={id("kind")} kinds={kinds} value={kind} onChange={setKind} className="mt-3" />
       <CallbackPicker id={id("callback")} value={callback} onChange={setCallback} className="mt-3" />
       <Consent id={id("consent")} checked={consent} onChange={setConsent} className="mt-3.5" />
       <div className="mt-3.5 flex items-center justify-end gap-2">
