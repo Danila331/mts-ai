@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
@@ -22,6 +23,9 @@ const (
 	EventAnswer = "answer"
 	EventError  = "error"
 	EventDone   = "done"
+	// EventPassport — паспорт задачи после ответа (режим chat, T2). Его
+	// пишет шлюз, а не ядро: приходит перед done.
+	EventPassport = "passport"
 )
 
 // Request — вопрос с историей диалога.
@@ -105,9 +109,24 @@ type Answer struct {
 	// разделов базы (Sources), без текста.
 	Citations []struct {
 		Support []struct {
-			ID string `json:"id"`
+			ID  string `json:"id"`
+			Doc string `json:"doc"`
 		} `json:"support"`
 	} `json:"citations"`
+}
+
+// SectionRefs — разделы базы из опоры ответа вместе с документом: по
+// документу продукта паспорт узнаёт, какие продукты обсуждали.
+func (a Answer) SectionRefs() []passport.SectionRef {
+	var out []passport.SectionRef
+	for _, c := range a.Citations {
+		for _, s := range c.Support {
+			if s.ID != "" {
+				out = append(out, passport.SectionRef{ID: s.ID, Doc: s.Doc})
+			}
+		}
+	}
+	return out
 }
 
 // Sources — id разделов базы, на которые опирается ответ, без повторов,

@@ -10,23 +10,65 @@ import (
 	"time"
 )
 
-const getSession = `-- name: GetSession :one
-SELECT id, channel, mode, title, page, created_at, updated_at FROM sessions WHERE id = $1
+const getPassport = `-- name: GetPassport :one
+SELECT passport FROM sessions WHERE id = $1
 `
 
-func (q *Queries) GetSession(ctx context.Context, id string) (Session, error) {
+// Паспорт читается и пишется целиком: поля сливает предмет (internal/passport),
+// а не SQL. Строки нет — сессии нет.
+func (q *Queries) GetPassport(ctx context.Context, id string) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getPassport, id)
+	var passport []byte
+	err := row.Scan(&passport)
+	return passport, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT id, channel, mode, title, page, passport, created_at, updated_at FROM sessions WHERE id = $1
+`
+
+type GetSessionRow struct {
+	ID        string
+	Channel   string
+	Mode      string
+	Title     string
+	Page      []byte
+	Passport  []byte
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, error) {
 	row := q.db.QueryRow(ctx, getSession, id)
-	var i Session
+	var i GetSessionRow
 	err := row.Scan(
 		&i.ID,
 		&i.Channel,
 		&i.Mode,
 		&i.Title,
 		&i.Page,
+		&i.Passport,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const savePassport = `-- name: SavePassport :execrows
+UPDATE sessions SET passport = $2, updated_at = now() WHERE id = $1
+`
+
+type SavePassportParams struct {
+	ID       string
+	Passport []byte
+}
+
+func (q *Queries) SavePassport(ctx context.Context, arg SavePassportParams) (int64, error) {
+	result, err := q.db.Exec(ctx, savePassport, arg.ID, arg.Passport)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const sessionAnswers = `-- name: SessionAnswers :many

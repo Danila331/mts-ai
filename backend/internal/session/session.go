@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Danila331/mts-ai/backend/internal/apperr"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 )
 
 // Channel — откуда пришёл разговор.
@@ -79,6 +80,7 @@ type Session struct {
 	Mode      string          `json:"mode"`
 	Title     string          `json:"title"`
 	Page      json.RawMessage `json:"page"`
+	Passport  *passport.View  `json:"passport,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
 }

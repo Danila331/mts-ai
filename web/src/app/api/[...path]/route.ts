@@ -13,10 +13,14 @@ const ADMIN_ONLY = new Set(["POST settings", "POST settings/reset"]);
 // Умолчания платформы на это не рассчитаны: без запаса длинный ответ обрывался бы на середине.
 export const maxDuration = 300;
 
+// Паспорт задачи своей сессии клиент правит сам (T2): PATCH /api/sessions/<id>/passport.
+const PASSPORT = /^sessions\/[A-Za-z0-9_-]{8,64}\/passport$/;
+
 async function proxy(request: Request, params: Promise<{ path: string[] }>) {
   const { path } = await params;
   const name = path.join("/");
-  if (!ALLOWED.has(name)) return Response.json({ error: "not found" }, { status: 404 });
+  const allowed = request.method === "PATCH" ? PASSPORT.test(name) : ALLOWED.has(name);
+  if (!allowed) return Response.json({ error: "not found" }, { status: 404 });
   const headers = backendHeaders(request);
   if (ADMIN_ONLY.has(`${request.method} ${name}`)) {
     // Проверка здесь — чтобы не нести запрос дальше; Go-API проверяет токен ещё раз сам.
@@ -26,7 +30,7 @@ async function proxy(request: Request, params: Promise<{ path: string[] }>) {
     Object.assign(headers, adminHeaders());
   }
   const init: RequestInit = { method: request.method, headers, signal: request.signal, cache: "no-store" };
-  if (request.method === "POST") init.body = await request.text();
+  if (request.method === "POST" || request.method === "PATCH") init.body = await request.text();
   let upstream: Response;
   try {
     upstream = await fetch(`${BACKEND}/api/${name}`, init);
@@ -49,5 +53,9 @@ export async function GET(request: Request, ctx: { params: Promise<{ path: strin
 }
 
 export async function POST(request: Request, ctx: { params: Promise<{ path: string[] }> }) {
+  return proxy(request, ctx.params);
+}
+
+export async function PATCH(request: Request, ctx: { params: Promise<{ path: string[] }> }) {
   return proxy(request, ctx.params);
 }

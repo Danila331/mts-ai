@@ -28,6 +28,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	leaduc "github.com/Danila331/mts-ai/backend/internal/lead/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/metrics"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
@@ -39,12 +40,38 @@ import (
 
 // memStore — база в памяти.
 type memStore struct {
-	mu       sync.Mutex
-	answers  []chat.Record
-	leads    []lead.Lead
-	feedback []feedback.Feedback
-	sessions map[string]session.Session
-	down     bool
+	mu        sync.Mutex
+	answers   []chat.Record
+	leads     []lead.Lead
+	feedback  []feedback.Feedback
+	sessions  map[string]session.Session
+	passports map[string]passport.Passport
+	// model — модель извлечения паспорта; nil — только телефон кодом.
+	model passport.Model
+	down  bool
+}
+
+func (m *memStore) LoadPassport(_ context.Context, id string) (passport.Passport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[id]; !ok {
+		return passport.Passport{}, session.ErrNotFound
+	}
+	p := m.passports[id]
+	if p.Values == nil {
+		p.Values = map[string]passport.Value{}
+	}
+	return p, nil
+}
+
+func (m *memStore) SavePassport(_ context.Context, id string, p passport.Passport) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.passports == nil {
+		m.passports = map[string]passport.Passport{}
+	}
+	m.passports[id] = p
+	return nil
 }
 
 func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title string) error {
@@ -184,14 +211,15 @@ func newServerWithMetrics(t *testing.T, coreURL string, mutate func(*config.Conf
 	cc := core.New(cfg.Core.URL, cfg.Core.Token)
 	m := metrics.New()
 	return New(cfg, Deps{
-		Chat:     chatuc.New(cc, store, time.Minute),
-		Leads:    leaduc.New(store, nil),
-		Feedback: feedbackuc.New(store),
-		Health:   health.New(cc, store),
-		KB:       cc,
-		Settings: cc,
-		Sessions: store,
-		Metrics:  m,
+		Chat:      chatuc.New(cc, store, time.Minute).WithPassport(store, store.model),
+		Leads:     leaduc.New(store, nil).WithPassports(store),
+		Feedback:  feedbackuc.New(store),
+		Health:    health.New(cc, store),
+		KB:        cc,
+		Settings:  cc,
+		Sessions:  store,
+		Passports: store,
+		Metrics:   m,
 	}, zerolog.Nop()), store, m
 }
 
@@ -483,7 +511,7 @@ func TestLeadAndFeedback(t *testing.T) {
 	s, store := newServer(t, fakeCore(t, goodStream).URL, nil)
 
 	rec := do(s, http.MethodPost, "/api/lead",
-		`{"name": "Иван", "phone": "+7 900", "company": "", "comment": "", "messages": [{"role": "user", "content": "Нужен АСКУЭ"}]}`)
+		`{"name": "Иван", "phone": "+7 900", "company": "", "comment": "", "consent": true, "messages": [{"role": "user", "content": "Нужен АСКУЭ"}]}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var l struct{ ID, Summary string }
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &l))
@@ -584,7 +612,7 @@ func TestMetricsCountOutcomes(t *testing.T) {
 	s, _, m := newServerWithMetrics(t, fakeCore(t, goodStream).URL, nil)
 	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
 		`{"messages": [{"role": "user", "content": "q"}], "mode": "chat"}`).Code)
-	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/lead", `{"messages": []}`).Code)
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/lead", `{"messages": [], "consent": true}`).Code)
 	do(s, http.MethodGet, "/no/such/path", "")
 
 	rec := httptest.NewRecorder()
@@ -717,4 +745,131 @@ func TestChatSessionValidation(t *testing.T) {
 	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", `{`+q+`}`).Code)
 	assert.Empty(t, store.sessions)
 	assert.Equal(t, 1, store.answerCount())
+}
+
+type passportModel struct {
+	out string
+	err error
+}
+
+func (m passportModel) Configured() bool { return true }
+func (m passportModel) Complete(context.Context, string, string, int) (string, error) {
+	return m.out, m.err
+}
+
+const askueStream = "event: answer\ndata: {\"id\": \"a1\", \"text\": \"Ответ\", \"mode\": \"chat\", " +
+	"\"citations\": [{\"support\": [{\"id\": \"k1\", \"doc\": \"20-products/22-askue.md\"}]}]}\n\n" +
+	"event: done\ndata: {}\n\n"
+
+func TestPassportBeforeDone(t *testing.T) {
+	s, store := newServer(t, fakeCore(t, askueStream).URL, nil)
+	store.model = passportModel{out: `{"fields": {"object_type": "три склада", "meters": "около 40 счётчиков",
+		"region": "Москва"}, "handoff_agreed": false}`}
+	s, store = rebuild(t, store, fakeCore(t, askueStream).URL)
+
+	rec := do(s, http.MethodPost, "/api/chat", `{"messages": [{"role": "user",
+		"content": "У нас три склада и около 40 счётчиков, телефон пока не оставлю"}], "mode": "chat", "session_id": "sess-demo-18"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	evs := readSSE(t, rec.Body.String())
+	require.Equal(t, []string{"answer", "passport", "done"}, names(evs), "паспорт — после ответа и до done")
+	var v passport.View
+	require.NoError(t, json.Unmarshal([]byte(evs[1].data), &v))
+	assert.Equal(t, passport.Platform, v.Product, "продукт — по разделу базы в опоре ответа")
+	got := map[string]string{}
+	for _, f := range v.Fields {
+		if f.Value != "" {
+			got[f.Key] = f.Value
+		}
+	}
+	assert.Equal(t, map[string]string{"object_type": "три склада", "meters": "около 40 счётчиков"}, got,
+		"регион из головы модели отброшен, контактов нет")
+	assert.False(t, v.ReadyForLead, "заявка не предлагается")
+	assert.Empty(t, store.leads)
+}
+
+func TestPassportFailureKeepsChat(t *testing.T) {
+	store := &memStore{model: passportModel{err: errors.New("модель недоступна")}}
+	s, _ := rebuild(t, store, fakeCore(t, askueStream).URL)
+	rec := do(s, http.MethodPost, "/api/chat", `{"messages": [{"role": "user", "content": "звоните 8 900 000-00-00"}],
+		"mode": "chat", "session_id": "sess-fail-1"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	evs := readSSE(t, rec.Body.String())
+	assert.Equal(t, []string{"answer", "passport", "done"}, names(evs), "ответ не потерян, телефон найден кодом")
+	assert.Contains(t, evs[1].data, `+79000000000`)
+
+	// Без сессии и в режиме автопроверки паспорта нет.
+	for _, body := range []string{
+		`{"messages": [{"role": "user", "content": "q"}], "mode": "chat"}`,
+		`{"messages": [{"role": "user", "content": "q"}], "mode": "eval", "session_id": "sess-eval-1"}`,
+	} {
+		assert.Equal(t, []string{"answer", "done"}, names(readSSE(t, do(s, http.MethodPost, "/api/chat", body).Body.String())), body)
+	}
+}
+
+func TestLeadFromChatWithConsent(t *testing.T) {
+	store := &memStore{model: passportModel{out: `{"fields": {"name": "Тестов Тест", "phone": "+7 900 000 00 00",
+		"company": "ООО Учебный склад"}, "handoff_agreed": true}`}}
+	s, _ := rebuild(t, store, fakeCore(t, askueStream).URL)
+	rec := do(s, http.MethodPost, "/api/chat", `{"messages": [{"role": "user",
+		"content": "Тестов Тест, +7 900 000 00 00, ООО Учебный склад"}], "mode": "chat", "session_id": "sess-lead-1"}`)
+	evs := readSSE(t, rec.Body.String())
+	require.Len(t, evs, 3)
+	var v passport.View
+	require.NoError(t, json.Unmarshal([]byte(evs[1].data), &v))
+	assert.True(t, v.ReadyForLead, "есть имя, телефон и компания — карточка заявки")
+
+	lead := `{"name": "Тестов Тест", "phone": "+7 900 000 00 00", "company": "ООО Учебный склад",
+		"messages": [{"role": "user", "content": "q"}], "session_id": "sess-lead-1"`
+	rec = do(s, http.MethodPost, "/api/lead", lead+`}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "без согласия заявки нет")
+	assert.Contains(t, rec.Body.String(), "согласие")
+	assert.Empty(t, store.leads)
+
+	rec = do(s, http.MethodPost, "/api/lead", lead+`, "consent": true}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, store.leads, 1)
+	assert.Equal(t, "sess-lead-1", store.leads[0].SessionID)
+	assert.Contains(t, string(store.leads[0].Passport), "ООО Учебный склад", "паспорт сессии ушёл в заявку")
+}
+
+func TestPatchPassportByClient(t *testing.T) {
+	store := &memStore{model: passportModel{out: `{"fields": {"region": "Тверская область"}}`}}
+	s, _ := rebuild(t, store, fakeCore(t, askueStream).URL)
+	do(s, http.MethodPost, "/api/chat", `{"messages": [{"role": "user", "content": "Мы в Тверская область"}],
+		"mode": "chat", "session_id": "sess-edit-1"}`)
+
+	rec := do(s, http.MethodPatch, "/api/sessions/sess-edit-1/passport", `{"values": {"region": "Тверь", "task": "поиск потерь"}}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "client", string(store.passports["sess-edit-1"].Values["region"].Source))
+
+	for body, code := range map[string]int{
+		`{"values": {"salary": "много"}}`:    http.StatusBadRequest,
+		`{"values": {"phone": "позвоните"}}`: http.StatusBadRequest,
+		`{"values": {"task": "майнинг"}}`:    http.StatusBadRequest,
+		`{"values": {}}`:                     http.StatusBadRequest,
+		`{"values": {"region": null}}`:       http.StatusOK,
+	} {
+		assert.Equal(t, code, do(s, http.MethodPatch, "/api/sessions/sess-edit-1/passport", body).Code, body)
+	}
+	assert.NotContains(t, store.passports["sess-edit-1"].Values, "region", "клиент стёр поле")
+	assert.Equal(t, http.StatusNotFound, do(s, http.MethodPatch, "/api/sessions/nobody-here/passport",
+		`{"values": {"region": "x"}}`).Code)
+}
+
+// rebuild — сервер над заданным хранилищем (с моделью паспорта).
+func rebuild(t *testing.T, store *memStore, coreURL string) (*Server, *memStore) {
+	t.Helper()
+	cfg := &config.Config{Env: "test"}
+	cfg.Core.URL, cfg.Core.Token = coreURL, "core-token"
+	cc := core.New(cfg.Core.URL, cfg.Core.Token)
+	return New(cfg, Deps{
+		Chat:      chatuc.New(cc, store, time.Minute).WithPassport(store, store.model),
+		Leads:     leaduc.New(store, nil).WithPassports(store),
+		Feedback:  feedbackuc.New(store),
+		Health:    health.New(cc, store),
+		KB:        cc,
+		Settings:  cc,
+		Sessions:  store,
+		Passports: store,
+	}, zerolog.Nop()), store
 }

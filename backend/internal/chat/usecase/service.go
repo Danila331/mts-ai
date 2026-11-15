@@ -13,6 +13,7 @@ import (
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
@@ -33,10 +34,30 @@ type Service struct {
 	journal Journal
 	// timeout — потолок на весь ответ ядра.
 	timeout time.Duration
+	// Паспорт задачи (T2): без хранилища паспорт не ведётся, без модели —
+	// только телефон, найденный кодом.
+	passports Passports
+	model     passport.Model
 }
+
+// Passports — где живёт паспорт сессии.
+type Passports interface {
+	LoadPassport(ctx context.Context, id string) (passport.Passport, error)
+	SavePassport(ctx context.Context, id string, p passport.Passport) error
+}
+
+// passportTimeout — потолок на разбор диалога моделью. Клиент уже видит
+// ответ: дольше ждать паспорт незачем, он догонит на следующем вопросе.
+const passportTimeout = 20 * time.Second
 
 func New(core chat.Core, journal Journal, timeout time.Duration) *Service {
 	return &Service{core: core, journal: journal, timeout: timeout}
+}
+
+// WithPassport включает паспорт задачи.
+func (s *Service) WithPassport(store Passports, model passport.Model) *Service {
+	s.passports, s.model = store, model
+	return s
 }
 
 // Ask открывает ответ ядра.
@@ -101,6 +122,7 @@ func (r *Relay) Forward(emit func(chat.Event) error) chat.Outcome {
 		answerID         string
 		answered, failed bool
 		done             bool
+		lastAnswer       chat.Answer
 	)
 	for {
 		ev, err := r.stream.Next()
@@ -119,6 +141,7 @@ func (r *Relay) Forward(emit func(chat.Event) error) chat.Outcome {
 		case chat.EventAnswer:
 			answered = true
 			a, ok := r.svc.record(r.ctx, r.req, ev.Data)
+			lastAnswer = a
 			answerID, outcome = a.ID, chat.OutcomeAnswered
 			if ok && a.Fallback {
 				outcome = chat.OutcomeFallback
@@ -127,6 +150,13 @@ func (r *Relay) Forward(emit func(chat.Event) error) chat.Outcome {
 			failed, outcome = true, chat.OutcomeCoreError
 		case chat.EventDone:
 			done = true
+			// Паспорт — после ответа и до done: клиент уже читает ответ, а
+			// поток ещё открыт.
+			if answered && !failed {
+				if ev, ok := r.svc.passport(r.ctx, r.req, lastAnswer); ok {
+					send(ev)
+				}
+			}
 		}
 		send(ev)
 	}
@@ -147,6 +177,50 @@ func (r *Relay) Forward(emit func(chat.Event) error) chat.Outcome {
 		Int("turns", len(r.req.Turns)).Bool("client_gone", gone).Dur("took", time.Since(r.started)).
 		Msg("ответ ядра")
 	return outcome
+}
+
+// passport обновляет паспорт сессии по диалогу и отдаёт событие для
+// клиента. Только режим chat и только с сессией. Любой сбой — паспорт как
+// был, ответ клиента не страдает.
+func (s *Service) passport(ctx context.Context, req chat.Request, a chat.Answer) (chat.Event, bool) {
+	if s.passports == nil || req.Session.ID == "" || req.Mode != dialog.ModeChat {
+		return chat.Event{}, false
+	}
+	log := zerolog.Ctx(ctx)
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), passportTimeout)
+	defer cancel()
+
+	p, err := s.passports.LoadPassport(pctx, req.Session.ID)
+	if err != nil {
+		log.Warn().Err(err).Str("session_id", req.Session.ID).Msg("паспорт не прочитан")
+		return chat.Event{}, false
+	}
+	started := time.Now()
+	u, err := passport.Extract(pctx, s.model, req.Turns)
+	if err != nil {
+		// Найденное кодом (телефон) всё равно идёт в паспорт.
+		log.Warn().Err(err).Dur("took", time.Since(started)).Msg("паспорт без модели")
+	}
+	if len(u.Dropped) > 0 {
+		log.Info().Strs("fields", u.Dropped).Msg("паспорт: значения не из реплик клиента отброшены")
+	}
+	now := time.Now()
+	for k, v := range u.Values {
+		p.Set(k, v, passport.FromBot, now)
+	}
+	if u.HandoffAgreed {
+		p.HandoffAgreed = true
+	}
+	p.AddSections(a.SectionRefs())
+	if err := s.passports.SavePassport(pctx, req.Session.ID, p); err != nil {
+		log.Error().Err(err).Str("session_id", req.Session.ID).Msg("паспорт не записан")
+		return chat.Event{}, false
+	}
+	data, err := json.Marshal(p.Render())
+	if err != nil {
+		return chat.Event{}, false
+	}
+	return chat.Event{Name: chat.EventPassport, Data: data}, true
 }
 
 // touch записывает сессию до ответа: разговор виден на сервере, даже если

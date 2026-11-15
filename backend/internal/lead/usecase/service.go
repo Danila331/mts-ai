@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
 )
 
@@ -45,8 +47,62 @@ const (
 )
 
 type Service struct {
-	repo  Repository
-	model Summarizer
+	repo      Repository
+	model     Summarizer
+	passports Passports
+}
+
+// Passports — паспорт задачи сессии (internal/passport).
+type Passports interface {
+	LoadPassport(ctx context.Context, id string) (passport.Passport, error)
+	SavePassport(ctx context.Context, id string, p passport.Passport) error
+}
+
+// WithPassports — заявка из разговора берёт паспорт с сервера.
+func (s *Service) WithPassports(p Passports) *Service {
+	s.passports = p
+	return s
+}
+
+// attachPassport копирует паспорт сессии в заявку и записывает в паспорт
+// контакты, которые клиент подтвердил в карточке. Сессии нет или база не
+// ответила — заявка уходит без паспорта: она важнее.
+func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) *passport.View {
+	if s.passports == nil || l.SessionID == "" {
+		return nil
+	}
+	log := zerolog.Ctx(ctx)
+	p, err := s.passports.LoadPassport(ctx, l.SessionID)
+	if err != nil {
+		log.Warn().Err(err).Str("session_id", l.SessionID).Msg("заявка без паспорта")
+		return nil
+	}
+	now := time.Now()
+	for key, v := range map[string]string{"name": l.Name, "phone": l.Phone, "company": l.Company} {
+		if clean, err := passport.Clean(key, v); err == nil && clean != "" {
+			p.Set(key, clean, passport.FromClient, now)
+		}
+	}
+	if err := s.passports.SavePassport(ctx, l.SessionID, p); err != nil {
+		log.Warn().Err(err).Str("session_id", l.SessionID).Msg("контакты заявки не записаны в паспорт")
+	}
+	view := p.Render()
+	if raw, err := json.Marshal(view); err == nil {
+		l.Passport = raw
+	}
+	return &view
+}
+
+// passportText — заполненные поля паспорта строками «Поле: значение».
+func passportText(v passport.View) string {
+	var b strings.Builder
+	b.WriteString("ПАСПОРТ ЗАДАЧИ (клиент видел и подтвердил)")
+	for _, f := range v.Fields {
+		if f.Value != "" && f.Group != passport.Contacts {
+			fmt.Fprintf(&b, "\n%s: %s", f.Label, f.Value)
+		}
+	}
+	return b.String()
 }
 
 func New(repo Repository, model Summarizer) *Service {
@@ -60,7 +116,15 @@ func New(repo Repository, model Summarizer) *Service {
 // резюме — удобство к нему: если база недоступна, тратить на модель
 // время клиента и деньги незачем, а если недоступна модель, заявка уже
 // лежит в базе со списком вопросов.
+// Create — заявка из формы без сессии (старый путь и внешние вызовы).
 func (s *Service) Create(ctx context.Context, c lead.Contacts, messages json.RawMessage) (lead.Lead, error) {
+	return s.CreateForSession(ctx, c, messages, "")
+}
+
+// CreateForSession — заявка из разговора: паспорт задачи берётся с сервера
+// и копируется в заявку, контакты из карточки, которую клиент проверил,
+// записываются в паспорт как его собственные.
+func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, messages json.RawMessage, sessionID string) (lead.Lead, error) {
 	turns, err := dialog.Clean(messages, false)
 	if err != nil {
 		return lead.Lead{}, err
@@ -79,7 +143,9 @@ func (s *Service) Create(ctx context.Context, c lead.Contacts, messages json.Raw
 		SummarySource: lead.SummaryDigest,
 		Messages:      turns,
 		RequestID:     requestid.From(ctx),
+		SessionID:     sessionID,
 	}
+	view := s.attachPassport(ctx, &l)
 	for attempt := 0; attempt < codeAttempts; attempt++ {
 		l.Code = lead.NewCode()
 		err = s.repo.CreateLead(ctx, &l)
@@ -92,7 +158,7 @@ func (s *Service) Create(ctx context.Context, c lead.Contacts, messages json.Raw
 		return lead.Lead{}, fmt.Errorf("сохранить заявку: %w", err)
 	}
 
-	s.summarize(ctx, &l, turns)
+	s.summarize(ctx, &l, turns, view)
 
 	// Контакты в журнал не пишутся: там телефоны.
 	log.Info().Str("lead_code", l.Code).Str("summary_source", string(l.SummarySource)).
@@ -102,8 +168,12 @@ func (s *Service) Create(ctx context.Context, c lead.Contacts, messages json.Raw
 
 // summarize заменяет резюме-список резюме моделью, если модель есть и
 // ответила. Любой сбой оставляет заявку с тем, что уже записано.
-func (s *Service) summarize(ctx context.Context, l *lead.Lead, turns []dialog.Turn) {
+func (s *Service) summarize(ctx context.Context, l *lead.Lead, turns []dialog.Turn, view *passport.View) {
 	transcript := dialog.Transcript(turns)
+	if view != nil {
+		// Паспорт клиент видел и мог поправить: для резюме он надёжнее пересказа.
+		transcript = passportText(*view) + "\n\n" + transcript
+	}
 	if s.model == nil || !s.model.Configured() || transcript == "" {
 		return
 	}

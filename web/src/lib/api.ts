@@ -1,4 +1,4 @@
-import type { AnswerPayload, ChatMode, Health, KbData, RagSettings, Retrieval, SettingValue, Turn } from "./types";
+import type { AnswerPayload, ChatMode, Health, KbData, Passport, RagSettings, Retrieval, SettingValue, Turn } from "./types";
 
 // Все запросы идут на тот же origin (/api/* проксируется в Python-API), поэтому работает и внутри iframe виджета.
 const BASE = "/api";
@@ -25,6 +25,8 @@ export interface StreamHandlers {
   onRetrieval?: (r: Retrieval & { ms?: number }) => void;
   onGeneration?: () => void;
   onAnswer: (a: AnswerPayload) => void;
+  /** Паспорт задачи после ответа (режим chat с сессией). */
+  onPassport?: (p: Passport) => void;
 }
 
 /** Откуда разговор: стенд или виджет на сайте. Сервер хранит сессию с этим каналом. */
@@ -83,7 +85,8 @@ export async function streamChat(
       else if (event === "answer") {
         answered = true;
         handlers.onAnswer(payload);
-      } else if (event === "error") throw new Error(payload.error || "Ошибка ответа");
+      } else if (event === "passport") handlers.onPassport?.(payload);
+      else if (event === "error") throw new Error(payload.error || "Ошибка ответа");
     }
   }
   if (!answered) throw new Error("Соединение оборвалось до ответа");
@@ -95,14 +98,33 @@ export async function sendLead(body: {
   company: string;
   comment: string;
   messages: Turn[];
+  /** Разговор: заявка возьмёт его паспорт задачи с сервера. */
+  session_id?: string;
+  /** Согласие на обработку персональных данных — на том же шаге, что и контакты. */
+  consent: boolean;
 }): Promise<{ id: string; summary: string }> {
   const res = await fetch(`${BASE}/lead`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error("Не удалось отправить заявку");
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.error || "Не удалось отправить заявку");
+  }
   return res.json();
+}
+
+/** Клиент правит паспорт задачи: строка — новое значение, null — стереть поле. */
+export async function patchPassport(sessionId: string, values: Record<string, string | null>): Promise<Passport> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/passport`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Не удалось сохранить");
+  return data as Passport;
 }
 
 export async function sendFeedback(body: {

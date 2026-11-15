@@ -19,6 +19,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
@@ -266,12 +267,68 @@ func (s *Server) sessionHistory(c echo.Context) error {
 	return c.JSON(http.StatusOK, h)
 }
 
+type passportRequest struct {
+	// Values — поля паспорта: строка — новое значение, null или "" — стереть.
+	Values map[string]*string `json:"values"`
+}
+
+// patchPassport — клиент поправил паспорт задачи. Его правка главнее того,
+// что понял бот, и бот её больше не перезапишет.
+func (s *Server) patchPassport(c echo.Context) error {
+	if s.deps.Passports == nil {
+		return fail(c, http.StatusNotFound, "not found")
+	}
+	ref, err := session.Parse(c.Param("id"), "")
+	if err != nil || ref.ID == "" {
+		return fail(c, http.StatusBadRequest, "Неверный id сессии")
+	}
+	var body passportRequest
+	if err := decode(c, &body); err != nil {
+		return s.mapErr(c, err)
+	}
+	if len(body.Values) == 0 || len(body.Values) > len(passport.Catalog) {
+		return fail(c, http.StatusBadRequest, "values: ожидается объект {поле: значение}")
+	}
+	clean := make(map[string]string, len(body.Values))
+	for key, v := range body.Values {
+		value := ""
+		if v != nil {
+			value = *v
+		}
+		if clean[key], err = passport.Clean(key, value); err != nil {
+			return s.mapErr(c, err)
+		}
+	}
+	ctx := c.Request().Context()
+	p, err := s.deps.Passports.LoadPassport(ctx, ref.ID)
+	if errors.Is(err, session.ErrNotFound) {
+		return fail(c, http.StatusNotFound, "Разговора нет на сервере: задайте вопрос в чате")
+	}
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	now := time.Now()
+	for key, value := range clean {
+		p.Set(key, value, passport.FromClient, now)
+	}
+	if err := s.deps.Passports.SavePassport(ctx, ref.ID, p); err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, p.Render())
+}
+
 type leadRequest struct {
 	Name     string          `json:"name"`
 	Phone    string          `json:"phone"`
 	Company  string          `json:"company"`
 	Comment  string          `json:"comment"`
 	Messages json.RawMessage `json:"messages"`
+	// SessionID — разговор: заявка возьмёт его паспорт задачи с сервера.
+	SessionID string `json:"session_id"`
+	// Consent — согласие на обработку персональных данных, на том же шаге,
+	// что и контакты (раздел базы «Согласие на обработку персональных
+	// данных»). Без него заявки нет.
+	Consent bool `json:"consent"`
 }
 
 type leadResponse struct {
@@ -285,9 +342,16 @@ func (s *Server) lead(c echo.Context) error {
 	if err := decode(c, &body); err != nil {
 		return s.mapErr(c, err)
 	}
-	l, err := s.deps.Leads.Create(c.Request().Context(), lead.Contacts{
+	if !body.Consent {
+		return fail(c, http.StatusBadRequest, "Нужно согласие на обработку персональных данных")
+	}
+	ref, err := session.Parse(body.SessionID, "")
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	l, err := s.deps.Leads.CreateForSession(c.Request().Context(), lead.Contacts{
 		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment,
-	}, body.Messages)
+	}, body.Messages, ref.ID)
 	if err != nil {
 		return s.mapErr(c, err)
 	}

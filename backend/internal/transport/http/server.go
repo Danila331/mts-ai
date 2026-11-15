@@ -24,6 +24,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	"github.com/Danila331/mts-ai/backend/internal/metrics"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/ratelimit"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
 	"github.com/Danila331/mts-ai/backend/internal/session"
@@ -41,7 +42,7 @@ type (
 		Ask(ctx context.Context, req chat.Request) (*chatuc.Relay, error)
 	}
 	Leads interface {
-		Create(ctx context.Context, c lead.Contacts, messages json.RawMessage) (lead.Lead, error)
+		CreateForSession(ctx context.Context, c lead.Contacts, messages json.RawMessage, sessionID string) (lead.Lead, error)
 	}
 	Feedback interface {
 		Rate(ctx context.Context, f feedback.Feedback, rating int) error
@@ -56,6 +57,10 @@ type (
 	Sessions interface {
 		History(ctx context.Context, id string) (session.History, error)
 	}
+	Passports interface {
+		LoadPassport(ctx context.Context, id string) (passport.Passport, error)
+		SavePassport(ctx context.Context, id string, p passport.Passport) error
+	}
 	Settings interface {
 		Settings(ctx context.Context) (json.RawMessage, error)
 		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
@@ -65,13 +70,14 @@ type (
 
 // Deps — всё, из чего собирается сервер.
 type Deps struct {
-	Chat     Chat
-	Leads    Leads
-	Feedback Feedback
-	Health   Health
-	KB       KB
-	Settings Settings
-	Sessions Sessions
+	Chat      Chat
+	Leads     Leads
+	Feedback  Feedback
+	Health    Health
+	KB        KB
+	Settings  Settings
+	Sessions  Sessions
+	Passports Passports
 	// Metrics — nil выключает метрики.
 	Metrics *metrics.Metrics
 	// RateStore — хранилище пределов; nil — память процесса.
@@ -153,7 +159,7 @@ func New(cfg *config.Config, deps Deps, log zerolog.Logger) *Server {
 			AllowOrigins:  cfg.HTTP.AllowedOrigins,
 			AllowHeaders:  []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAuthorization, requestid.Header},
 			ExposeHeaders: []string{requestid.Header},
-			AllowMethods:  []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+			AllowMethods:  []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodOptions},
 		}))
 	}
 
@@ -198,6 +204,8 @@ func (s *Server) routes() {
 	// Разговоры клиентов — только менеджеру (EB_MANAGER_TOKEN): там их
 	// реплики, то есть персональные данные.
 	api.GET("/sessions/:id", s.sessionHistory, settingsLimit, s.requireManager)
+	// Паспорт задачи правит сам клиент: id сессии знает только его браузер.
+	api.PATCH("/sessions/:id/passport", s.patchPassport, feedbackLimit)
 }
 
 // Start слушает адрес до Shutdown; после него — http.ErrServerClosed.
