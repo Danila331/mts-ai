@@ -32,9 +32,9 @@ ALTER ROLE energytool_analyst WITH LOGIN PASSWORD :'analyst_password' CONNECTION
 -- Начать с нуля: права ниже — единственные.
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM energytool_manager, energytool_analyst;
 
--- Менеджер: заявки, только чтение.
+-- Менеджер: заявки и разговоры клиентов (сессии и их реплики), только чтение.
 GRANT USAGE ON SCHEMA public TO energytool_manager;
-GRANT SELECT ON leads TO energytool_manager;
+GRANT SELECT ON leads, sessions, answers TO energytool_manager;
 
 -- Аналитик: представления без контактов в отдельной схеме.
 CREATE SCHEMA IF NOT EXISTS analytics;
@@ -50,8 +50,13 @@ $$;
 
 CREATE OR REPLACE VIEW analytics.answers AS
 SELECT id, request_id, mode, analytics.mask_pii(question) AS question, analytics.mask_pii(answer) AS answer,
-       fallback, error, model, turns, timings, guard, created_at
+       fallback, error, model, turns, timings, guard, created_at, session_id, sources
 FROM public.answers;
+
+-- Сессии без заголовка: заголовок — первая реплика клиента.
+CREATE OR REPLACE VIEW analytics.sessions AS
+SELECT id, channel, mode, created_at, updated_at
+FROM public.sessions;
 
 CREATE OR REPLACE VIEW analytics.feedback AS
 SELECT id, session_id, message_id, rating, analytics.mask_pii(comment) AS comment,

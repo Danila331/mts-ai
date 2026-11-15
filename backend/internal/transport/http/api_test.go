@@ -29,6 +29,7 @@ import (
 	leaduc "github.com/Danila331/mts-ai/backend/internal/lead/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/metrics"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // Тесты собирают сервер целиком — настоящие usecase, настоящий клиент
@@ -42,7 +43,40 @@ type memStore struct {
 	answers  []chat.Record
 	leads    []lead.Lead
 	feedback []feedback.Feedback
+	sessions map[string]session.Session
 	down     bool
+}
+
+func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessions == nil {
+		m.sessions = map[string]session.Session{}
+	}
+	s, ok := m.sessions[ref.ID]
+	if !ok {
+		s = session.Session{ID: ref.ID, Channel: string(ref.Channel), Title: title, CreatedAt: time.Now()}
+	}
+	s.Mode, s.UpdatedAt = mode, time.Now()
+	m.sessions[ref.ID] = s
+	return nil
+}
+
+func (m *memStore) History(_ context.Context, id string) (session.History, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return session.History{}, session.ErrNotFound
+	}
+	h := session.History{Session: s, Turns: []session.Turn{}}
+	for _, a := range m.answers {
+		if a.SessionID == id {
+			h.Turns = append(h.Turns, session.Turn{Role: "user", Content: a.Question},
+				session.Turn{Role: "assistant", Content: a.Text, AnswerID: a.ID, Sources: a.Sources()})
+		}
+	}
+	return h, nil
 }
 
 func (m *memStore) SaveAnswer(_ context.Context, r chat.Record) error {
@@ -156,6 +190,7 @@ func newServerWithMetrics(t *testing.T, coreURL string, mutate func(*config.Conf
 		Health:   health.New(cc, store),
 		KB:       cc,
 		Settings: cc,
+		Sessions: store,
 		Metrics:  m,
 	}, zerolog.Nop()), store, m
 }
@@ -612,4 +647,74 @@ func TestShutdownWaitsForStream(t *testing.T) {
 	assert.Contains(t, string(rest), "event: answer", "ответ дошёл до клиента")
 	require.NoError(t, <-stopped)
 	assert.Equal(t, 1, store.answerCount(), "и лёг в журнал")
+}
+
+func TestSessionsKeepWholeDialog(t *testing.T) {
+	core, bodies := recordingCore(t)
+	s, store := newServer(t, core.URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	manager := []string{ManagerHeader, "manager-token"}
+
+	// Два вопроса одной сессии виджета — без заявки.
+	for _, body := range []string{
+		`{"messages": [{"role": "user", "content": "Что такое АСКУЭ?"}], "session_id": "widget-sess-1", "channel": "embed"}`,
+		`{"messages": [{"role": "user", "content": "Что такое АСКУЭ?"}, {"role": "assistant", "content": "t"},
+		  {"role": "user", "content": "А для склада?"}], "session_id": "widget-sess-1", "channel": "embed"}`,
+	} {
+		require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", body).Code)
+	}
+	// «Новый диалог» — новый id: новая сессия, модель видит только её реплику.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{"messages": [{"role": "user", "content": "Сколько стоит?"}], "session_id": "widget-sess-2", "channel": "embed"}`).Code)
+
+	require.Len(t, store.sessions, 2)
+	got := bodies()
+	require.Len(t, got, 3)
+	var last []map[string]string
+	require.NoError(t, json.Unmarshal(got[2]["messages"], &last))
+	assert.Len(t, last, 1, "новая сессия не видит реплик прошлой")
+	_, leaked := got[0]["session_id"]
+	assert.False(t, leaked, "id сессии ядру не нужен")
+
+	rec := do(s, http.MethodGet, "/api/sessions/widget-sess-1", "", manager...)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var h session.History
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &h))
+	assert.Equal(t, "embed", h.Session.Channel)
+	assert.Equal(t, "Что такое АСКУЭ?", h.Session.Title, "заголовок — первая реплика")
+	require.Len(t, h.Turns, 4, "две пары «вопрос — ответ»")
+	assert.Equal(t, "А для склада?", h.Turns[2].Content)
+	assert.Equal(t, "assistant", h.Turns[3].Role)
+}
+
+func TestSessionsNeedManager(t *testing.T) {
+	s, _ := newServer(t, fakeCore(t, goodStream).URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	assert.Equal(t, http.StatusUnauthorized, do(s, http.MethodGet, "/api/sessions/widget-sess-1", "").Code)
+	assert.Equal(t, http.StatusUnauthorized,
+		do(s, http.MethodGet, "/api/sessions/widget-sess-1", "", ManagerHeader, "wrong").Code)
+	assert.Equal(t, http.StatusNotFound,
+		do(s, http.MethodGet, "/api/sessions/nobody-here", "", ManagerHeader, "manager-token").Code)
+
+	closed, _ := newServer(t, fakeCore(t, goodStream).URL, nil)
+	assert.Equal(t, http.StatusUnauthorized,
+		do(closed, http.MethodGet, "/api/sessions/widget-sess-1", "", ManagerHeader, "").Code,
+		"EB_MANAGER_TOKEN не задан — разговоры закрыты для всех")
+}
+
+func TestChatSessionValidation(t *testing.T) {
+	s, store := newServer(t, fakeCore(t, goodStream).URL, nil)
+	q := `"messages": [{"role": "user", "content": "q"}]`
+	for body, want := range map[string]string{
+		`{` + q + `, "session_id": "short"}`:                       "session_id: от 8 до 64 знаков, латиница, цифры, «-» и «_»",
+		`{` + q + `, "session_id": "bad id with spaces"}`:          "session_id: от 8 до 64 знаков, латиница, цифры, «-» и «_»",
+		`{` + q + `, "session_id": "good-sess-1", "channel": "x"}`: "channel: playground, embed или telegram",
+	} {
+		rec := do(s, http.MethodPost, "/api/chat", body)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, body)
+		assert.JSONEq(t, `{"error": "`+want+`"}`, rec.Body.String(), body)
+	}
+	assert.Empty(t, store.sessions)
+	// Без сессии — как раньше: ответ в журнале, сессии нет.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", `{`+q+`}`).Code)
+	assert.Empty(t, store.sessions)
+	assert.Equal(t, 1, store.answerCount())
 }

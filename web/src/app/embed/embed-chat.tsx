@@ -23,7 +23,7 @@ export function EmbedChat() {
   const parent = params.get("parent");
   const [embedded, setEmbedded] = useState(false);
 
-  const chat = useChat("eb.widget.sessions.v1", "chat");
+  const chat = useChat("eb.widget.sessions.v1", "chat", { channel: "embed" });
   const { kb } = useKb();
   const [leadOpen, setLeadOpen] = useState(false);
   const sendRef = useRef(chat.send);

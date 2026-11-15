@@ -10,6 +10,7 @@
 |---|---|---|---|
 | `leads` (Postgres стенда) | имя, телефон, компания, комментарий, диалог | 90 дней | `EB_RETENTION_LEADS_DAYS` |
 | `answers` | вопрос клиента — в нём бывают имя и номер | 30 дней | `EB_RETENTION_ANSWERS_DAYS` |
+| `sessions` | заголовок — первая реплика клиента | 30 дней с последнего вопроса | `EB_RETENTION_ANSWERS_DAYS` |
 | `feedback` | комментарий, вопрос и ответ | 90 дней | `EB_RETENTION_FEEDBACK_DAYS` |
 | журнал расходов шлюза (`LiteLLM_SpendLogs`) | только счётчики, без текстов (`store_prompts_in_spend_logs: false`) | 30 дней | `llm-gateway/config.yaml` |
 | журналы служб (stdout) | нет: тела запросов и контакты не пишутся | — | — |

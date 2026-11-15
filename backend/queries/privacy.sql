@@ -14,6 +14,10 @@ DELETE FROM leads WHERE created_at < $1;
 -- name: PurgeFeedback :execrows
 DELETE FROM feedback WHERE created_at < $1;
 
+-- Сессия живёт, пока жив её последний ответ: тот же срок, что у журнала.
+-- name: PurgeSessions :execrows
+DELETE FROM sessions WHERE updated_at < $1;
+
 -- Удаление по запросу субъекта. Телефон сравнивается по последним десяти
 -- цифрам: «8 900…» и «+7 (900)…» — один номер.
 -- name: ForgetLeadsByPhone :execrows
@@ -32,3 +36,7 @@ WHERE regexp_replace(question || ' ' || answer || ' ' || comment, '\D', '', 'g')
 
 -- name: ForgetLeadsMentioning :execrows
 DELETE FROM leads WHERE regexp_replace(comment || ' ' || messages::text, '\D', '', 'g') LIKE '%' || @phone10::text || '%';
+
+-- Заголовок сессии — первая реплика клиента: номер мог оказаться и там.
+-- name: ForgetSessionsMentioning :execrows
+DELETE FROM sessions WHERE regexp_replace(title, '\D', '', 'g') LIKE '%' || @phone10::text || '%';

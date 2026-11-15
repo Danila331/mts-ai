@@ -133,6 +133,7 @@ func run() error {
 		Health:    health.New(coreClient, store),
 		KB:        coreClient,
 		Settings:  coreClient,
+		Sessions:  store,
 		Metrics:   m,
 		RateStore: rateStore,
 	}, log)
@@ -143,7 +144,7 @@ func run() error {
 		Leads:    config.Days(cfg.Retention.LeadsDays),
 		Answers:  config.Days(cfg.Retention.AnswersDays),
 		Feedback: config.Days(cfg.Retention.FeedbackDays),
-	}, cfg.Retention.Interval, log, func(n privacy.Counts) { m.RetentionPurged(n.Leads, n.Answers, n.Feedback) })
+	}, cfg.Retention.Interval, log, func(n privacy.Counts) { m.RetentionPurged(n.Leads, n.Answers, n.Feedback, n.Sessions) })
 	retentionCtx, stopRetention := context.WithCancel(context.Background())
 	retentionDone := make(chan struct{})
 	go func() {
@@ -289,6 +290,6 @@ func forget(args []string) error {
 		verb = "удалено"
 	}
 	// В выводе нет ни телефона, ни имени: он остаётся в истории терминала.
-	fmt.Printf("%s: заявок %d, ответов %d, оценок %d\n", verb, n.Leads, n.Answers, n.Feedback)
+	fmt.Printf("%s: заявок %d, ответов %d, оценок %d, сессий %d\n", verb, n.Leads, n.Answers, n.Feedback, n.Sessions)
 	return nil
 }

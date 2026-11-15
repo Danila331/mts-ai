@@ -45,6 +45,22 @@ call POST /api/lead '{"name":"Смоук","phone":"+70000000000","company":"","c
 call POST /api/feedback '{"session_id":"s","message_id":"m","rating":1}' \
   | grep -q '"ok":true' || fail "/api/feedback"
 
+# Сессия (T1): два вопроса одного разговора — одна сессия и две пары реплик
+# на сервере. История видна только менеджеру — с SMOKE_MANAGER_TOKEN.
+sid="smoke-$(date +%s)"
+call POST /api/chat "{\"messages\":[{\"role\":\"user\",\"content\":\"Что такое АСКУЭ?\"}],\"mode\":\"chat\",\"session_id\":\"$sid\",\"channel\":\"embed\"}" \
+  | grep -q '^event: done' || fail "/api/chat с сессией: нет события done"
+call POST /api/chat "{\"messages\":[{\"role\":\"user\",\"content\":\"Что такое АСКУЭ?\"},{\"role\":\"assistant\",\"content\":\"Ответ\"},{\"role\":\"user\",\"content\":\"А для склада?\"}],\"mode\":\"chat\",\"session_id\":\"$sid\",\"channel\":\"embed\"}" \
+  | grep -q '^event: done' || fail "/api/chat, второй вопрос сессии: нет события done"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "$auth" "$api/api/sessions/$sid")
+[ "$code" = 401 ] || fail "/api/sessions без токена менеджера: $code, ожидался 401"
+if [ -n "${SMOKE_MANAGER_TOKEN:-}" ]; then
+  history=$(curl -sS -H "$auth" -H "X-Manager-Token: $SMOKE_MANAGER_TOKEN" "$api/api/sessions/$sid")
+  n=$(echo "$history" | grep -o '"role":"user"' | wc -l | tr -d ' ')
+  [ "$n" = 2 ] || fail "/api/sessions/$sid: реплик клиента $n, ожидалось 2: $(echo "$history" | head -c 500)"
+  echo "$history" | grep -q '"channel":"embed"' || fail "/api/sessions/$sid: канал не embed"
+fi
+
 # Глобальные настройки RAG — только администратору: токена прокси мало.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" -H "Content-Type: application/json" \
   --data '{"values":{"top_k":5}}' "$api/api/settings")

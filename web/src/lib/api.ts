@@ -27,18 +27,28 @@ export interface StreamHandlers {
   onAnswer: (a: AnswerPayload) => void;
 }
 
-/**
- * POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → answer → done.
- * overrides — настройки песочницы (src/lib/sandbox.ts): действуют только на этот ответ.
- */
+/** Откуда разговор: стенд или виджет на сайте. Сервер хранит сессию с этим каналом. */
+export type Channel = "playground" | "embed";
+
+export interface ChatOptions {
+  signal?: AbortSignal;
+  /** Настройки песочницы (src/lib/sandbox.ts): действуют только на этот ответ. */
+  overrides?: Record<string, SettingValue>;
+  /** id разговора на фронте: сервер собирает по нему историю сессии для менеджера. */
+  sessionId?: string;
+  channel?: Channel;
+}
+
+/** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → answer → done. */
 export async function streamChat(
   messages: Turn[],
   mode: ChatMode,
   handlers: StreamHandlers,
-  signal?: AbortSignal,
-  overrides?: Record<string, SettingValue>,
+  { signal, overrides, sessionId, channel }: ChatOptions = {},
 ): Promise<void> {
-  const body = overrides && Object.keys(overrides).length ? { messages, mode, overrides } : { messages, mode };
+  const body: Record<string, unknown> = { messages, mode };
+  if (overrides && Object.keys(overrides).length) body.overrides = overrides;
+  if (sessionId) Object.assign(body, { session_id: sessionId, channel: channel ?? "playground" });
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

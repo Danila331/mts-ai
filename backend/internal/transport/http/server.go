@@ -26,6 +26,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/metrics"
 	"github.com/Danila331/mts-ai/backend/internal/ratelimit"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // MaxBody — предел тела запроса. Самое объёмное, что сюда приходит, —
@@ -52,6 +53,9 @@ type (
 	KB interface {
 		KB(ctx context.Context) (json.RawMessage, error)
 	}
+	Sessions interface {
+		History(ctx context.Context, id string) (session.History, error)
+	}
 	Settings interface {
 		Settings(ctx context.Context) (json.RawMessage, error)
 		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
@@ -67,6 +71,7 @@ type Deps struct {
 	Health   Health
 	KB       KB
 	Settings Settings
+	Sessions Sessions
 	// Metrics — nil выключает метрики.
 	Metrics *metrics.Metrics
 	// RateStore — хранилище пределов; nil — память процесса.
@@ -190,6 +195,9 @@ func (s *Server) routes() {
 	// Вход на /settings: прокси Next проверяет здесь введённый токен —
 	// под тем же пределом, что и сами настройки.
 	api.POST("/settings/login", s.adminLogin, settingsLimit, s.requireAdmin)
+	// Разговоры клиентов — только менеджеру (EB_MANAGER_TOKEN): там их
+	// реплики, то есть персональные данные.
+	api.GET("/sessions/:id", s.sessionHistory, settingsLimit, s.requireManager)
 }
 
 // Start слушает адрес до Shutdown; после него — http.ErrServerClosed.
@@ -305,19 +313,33 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 // AdminHeader — заголовок с токеном администратора от прокси Next.
 const AdminHeader = "X-Admin-Token"
 
+// ManagerHeader — заголовок с токеном менеджера от прокси Next.
+const ManagerHeader = "X-Manager-Token"
+
 // requireAdmin пускает к глобальным настройкам только администратора.
 //
 // В отличие от requireToken, пустой токен не открывает доступ, а
 // закрывает: машина разработчика без EB_ADMIN_TOKEN получает песочницу,
 // как любой посетитель, — менять бота для всех по умолчанию нельзя.
 func (s *Server) requireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
-	token := s.cfg.HTTP.AdminToken
-	return func(c echo.Context) error {
-		got := c.Request().Header.Get(AdminHeader)
-		if token == "" || got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
-			return fail(c, http.StatusUnauthorized, "Глобальные настройки меняет только администратор стенда")
+	return requireSecret(s.cfg.HTTP.AdminToken, AdminHeader, "Глобальные настройки меняет только администратор стенда")(next)
+}
+
+// requireManager пускает к разговорам и заявкам только менеджера. Пустой
+// EB_MANAGER_TOKEN — закрыто для всех.
+func (s *Server) requireManager(next echo.HandlerFunc) echo.HandlerFunc {
+	return requireSecret(s.cfg.HTTP.ManagerToken, ManagerHeader, "Разговоры клиентов видит только менеджер")(next)
+}
+
+func requireSecret(token, header, msg string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			got := c.Request().Header.Get(header)
+			if token == "" || got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				return fail(c, http.StatusUnauthorized, msg)
+			}
+			return next(c)
 		}
-		return next(c)
 	}
 }
 

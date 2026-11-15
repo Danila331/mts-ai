@@ -6,11 +6,13 @@ import (
 	"errors"
 
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 	"github.com/Danila331/mts-ai/backend/internal/storage/postgres/db"
 )
 
@@ -28,7 +30,49 @@ func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
 		Timings:   object(rec.Timings),
 		Guard:     object(rec.Guard),
 		RequestID: rec.RequestID,
+		SessionID: optional(rec.SessionID),
+		Sources:   jsonArray(rec.Sources()),
 	})
+}
+
+// TouchSession создаёт сессию на первом вопросе и обновляет её время на
+// каждом следующем; заголовок остаётся от первого.
+func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title string) error {
+	return s.Queries.UpsertSession(ctx, db.UpsertSessionParams{
+		ID: ref.ID, Channel: string(ref.Channel), Mode: mode, Title: title,
+	})
+}
+
+// History — сессия и её реплики по порядку: вопрос клиента, затем ответ.
+func (s *Store) History(ctx context.Context, id string) (session.History, error) {
+	row, err := s.Queries.GetSession(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return session.History{}, session.ErrNotFound
+	}
+	if err != nil {
+		return session.History{}, err
+	}
+	answers, err := s.Queries.SessionAnswers(ctx, &id)
+	if err != nil {
+		return session.History{}, err
+	}
+	h := session.History{
+		Session: session.Session{
+			ID: row.ID, Channel: row.Channel, Mode: row.Mode, Title: row.Title,
+			Page: json.RawMessage(row.Page), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		},
+		Turns: make([]session.Turn, 0, 2*len(answers)),
+	}
+	for _, a := range answers {
+		var sources []string
+		_ = json.Unmarshal(a.Sources, &sources)
+		h.Turns = append(h.Turns,
+			session.Turn{Role: "user", Content: a.Question, At: a.CreatedAt},
+			session.Turn{Role: "assistant", Content: a.Answer, AnswerID: a.ID, Sources: sources,
+				Fallback: a.Fallback, At: a.CreatedAt},
+		)
+	}
+	return h, nil
 }
 
 // CreateLead сохраняет заявку. Занятый номер отдаётся как
@@ -110,5 +154,22 @@ func object(raw json.RawMessage) []byte {
 	if len(raw) == 0 || json.Unmarshal(raw, &probe) != nil || probe == nil {
 		return []byte("{}")
 	}
+	return raw
+}
+
+// optional — пустая строка как NULL: ответ без сессии.
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// jsonArray — список строк для колонки jsonb NOT NULL; nil — пустой массив.
+func jsonArray(items []string) []byte {
+	if items == nil {
+		items = []string{}
+	}
+	raw, _ := json.Marshal(items)
 	return raw
 }

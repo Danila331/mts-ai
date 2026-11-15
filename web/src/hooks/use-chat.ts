@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { streamChat } from "@/lib/api";
+import { type Channel, streamChat } from "@/lib/api";
 import { readSandbox } from "@/lib/sandbox";
 import type { ChatMode, Message, Session, Turn } from "@/lib/types";
 
@@ -27,9 +27,14 @@ export function toTurns(messages: Message[]): Turn[] {
 /**
  * Сессии чата в localStorage + отправка сообщений. Один хук на стенд и на виджет — у них разные ключи хранилища.
  * sandbox — отправлять ли с вопросом настройки песочницы (/settings). Только стенд: виджет на сайте
- * всегда отвечает с общими настройками.
+ * всегда отвечает с общими настройками. channel — откуда разговор: id сессии уходит на сервер с каждым
+ * вопросом, и менеджер видит диалог целиком, даже если клиент очистил браузер.
  */
-export function useChat(storageKey: string, mode: ChatMode = "chat", { sandbox = false }: { sandbox?: boolean } = {}) {
+export function useChat(
+  storageKey: string,
+  mode: ChatMode = "chat",
+  { sandbox = false, channel = "playground" }: { sandbox?: boolean; channel?: Channel } = {},
+) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [ready, setReady] = useState(false);
@@ -94,9 +99,13 @@ export function useChat(storageKey: string, mode: ChatMode = "chat", { sandbox =
                 stage: "done",
               }),
           },
-          controller.signal,
-          // Читаются в момент вопроса: правка на /settings в соседней вкладке действует со следующего ответа.
-          sandbox ? readSandbox() : undefined,
+          {
+            signal: controller.signal,
+            // Читаются в момент вопроса: правка на /settings в соседней вкладке действует со следующего ответа.
+            overrides: sandbox ? readSandbox() : undefined,
+            sessionId,
+            channel,
+          },
         );
       } catch (err) {
         const aborted = controller.signal.aborted;
@@ -108,7 +117,7 @@ export function useChat(storageKey: string, mode: ChatMode = "chat", { sandbox =
         controllers.current.delete(sessionId);
       }
     },
-    [mode, sandbox, patchMessage],
+    [mode, sandbox, channel, patchMessage],
   );
 
   const send = useCallback(

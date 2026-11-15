@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // Имена событий потока. Порядок: stage(retrieval) → stage(generation) →
@@ -31,6 +32,9 @@ type Request struct {
 	// /settings): JSON-объект как прислал фронт, ключи и пределы
 	// проверяет ядро. Пусто — общие настройки.
 	Overrides json.RawMessage
+	// Session — разговор, к которому относится вопрос; нулевой — без
+	// сессии. Ядру не уходит: модель видит только присланные реплики.
+	Session session.Ref
 }
 
 // Event — одно событие потока. Data — JSON как его прислало ядро.
@@ -97,6 +101,29 @@ type Answer struct {
 	Model    string          `json:"model"`
 	Timings  json.RawMessage `json:"timings"`
 	Guard    json.RawMessage `json:"guard"`
+	// Citations — опора предложений ответа; в журнал идут только id
+	// разделов базы (Sources), без текста.
+	Citations []struct {
+		Support []struct {
+			ID string `json:"id"`
+		} `json:"support"`
+	} `json:"citations"`
+}
+
+// Sources — id разделов базы, на которые опирается ответ, без повторов,
+// в порядке первого упоминания.
+func (a Answer) Sources() []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, c := range a.Citations {
+		for _, s := range c.Support {
+			if s.ID != "" && !seen[s.ID] {
+				seen[s.ID] = true
+				out = append(out, s.ID)
+			}
+		}
+	}
+	return out
 }
 
 // Record — запись журнала: ответ и то, на что он отвечал.
@@ -107,4 +134,6 @@ type Record struct {
 	// RequestID — обращение, в котором дан ответ: по нему ответ из
 	// журнала находится в журнале службы и ядра.
 	RequestID string
+	// SessionID — разговор; пусто — ответ без сессии.
+	SessionID string
 }

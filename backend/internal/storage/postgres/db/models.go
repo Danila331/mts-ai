@@ -23,6 +23,8 @@ type Answer struct {
 	Guard     []byte
 	CreatedAt time.Time
 	RequestID string
+	SessionID *string
+	Sources   []byte
 }
 
 type Feedback struct {
@@ -48,4 +50,14 @@ type Lead struct {
 	CreatedAt     time.Time
 	RequestID     string
 	SummarySource string
+}
+
+type Session struct {
+	ID        string
+	Channel   string
+	Mode      string
+	Title     string
+	Page      []byte
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
