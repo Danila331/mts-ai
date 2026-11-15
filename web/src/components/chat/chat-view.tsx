@@ -6,6 +6,15 @@ import { toast } from "sonner";
 import type { ChatController } from "@/hooks/use-chat";
 import type { KbIndex } from "@/hooks/use-kb";
 import { sendFeedback } from "@/lib/api";
+import {
+  AI_DISCLAIMER,
+  AI_INTRO,
+  AI_LABEL,
+  followTarget,
+  hasUsefulAnswer,
+  nextFollowing,
+  suggestionsFor,
+} from "@/lib/answer-ux";
 import { canSummarize } from "@/lib/consultation-summary";
 import { cn } from "@/lib/utils";
 import { type WizardAnswers, type WizardFlow, chatReplica, passportValues } from "@/lib/wizards/engine";
@@ -16,11 +25,27 @@ import { SummaryPanel } from "./consultation-summary";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
 import { InlineLead } from "./inline-lead";
+import { PostLeadCard } from "./post-lead";
+import { QuickReplies } from "./quick-replies";
 import { PassportCard } from "./passport-card";
 import { RoleBadge, RolePicker, roleStarters } from "./role-picker";
 import { type Starter, Starters } from "./starters";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ROLES } from "@/lib/roles";
+
+/** Метка «ИИ-ассистент» (T31): человек сразу видит, что отвечает не менеджер. */
+function AiTag({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 items-center rounded-full bg-muted px-2 text-[11px] font-medium text-muted-foreground",
+        className,
+      )}
+    >
+      {AI_LABEL}
+    </span>
+  );
+}
 
 const GREETING =
   "Подберу решение по базе знаний МТС EnergyTool: учёт электроэнергии, поиск потерь, солнечная генерация, оптовый рынок и тарифы. Опишите задачу своими словами.";
@@ -149,25 +174,48 @@ export function ChatView({
    */
   showRoles?: boolean;
 }) {
-  const bottom = useRef<HTMLDivElement>(null);
   const [summaryFor, setSummaryFor] = useState<string | null>(null);
+  const [freshLead, setFreshLead] = useState<string | null>(null);
   const messages = chat.active?.messages ?? [];
   const last = messages[messages.length - 1];
 
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [messages.length, last?.pending, last?.stage]);
-
-  // Печатающийся ответ (T13) тянет ленту за собой, только пока человек внизу: отмотал вверх читать — не дёргаем.
+  // Прокрутка (T31, согласована с T13): ленту тянем за новым ответом, пока человек не отмотал вверх, но не дальше
+  // начала этого ответа — длинный ответ читают с первой строки, к его концу мы не прыгаем ни при печати, ни по её
+  // завершении. Короткий ответ целиком помещается, и лента держит низ. Новый вопрос возвращает слежение.
   const scroller = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  const lastTop = useRef(0);
+  const hasMessages = messages.length > 0;
+  const activeId = chat.activeId;
+  useEffect(() => {
+    following.current = true;
+  }, [activeId]);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    lastTop.current = el.scrollTop;
+    const onScroll = () => {
+      following.current = nextFollowing(following.current, lastTop.current, el);
+      lastTop.current = el.scrollTop;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [hasMessages]);
+
   const typedLength = last?.pending ? (last.streamed?.length ?? 0) : 0;
   useEffect(() => {
     const el = scroller.current;
-    if (!el || !typedLength) return;
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
-  }, [typedLength]);
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const answer = last?.role === "assistant" ? el.querySelector(`[data-message-id="${last.id}"]`) : null;
+    const answerTop = answer ? answer.getBoundingClientRect().top - box.top + el.scrollTop : undefined;
+    const sticky = el.querySelector<HTMLElement>("[data-sticky]")?.offsetHeight ?? 0;
+    const target = followTarget(el, answerTop, following.current, 12 + sticky);
+    if (target !== null) el.scrollTo({ top: target, behavior: typedLength ? "auto" : "smooth" });
+  }, [messages.length, last?.id, last?.role, last?.pending, last?.stage, typedLength]);
 
   const send = (text: string) => {
+    following.current = true;
     const id = chat.send(text);
     if (id) onSelect?.(id);
   };
@@ -185,7 +233,6 @@ export function ChatView({
     toast.success(rating > 0 ? "Спасибо за оценку" : "Спасибо, учтём при доработке");
   };
 
-  const hasAnswers = messages.some((m) => m.role === "assistant" && m.answer);
   const session = chat.active;
 
   // Открытый мастер привязан к диалогу: переключились на другой — мастер не тянется следом.
@@ -210,7 +257,14 @@ export function ChatView({
   // и заявка ещё не отправлена, и только после ответа (не посреди генерации).
   const hasPassport = !!passport?.fields.some((f) => f.value);
   const showInlineLead = !!session && !!passport?.ready_for_lead && !session.lead && !chat.busy;
-  const leadDone = (lead: { id: string; summary: string }) => chat.setLead(lead);
+  const leadDone = (lead: { id: string; summary: string }) => {
+    chat.setLead(lead);
+    setFreshLead(lead.id);
+  };
+  // Кнопки быстрых ответов — под последним ответом бота; свой текст клиента или новый вопрос их убирает.
+  const suggestions = chat.busy ? [] : suggestionsFor(messages, passport);
+  // «Связаться с менеджером» в ленте не предлагаем до первого полезного ответа; кнопка в шапке виджета есть всегда.
+  const offerLead = hasUsefulAnswer(messages);
   const showSummary = !!summary && canSummarize(session);
   // Итоги открыты для конкретного диалога: переключился на другой — экран итогов закрывается сам.
   const summaryOpen = showSummary && !!session && summaryFor === session.id;
@@ -250,6 +304,7 @@ export function ChatView({
       <div className="h-full min-h-0 overflow-y-auto">
         <div className="mx-auto flex min-h-full w-full max-w-[680px] flex-col justify-center px-5 pt-6 pb-[14vh] sm:px-6">
           <div className="msg-in flex flex-col items-center text-center">
+            <AiTag className="mb-3" />
             <h1 className="flex items-center gap-3 text-[26px] leading-tight font-medium tracking-[-0.02em] sm:text-[30px]">
               <BrandGlyph className="size-8 sm:size-9" />
               {heading}
@@ -301,6 +356,7 @@ export function ChatView({
               <div className="flex items-start gap-2.5">
                 <BotAvatar className="mt-0.5 size-6" />
                 <p className="rounded-2xl rounded-tl-md bg-muted px-3.5 py-2.5 text-[14px] leading-relaxed">
+                  <span className="mb-0.5 block text-[12px] font-medium text-muted-foreground">{AI_INTRO}</span>
                   {intro ?? GREETING}
                 </p>
               </div>
@@ -314,7 +370,7 @@ export function ChatView({
             </div>
           )}
           {hasPassport && passport && (
-            <div className={cn("sticky top-0 z-10 -mt-1 bg-background/95 pb-1 backdrop-blur", !compact && "pt-1")}>
+            <div data-sticky className={cn("sticky top-0 z-10 -mt-1 bg-background/95 pb-1 backdrop-blur", !compact && "pt-1")}>
               <PassportCard key={session?.id} passport={passport} onEdit={chat.editPassport} compact={compact} />
             </div>
           )}
@@ -329,8 +385,8 @@ export function ChatView({
             />
           )}
           {messages.map((m) => (
+            <div key={m.id} data-message-id={m.id} className="min-w-0">
             <MessageItem
-              key={m.id}
               message={m}
               kb={kb}
               compact={compact}
@@ -348,20 +404,34 @@ export function ChatView({
               }
               onRate={m.role === "assistant" && m.answer ? (r) => rate(m.id, r) : undefined}
             />
+            </div>
           ))}
+          <QuickReplies items={suggestions} onPick={send} compact={compact} />
           {showInlineLead && session && <InlineLead key={session.id} session={session} onDone={leadDone} compact={compact} />}
-          <div ref={bottom} />
         </div>
       </div>
       <div className={cn("shrink-0", compact ? "px-3 pt-1 pb-2" : "mx-auto w-full max-w-[720px] px-4 pb-3 sm:px-6")}>
         {role && messages.length > 0 && (
           <RoleBadge key={session?.id} role={role} source={session?.roleSource} onPick={chat.setRole} compact={compact} />
         )}
-        {((onLead && hasAnswers) || showSummary) && (
+        {session?.lead && (
+          <div className={cn("flex", compact ? "mb-2" : "mb-2.5 justify-center")}>
+            <div className="min-w-0 flex-1 sm:flex-none">
+              <PostLeadCard
+                session={session}
+                kb={kb}
+                onOpen={onLead}
+                defaultOpen={freshLead === session.lead.id}
+                compact={compact}
+              />
+            </div>
+          </div>
+        )}
+        {((onLead && offerLead && !session?.lead) || showSummary) && (
           <div className={cn("flex gap-2", compact ? "mb-2 items-stretch" : "mb-2.5 flex-wrap justify-center")}>
-            {onLead && hasAnswers && (
+            {onLead && offerLead && !session?.lead && (
               <div className={cn(compact && "min-w-0 flex-1")}>
-                <LeadButton done={chat.active?.lead?.id} onClick={onLead} compact={compact} />
+                <LeadButton onClick={onLead} compact={compact} />
               </div>
             )}
             {showSummary && session && <SummaryButton onClick={() => setSummaryFor(session.id)} compact={compact} />}
@@ -370,7 +440,7 @@ export function ChatView({
         {composer}
         {!compact && (
           <p className="mt-2 text-center text-xs text-muted-foreground">
-            Ответы строятся только по базе знаний МТС EnergyTool. Цифры по вашему объекту подтвердит специалист.
+            {AI_DISCLAIMER} Цифры по вашему объекту подтвердит специалист.
           </p>
         )}
       </div>

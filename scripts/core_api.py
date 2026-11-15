@@ -26,7 +26,9 @@
                                 В answer — confidence (уверенность: поиск + опора, порог) и route:
                                 answer | clarify (уточнение ниже порога, только chat при EB_CONFIDENCE_GATE=1),
                                 honest_no — «честные нет» (T26, только chat): [{rule, product, reason, fact,
-                                section, alternative}] по правилам из scripts/honest_no.py. Необязательный
+                                section, alternative}] по правилам из scripts/honest_no.py; suggestions — кнопки
+                                быстрых ответов на вопрос бота (T31, только chat, 2–4 строки или []; правила
+                                scripts/quick_replies.py, без модели). Необязательный
                                 "passport": {поле: значение} — паспорт задачи как ещё один источник фактов.
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
     POST /core/settings         {"values": {ключ: значение}} — поменять на лету для всех ответов (до перезапуска)
@@ -76,6 +78,7 @@ os.environ.setdefault("EB_STYLE", "jury")
 import honest_no  # noqa: E402 — scripts/honest_no.py: «честные нет» (T26), только режим chat
 import httpx  # noqa: E402 — зависимость energybot/llm.py
 import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с этим файлом
+import quick_replies  # noqa: E402 — scripts/quick_replies.py: кнопки быстрых ответов (T31), только режим chat
 
 from energybot.dialog import search_queries  # noqa: E402
 from energybot.guard import SENTENCE, numbers  # noqa: E402
@@ -1092,6 +1095,9 @@ class App:
         payload["honest_no"] = self.honest.detect(turns, passport) if mode == "chat" else []
         if degraded:
             payload["degraded"] = degraded
+        # Кнопки быстрых ответов (T31): детерминированно по вопросу бота и паспорту, без вызова модели; только chat.
+        payload["suggestions"] = quick_replies.suggest(answer.text, passport) \
+            if mode == "chat" and not payload["fallback"] else []
         return payload
 
     def model_down_reason(self) -> str:

@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { CallbackPicker } from "./callback-picker";
 import { LeadKindPicker } from "./lead-kind-picker";
 import { Consent } from "./consent";
+import { LeadChecklist } from "./post-lead";
 
 function plural(n: number, one: string, few: string, many: string) {
   const m10 = n % 10;
@@ -182,10 +183,12 @@ function LeadForm({
               {LEAD_SAVED_TITLE}
             </Title>
             <Description className="text-[14px] leading-relaxed text-muted-foreground">
-              {savedNote} Он уже будет знать контекст разговора. Номер заявки{" "}
+              {savedNote} Он уже будет знать контекст разговора. Консультация продолжается — вернитесь к чату и
+              задавайте вопросы. Номер заявки{" "}
               <span className="font-mono text-[13px] text-foreground">№{lead.id}</span>
             </Description>
           </div>
+          <LeadChecklist session={session} className="rounded-xl border bg-surface p-4" />
           <div className="rounded-xl border bg-surface p-4">
             <div className="mb-3 text-[13px] font-semibold">Что получит менеджер</div>
             <Summary text={lead.summary} />

@@ -5,10 +5,12 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChatView } from "@/components/chat/chat-view";
 import { LeadPanel } from "@/components/chat/lead-dialog";
+import { NewDialogConfirm } from "@/components/chat/new-dialog-confirm";
 import { BotAvatar } from "@/components/chat/message-item";
 import { topicByName } from "@/components/chat/topics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
+import { AI_DISCLAIMER, AI_LABEL, hasUnsentLead } from "@/lib/answer-ux";
 import { FLOWS } from "@/lib/wizards/flows";
 import { kbHref, useKb } from "@/hooks/use-kb";
 import { type PageInfo, isTopicName, sanitizePage } from "@/lib/page-context";
@@ -45,6 +47,9 @@ export function EmbedChat() {
   const chat = useChat("eb.widget.sessions.v1", "chat", { channel: "embed", page, stream });
   const { kb } = useKb();
   const [leadOpen, setLeadOpen] = useState(false);
+  // «Новый диалог» (T31): если в этом диалоге есть начатая, но не отправленная заявка — сначала спрашиваем.
+  const [confirmNew, setConfirmNew] = useState(false);
+  const requestNew = () => (hasUnsentLead(chat.active) ? setConfirmNew(true) : chat.create());
   const sendRef = useRef(chat.send);
   const pending = useRef<string[]>([]);
 
@@ -139,7 +144,12 @@ export function EmbedChat() {
           <>
             <BotAvatar className="size-9" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[15px] leading-tight font-semibold">{title}</div>
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[15px] leading-tight font-semibold">{title}</span>
+                <span className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-muted px-1.5 text-[10.5px] font-medium text-muted-foreground">
+                  {AI_LABEL}
+                </span>
+              </div>
               <div className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
                 <span className="relative flex size-1.5 shrink-0">
                   <span className="absolute inset-0 animate-ping rounded-full bg-success motion-reduce:hidden" />
@@ -171,7 +181,7 @@ export function EmbedChat() {
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <button type="button" onClick={() => chat.create()} className={headerButton} aria-label="Новый диалог" />
+                    <button type="button" onClick={requestNew} className={headerButton} aria-label="Новый диалог" />
                   }
                 >
                   <SquarePen />
@@ -212,9 +222,17 @@ export function EmbedChat() {
       </div>
       {!leadOpen && (
         <div className="shrink-0 px-4 pb-2.5 text-center text-[11px] leading-snug text-muted-foreground">
-          ИИ может ошибаться — цифры по вашему объекту подтвердит специалист МТС
+          {AI_DISCLAIMER} Цифры по вашему объекту подтвердит специалист МТС
         </div>
       )}
+      <NewDialogConfirm
+        open={confirmNew}
+        onCancel={() => setConfirmNew(false)}
+        onConfirm={() => {
+          setConfirmNew(false);
+          chat.create();
+        }}
+      />
     </div>
   );
 }

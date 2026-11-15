@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { ChatView } from "@/components/chat/chat-view";
 import { LeadDialog } from "@/components/chat/lead-dialog";
+import { NewDialogConfirm } from "@/components/chat/new-dialog-confirm";
 import { DebugPanel } from "@/components/debug/debug-panel";
 import { ChunkSheet } from "@/components/kb/chunk-sheet";
 import { exportSession, SessionsList } from "@/components/sessions-sidebar";
@@ -25,6 +26,7 @@ import { useChat } from "@/hooks/use-chat";
 import { FLOWS } from "@/lib/wizards/flows";
 import { useKb } from "@/hooks/use-kb";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { hasUnsentLead } from "@/lib/answer-ux";
 import type { ChatMode } from "@/lib/types";
 
 const DEBUG_KEY = "eb.debug.open";
@@ -37,6 +39,8 @@ export function Playground() {
   const [picked, setPicked] = useState<string>("");
   const [chunk, setChunk] = useState<string | null>(null);
   const [leadOpen, setLeadOpen] = useState(false);
+  // «Новый диалог» (T31): начатая, но не отправленная заявка — сначала подтверждение.
+  const [confirmNew, setConfirmNew] = useState(false);
   const [debugPref, setDebugPref] = useState(true);
   const [debugSheet, setDebugSheet] = useState(false);
   const [query, setQuery] = useState("");
@@ -211,7 +215,7 @@ export function Playground() {
 
   return (
     <AppShell
-      onNew={() => chat.create()}
+      onNew={() => (hasUnsentLead(chat.active) ? setConfirmNew(true) : chat.create())}
       search={{ value: query, onChange: setQuery }}
       sidebar={chat.ready ? <SessionsList chat={chat} query={query} /> : null}
     >
@@ -244,6 +248,14 @@ export function Playground() {
           </Sheet>
         </>
       )}
+      <NewDialogConfirm
+        open={confirmNew}
+        onCancel={() => setConfirmNew(false)}
+        onConfirm={() => {
+          setConfirmNew(false);
+          chat.create();
+        }}
+      />
       <ChunkSheet kb={kb} chunkId={chunk} onClose={() => setChunk(null)} marked={marked} />
       {chat.active && (
         <LeadDialog
