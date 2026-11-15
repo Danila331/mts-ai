@@ -13,19 +13,21 @@ import (
 )
 
 const createLead = `-- name: CreateLead :one
-INSERT INTO leads (code, name, phone, company, comment, summary, messages)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO leads (code, name, phone, company, comment, summary, summary_source, messages, request_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id, created_at
 `
 
 type CreateLeadParams struct {
-	Code     string
-	Name     string
-	Phone    string
-	Company  string
-	Comment  string
-	Summary  string
-	Messages []byte
+	Code          string
+	Name          string
+	Phone         string
+	Company       string
+	Comment       string
+	Summary       string
+	SummarySource string
+	Messages      []byte
+	RequestID     string
 }
 
 type CreateLeadRow struct {
@@ -41,9 +43,30 @@ func (q *Queries) CreateLead(ctx context.Context, arg CreateLeadParams) (CreateL
 		arg.Company,
 		arg.Comment,
 		arg.Summary,
+		arg.SummarySource,
 		arg.Messages,
+		arg.RequestID,
 	)
 	var i CreateLeadRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
 	return i, err
+}
+
+const updateLeadSummary = `-- name: UpdateLeadSummary :execrows
+UPDATE leads SET summary = $2, summary_source = $3 WHERE id = $1
+`
+
+type UpdateLeadSummaryParams struct {
+	ID            uuid.UUID
+	Summary       string
+	SummarySource string
+}
+
+// Резюме моделью приходит после записи заявки и заменяет список вопросов.
+func (q *Queries) UpdateLeadSummary(ctx context.Context, arg UpdateLeadSummaryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateLeadSummary, arg.ID, arg.Summary, arg.SummarySource)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

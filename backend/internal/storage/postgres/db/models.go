@@ -22,6 +22,7 @@ type Answer struct {
 	Timings   []byte
 	Guard     []byte
 	CreatedAt time.Time
+	RequestID string
 }
 
 type Feedback struct {
@@ -36,13 +37,15 @@ type Feedback struct {
 }
 
 type Lead struct {
-	ID        uuid.UUID
-	Code      string
-	Name      string
-	Phone     string
-	Company   string
-	Comment   string
-	Summary   string
-	Messages  []byte
-	CreatedAt time.Time
+	ID            uuid.UUID
+	Code          string
+	Name          string
+	Phone         string
+	Company       string
+	Comment       string
+	Summary       string
+	Messages      []byte
+	CreatedAt     time.Time
+	RequestID     string
+	SummarySource string
 }

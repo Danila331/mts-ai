@@ -16,7 +16,8 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"EB_ENV", "EB_DB_DSN", "DATABASE_URL", "EB_API_TOKEN", "EB_CORE_TOKEN",
 		"EB_CORE_URL", "PORT", "LLM_BASE_URL", "LLM_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY",
-		"EB_DISABLE_THINKING", "EB_LIMIT_CHAT_PER_MINUTE"} {
+		"EB_DISABLE_THINKING", "EB_LIMIT_CHAT_PER_MINUTE", "EB_SHUTDOWN_TIMEOUT", "EB_METRICS_PORT",
+		"EB_LOG_FORMAT", "EB_LOG_LEVEL", "EB_REDIS_URL", "REDIS_URL", "EB_SSE_HEARTBEAT"} {
 		t.Setenv(k, "")
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -38,6 +39,32 @@ func TestLoadFromEnvOnly(t *testing.T) {
 	assert.True(t, cfg.DB.Migrate)
 	assert.Equal(t, 3*time.Minute, cfg.Core.Timeout)
 	assert.Equal(t, 20, cfg.Limits.ChatPerMinute)
+	assert.Equal(t, 3*time.Minute+15*time.Second, cfg.ShutdownBudget(), "остановка ждёт не меньше ответа ядра")
+	assert.Equal(t, 15*time.Second, cfg.HTTP.SSEHeartbeat)
+	assert.Equal(t, 9091, cfg.Metrics.Port)
+	assert.Equal(t, "json", cfg.LogFormat(), "в бою — JSON")
+}
+
+func TestRedisURLFromRailway(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("REDIS_URL", "redis://railway:6379")
+	cfg, err := Load("нет-файла.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "redis://railway:6379", cfg.Limits.RedisURL)
+}
+
+func TestVerifyAnyEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("EB_ENV", "development")
+	cfg, err := Load("нет-файла.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "console", cfg.LogFormat(), "на машине разработчика — текст")
+
+	cfg.HTTP.ShutdownTimeout = 30 * time.Second
+	assert.ErrorContains(t, cfg.Verify(), "EB_SHUTDOWN_TIMEOUT", "даже в разработке")
+	cfg.HTTP.ShutdownTimeout = 0
+	cfg.Metrics.Port = cfg.HTTP.Port
+	assert.ErrorContains(t, cfg.Verify(), "EB_METRICS_PORT")
 }
 
 func TestEnvOverridesFile(t *testing.T) {
@@ -70,4 +97,8 @@ func TestVerifyProduction(t *testing.T) {
 
 	cfg.Limits.LeadBurst = 0
 	assert.Error(t, cfg.Verify())
+
+	cfg.Limits.LeadBurst = 3
+	cfg.Retention.LeadsDays = 0
+	assert.ErrorContains(t, cfg.Verify(), "EB_RETENTION", "бессрочное хранение заявок в бою не проходит")
 }

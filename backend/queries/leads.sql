@@ -1,4 +1,8 @@
 -- name: CreateLead :one
-INSERT INTO leads (code, name, phone, company, comment, summary, messages)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO leads (code, name, phone, company, comment, summary, summary_source, messages, request_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id, created_at;
+
+-- Резюме моделью приходит после записи заявки и заменяет список вопросов.
+-- name: UpdateLeadSummary :execrows
+UPDATE leads SET summary = $2, summary_source = $3 WHERE id = $1;

@@ -24,7 +24,7 @@ core:
 
 # API на хосте, на :8787 — там, куда по умолчанию ходит прокси Next.
 api:
-	set -a; [ -f $(ENV_FILE) ] && . $(ENV_FILE); set +a; go run ./cmd/api -config $(CONFIG)
+	set -a; [ -f $(ENV_FILE) ] && . $(ENV_FILE); set +a; go run -ldflags "-X main.version=$$(git rev-parse --short=12 HEAD 2>/dev/null || echo dev)" ./cmd/api -config $(CONFIG)
 
 test:
 	go test ./... -count=1
