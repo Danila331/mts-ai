@@ -111,6 +111,10 @@ export interface AnswerPayload {
   /** Настройки песочницы, с которыми построен этот ответ; пусто — общие настройки стенда. */
   overrides?: Record<string, SettingValue>;
   confidence?: Confidence;
+  /** T13: ответ печатался дельтами по мере генерации. */
+  streamed?: boolean;
+  /** T13: финальный текст отличается от напечатанного — проверка ответа переписала или вырезала часть. */
+  revised?: boolean;
 }
 
 export interface LlmCall {
@@ -172,6 +176,12 @@ export interface Message {
   answer?: AnswerPayload;
   error?: string;
   rating?: 1 | -1;
+  /** Текст, напечатанный дельтами, пока ответ не готов (T13). Живёт только в памяти, в localStorage не пишется. */
+  streamed?: string;
+  /** Ответ печатался на глазах — готовый текст не проявляется заново. */
+  typed?: boolean;
+  /** Финальный текст заменил напечатанный — метка «Уточнено проверкой». */
+  revised?: boolean;
 }
 
 // ---------- паспорт задачи (T2, событие passport и PATCH /api/sessions/:id/passport) ----------

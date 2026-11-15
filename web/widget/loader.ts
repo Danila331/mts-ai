@@ -11,9 +11,13 @@
  * Страница (T8): iframe получает сообщением eb:page только путь, заголовок и UTM-метки страницы — без cookies,
  * других параметров адреса и referrer — и тему страницы по data-topics (префикс пути → тема). Тема ещё и в адресе
  * iframe (?topic=), чтобы приветствие было верным с первого кадра; путь и метки в адрес iframe не попадают.
+ *
+ * Потоковая выдача (T13): по умолчанию ответ печатается по мере генерации; data-stream="0" — ответ появляется
+ * целиком, когда его проверили. Флаг — так же, как тема: в адресе iframe (?stream=0) и в сообщении eb:page.
  */
 
 import { type PageInfo, matchTopic, pageFrom, parseTopics } from "../src/lib/page-context";
+import { parseStreamFlag } from "../src/lib/stream-text";
 
 interface Config {
   title: string;
@@ -29,6 +33,8 @@ interface Config {
   quick: string[];
   /** Темы страниц: data-topics='{"/solar":"solar"}' — префикс пути → тема приветствия и вопросов в чате. */
   topics: Record<string, string>;
+  /** Печатать ответ по мере генерации: data-stream="0" — выключить (ответ целиком, уже проверенный). */
+  stream: boolean;
 }
 
 interface Api {
@@ -77,6 +83,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
       .filter(Boolean)
       .slice(0, 3),
     topics: parseTopics(d.topics),
+    stream: parseStreamFlag(d.stream) ?? true,
   };
 
   const side = cfg.position;
@@ -194,12 +201,13 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     if (cfg.greeting) u.searchParams.set("greeting", cfg.greeting);
     const t = topic();
     if (t) u.searchParams.set("topic", t);
+    if (!cfg.stream) u.searchParams.set("stream", "0");
     u.searchParams.set("parent", location.origin);
     return u.toString();
   };
 
   /** Путь, заголовок и UTM — только сообщением с точным targetOrigin, не в адресе iframe. */
-  const sendPage = () => post({ type: "eb:page", page: page(), topic: topic() ?? null });
+  const sendPage = () => post({ type: "eb:page", page: page(), topic: topic() ?? null, stream: cfg.stream });
 
   function ensureFrame() {
     if (iframe) return;

@@ -105,6 +105,15 @@ export function ChatView({
     bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [messages.length, last?.pending, last?.stage]);
 
+  // Печатающийся ответ (T13) тянет ленту за собой, только пока человек внизу: отмотал вверх читать — не дёргаем.
+  const scroller = useRef<HTMLDivElement>(null);
+  const typedLength = last?.pending ? (last.streamed?.length ?? 0) : 0;
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !typedLength) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
+  }, [typedLength]);
+
   const send = (text: string) => {
     const id = chat.send(text);
     if (id) onSelect?.(id);
@@ -169,7 +178,7 @@ export function ChatView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
         <div
           className={cn(
             "mx-auto flex w-full flex-col",

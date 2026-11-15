@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Channel, patchPassport, streamChat } from "@/lib/api";
 import type { PageInfo } from "@/lib/page-context";
 import { readSandbox } from "@/lib/sandbox";
+import { appendDelta, isRevised } from "@/lib/stream-text";
 import type { ChatMode, Message, Passport, Session, Turn } from "@/lib/types";
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -18,6 +19,9 @@ function titleFrom(text: string) {
   return clean.length > 48 ? `${clean.slice(0, 46)}…` : clean;
 }
 
+/** Как часто напечатанный текст попадает в состояние: дельты приходят по слову, перерисовка — не чаще. */
+const STREAM_FLUSH_MS = 40;
+
 /** История для API: только завершённые реплики, без отладочных полей. */
 export function toTurns(messages: Message[]): Turn[] {
   return messages
@@ -31,15 +35,24 @@ export function toTurns(messages: Message[]): Turn[] {
  * всегда отвечает с общими настройками. channel — откуда разговор: id сессии уходит на сервер с каждым
  * вопросом, и менеджер видит диалог целиком, даже если клиент очистил браузер. page — страница сайта, где
  * открыт виджет (T8): уходит с вопросом и пишется в сессию для аналитики, ядру и в промпт не попадает.
+ * stream — печатать ответ по мере генерации (T13); false — ждать готовый ответ (виджет с data-stream="0").
  */
 export function useChat(
   storageKey: string,
   mode: ChatMode = "chat",
-  { sandbox = false, channel = "playground", page }: { sandbox?: boolean; channel?: Channel; page?: PageInfo } = {},
+  {
+    sandbox = false,
+    channel = "playground",
+    page,
+    stream = true,
+  }: { sandbox?: boolean; channel?: Channel; page?: PageInfo; stream?: boolean } = {},
 ) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [ready, setReady] = useState(false);
+  // Напечатанный текст незавершённых ответов (id сообщения → текст) — отдельно от сессий: они пишутся
+  // в localStorage на каждое изменение, а дельты приходят по слову.
+  const [live, setLive] = useState<Record<string, string>>({});
   const controllers = useRef(new Map<string, AbortController>());
 
   useEffect(() => {
@@ -65,7 +78,14 @@ export function useChat(
     if (ready) localStorage.setItem(storageKey, JSON.stringify(sessions.slice(0, 100)));
   }, [sessions, ready, storageKey]);
 
-  const active = useMemo(() => sessions.find((s) => s.id === activeId) ?? sessions[0], [sessions, activeId]);
+  const active = useMemo(() => {
+    const session = sessions.find((s) => s.id === activeId) ?? sessions[0];
+    if (!session || !Object.keys(live).length) return session;
+    return {
+      ...session,
+      messages: session.messages.map((m) => (m.pending && live[m.id] ? { ...m, streamed: live[m.id] } : m)),
+    };
+  }, [sessions, activeId, live]);
 
   const update = useCallback((id: string, fn: (s: Session) => Session) => {
     setSessions((list) => list.map((s) => (s.id === id ? fn(s) : s)));
@@ -85,6 +105,23 @@ export function useChat(
     async (sessionId: string, history: Message[], assistantId: string) => {
       const controller = new AbortController();
       controllers.current.set(sessionId, controller);
+      // Дельты копятся здесь и попадают в состояние не чаще раза в STREAM_FLUSH_MS.
+      let streamed = "";
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const flush = () => {
+        timer = undefined;
+        setLive((all) => ({ ...all, [assistantId]: streamed }));
+      };
+      const dropLive = () => {
+        clearTimeout(timer);
+        timer = undefined;
+        setLive((all) => {
+          if (!(assistantId in all)) return all;
+          const rest = { ...all };
+          delete rest[assistantId];
+          return rest;
+        });
+      };
       try {
         await streamChat(
           toTurns(history),
@@ -92,15 +129,26 @@ export function useChat(
           {
             onRetrieval: (retrieval) => patchMessage(sessionId, assistantId, { stage: "retrieval", retrieval }),
             onGeneration: () => patchMessage(sessionId, assistantId, { stage: "generation" }),
+            onDelta: stream
+              ? (text) => {
+                  streamed = appendDelta(streamed, { text });
+                  timer ??= setTimeout(flush, STREAM_FLUSH_MS);
+                }
+              : undefined,
             onPassport: (passport) => update(sessionId, (s) => ({ ...s, passport })),
-            onAnswer: (answer) =>
+            // Финальный ответ главнее напечатанного: проверка могла переписать или вырезать предложение.
+            onAnswer: (answer) => {
+              dropLive();
               patchMessage(sessionId, assistantId, {
                 content: answer.text,
                 answer,
                 retrieval: answer.retrieval,
                 pending: false,
                 stage: "done",
-              }),
+                typed: !!streamed.trim(),
+                revised: isRevised(streamed, answer),
+              });
+            },
           },
           {
             signal: controller.signal,
@@ -118,10 +166,11 @@ export function useChat(
           error: aborted ? "Остановлено" : err instanceof Error ? err.message : "Ошибка",
         });
       } finally {
+        dropLive();
         controllers.current.delete(sessionId);
       }
     },
-    [mode, sandbox, channel, page, patchMessage, update],
+    [mode, sandbox, channel, page, stream, patchMessage, update],
   );
 
   const send = useCallback(

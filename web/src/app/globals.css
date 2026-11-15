@@ -346,6 +346,23 @@
   animation: answer-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* Каретка печатающегося ответа (T13). */
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  border-radius: 1px;
+  background: var(--brand-text, currentColor);
+  animation: caret-blink 1s steps(1) infinite;
+}
+
 /* Появление нового сообщения */
 @keyframes msg-in {
   from {
@@ -365,6 +382,7 @@
   .think-out,
   .think-fade,
   .answer-in,
+  .stream-caret,
   .shimmer-text {
     animation: none;
   }

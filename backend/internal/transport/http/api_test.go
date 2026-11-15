@@ -612,6 +612,59 @@ func TestChatHeartbeatWhileCoreThinks(t *testing.T) {
 	assert.Equal(t, []string{"stage", "answer", "done"}, evs, "комментарии не ломают события")
 }
 
+// Дельты (T13) уходят клиенту сразу, как ядро их написало, а не пачкой
+// вместе с ответом: ядро держит answer, пока клиент не прочитал delta.
+func TestChatRelaysDeltasLive(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: stage\ndata: {\"name\": \"generation\"}\n\n")
+		_, _ = io.WriteString(w, "event: delta\ndata: {\"text\": \"Платформа \"}\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = io.WriteString(w, "event: answer\ndata: {\"id\": \"a1\", \"text\": \"Проверенный ответ\", \"revised\": true}\n\n"+
+			"event: done\ndata: {}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	s, store := newServer(t, srv.URL, nil)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+	go func() { _ = s.Start(addr) }()
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	require.Eventually(t, func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			_ = c.Close()
+		}
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// Потолок на весь запрос: застрявшая в буфере дельта — падение теста, а не зависание.
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post("http://"+addr+"/api/chat", "application/json",
+		strings.NewReader(`{"messages": [{"role": "user", "content": "q"}]}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	var head strings.Builder
+	for !strings.Contains(head.String(), "event: delta\ndata: {\"text\": \"Платформа \"}\n\n") {
+		line, err := br.ReadString('\n')
+		require.NoError(t, err, "delta дошла до клиента раньше answer")
+		head.WriteString(line)
+	}
+	close(release)
+	rest, err := io.ReadAll(br)
+	require.NoError(t, err)
+	evs := readSSE(t, head.String()+string(rest))
+	assert.Equal(t, []string{"stage", "delta", "answer", "done"}, names(evs))
+	assert.JSONEq(t, `{"text": "Платформа "}`, evs[1].data, "дельта — байт в байт")
+	require.Equal(t, 1, store.answerCount())
+	assert.Equal(t, "Проверенный ответ", store.answers[0].Text, "в журнале финальный текст")
+}
+
 func TestMetricsCountOutcomes(t *testing.T) {
 	s, _, m := newServerWithMetrics(t, fakeCore(t, goodStream).URL, nil)
 	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",

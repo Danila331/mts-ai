@@ -15,8 +15,12 @@
     GET  /core/health           схема ответа, есть ли модель, эмбеддинги, размер базы
     GET  /core/kb               база знаний разделами (те же фрагменты, что видит модель)
     POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"|"copilot", "overrides": {…}}
-                                → SSE: stage, answer, done. overrides — настройки RAG только для этого ответа
+                                → SSE: stage, delta…, answer, done. overrides — настройки RAG только для этого ответа
                                 (песочница стенда), те же ключи и пределы, что у /core/settings.
+                                delta {"text"} — кусок основного ответа модели по мере генерации (T13; не в eval,
+                                EB_STREAM=0 или "stream": false в запросе — выключено). Проверка ответа работает
+                                после генерации, поэтому главный текст — в answer: streamed — были ли дельты,
+                                revised — финальный текст отличается от напечатанного (guard переписал или вырезал).
                                 В answer — confidence (уверенность: поиск + опора, порог) и route:
                                 answer | clarify (уточнение ниже порога, только chat при EB_CONFIDENCE_GATE=1)
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
@@ -64,12 +68,13 @@ load_dotenv(ROOT / ".env")
 # Умолчание, а не жёсткая настройка: EB_STYLE из окружения по-прежнему главнее.
 os.environ.setdefault("EB_STYLE", "jury")
 
+import httpx  # noqa: E402 — зависимость energybot/llm.py
 import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с этим файлом
 
 from energybot.dialog import search_queries  # noqa: E402
 from energybot.guard import SENTENCE, numbers  # noqa: E402
 from energybot.kb import KnowledgeBase  # noqa: E402
-from energybot.llm import Api, env, env_num  # noqa: E402
+from energybot.llm import THINK, Api, DeadlineExceeded, env, env_num, strip_thinking  # noqa: E402
 from energybot.pipeline import FALLBACK, Answer, Consultant, tidy  # noqa: E402
 from energybot.prompts import CLARIFY_SYSTEM, render_dialog  # noqa: E402
 from energybot.text import tokens  # noqa: E402
@@ -171,6 +176,9 @@ class Trace(threading.local):
         self.confidence = None  # retrieval-часть уверенности по последней выдаче (retrieval_confidence)
         self.prefetched = None  # выдача, найденная до ответа для порога уверенности (WebConsultant.prefetch)
         self.retrieval_ms = 0.0
+        self.stream = False  # можно ли этому ответу слать delta (веб-режим, не eval)
+        self.stream_on = False  # идёт основной вызов генерации — его и только его отдаём потоком
+        self.streamed = ""  # текст, уже отправленный клиенту дельтами
 
 
 TRACE = Trace()
@@ -218,12 +226,139 @@ def overridden(values: dict):
         OVERRIDES.values = None
 
 
+# ---------- потоковая выдача (T13) ----------
+THINK_TAGS = ("<think>", "</think>")
+TRANSIENT = (429, 500, 502, 503, 504)
+FINAL = (400, 401, 403, 404, 422)
+
+
+def thinking_requested(body: dict) -> bool:
+    """Запрошены ли размышления в теле запроса (любым из параметров Api._thinking_fields)."""
+    return bool((body.get("chat_template_kwargs") or {}).get("enable_thinking")
+                or (body.get("reasoning") or {}).get("enabled") or body.get("enable_thinking"))
+
+
+def visible_prefix(text: str, think: bool) -> str:
+    """Часть ответа, которую уже можно показать клиенту, — по тем же правилам, что strip_thinking.
+
+    Ответ — после последней </think>. С запрошенными размышлениями до неё не показываем ничего: vLLM без разбора
+    размышлений шлёт их текстом без открывающей метки. Незакрытая <think> прячет всё после себя, а хвост,
+    похожий на начало метки («<», «</th»), ждёт следующего куска."""
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    elif think:
+        return ""
+    text = THINK.sub("", text)
+    if "<think>" in text:
+        text = text.split("<think>")[0]
+    cut = max((k for tag in THINK_TAGS for k in range(1, len(tag)) if text.endswith(tag[:k])), default=0)
+    return (text[:-cut] if cut else text).lstrip()
+
+
+class DeltaSink:
+    """Шлёт клиенту прирост видимой части ответа событиями delta.
+
+    Видимая часть только растёт; если она перестала начинаться с уже отправленного (размышление вдруг
+    закрылось позже), поток замолкает — текст всё равно заменит финальное событие answer."""
+
+    def __init__(self, think: bool):
+        self.raw, self.think, self.sent, self.broken = "", think, "", False
+
+    def feed(self, piece: str) -> None:
+        self.raw += piece
+        self.push(visible_prefix(self.raw, self.think))
+
+    def close(self) -> None:
+        self.push(strip_thinking(self.raw))
+
+    def push(self, visible: str) -> None:
+        if self.broken or not TRACE.emit:
+            return
+        if not visible.startswith(self.sent):
+            self.broken = True
+            return
+        new = visible[len(self.sent):]
+        if new:
+            self.sent = visible
+            TRACE.streamed += new
+            TRACE.emit("delta", {"text": new})
+
+
 class WebApi(Api):
-    """Api стенда: параметры генерации и реранкер переопределяются на один ответ."""
+    """Api стенда: параметры генерации и реранкер переопределяются на один ответ.
+
+    Основной вызов генерации веб-ответа (TRACE.stream_on) идёт с "stream": true: куски ответа уходят клиенту
+    событиями delta, а вызывающему возвращается тот же разобранный JSON, что и без потока, — вся обработка
+    Api.chat (отказ от параметров, strip_thinking, повтор при исчерпанных размышлениях) не меняется.
+    Сабмит (solution.py) и режим eval этот путь не видят: у них TRACE.stream_on не включается."""
 
     max_tokens = Overridable()
     temperature = Overridable()
     can_rerank = Overridable()
+
+    def _post(self, url: str, key: str, body: dict, attempts: int = 3, timeout: float | None = None) -> dict:
+        if not (TRACE.stream_on and TRACE.emit and url.endswith("/chat/completions")) or TRACE.streamed:
+            return super()._post(url, key, body, attempts=attempts, timeout=timeout)
+        last = None
+        limit = timeout or self.timeout
+        for attempt in range(attempts):
+            remaining = self._remaining()
+            if remaining is not None and remaining < 3:
+                raise DeadlineExceeded("исчерпан общий лимит времени прогона")
+            try:
+                return self._stream(url, key, body, limit if remaining is None else min(limit, remaining - 1))
+            except httpx.HTTPStatusError as exc:
+                last = exc
+                if exc.response is not None and exc.response.status_code in FINAL:
+                    raise
+            except (httpx.TimeoutException, httpx.TransportError, ValueError) as exc:
+                last = exc
+            if attempt + 1 >= attempts:
+                break
+            if TRACE.streamed:
+                # Клиент уже видит часть текста: повтор — без потока, иначе текст напечатался бы дважды.
+                return super()._post(url, key, body, attempts=attempts - attempt - 1, timeout=timeout)
+            time.sleep(0.6 * (2 ** attempt))
+        raise last
+
+    def _stream(self, url: str, key: str, body: dict, timeout: float) -> dict:
+        """Один потоковый запрос → {"choices": [{"message", "finish_reason"}], "usage"} как у обычного ответа."""
+        started = time.perf_counter()
+        sink = DeltaSink(thinking_requested(body))
+        with self.client.stream("POST", url, headers={"Authorization": f"Bearer {key}"},
+                                json={**body, "stream": True}, timeout=timeout) as r:
+            if r.status_code >= 400:
+                r.read()  # текст ошибки нужен Api.chat (context_overflow)
+                raise httpx.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
+            if "text/event-stream" not in r.headers.get("content-type", ""):
+                r.read()  # сервер не умеет потоки и ответил целиком — дельт нет, ответ тот же
+                return r.json()
+            content, reasoning, finish, usage = [], [], None, {}
+            for line in r.iter_lines():
+                # Тайм-аут httpx — на каждое чтение; общий предел ответа (размышления!) держим сами.
+                if time.perf_counter() - started > timeout:
+                    raise httpx.ReadTimeout("поток ответа дольше тайм-аута", request=r.request)
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                chunk = json.loads(data)
+                usage = chunk.get("usage") or usage
+                for choice in chunk.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    finish = choice.get("finish_reason") or finish
+                    thought = delta.get("reasoning_content") or delta.get("reasoning")
+                    if thought:
+                        reasoning.append(thought)  # размышления отдельным полем клиенту не идут
+                    if delta.get("content"):
+                        content.append(delta["content"])
+                        sink.feed(delta["content"])
+        sink.close()
+        message = {"role": "assistant", "content": "".join(content)}
+        if reasoning:
+            message["reasoning"] = "".join(reasoning)
+        return {"choices": [{"message": message, "finish_reason": finish}], "usage": usage}
 
 
 class WebConsultant(Consultant):
@@ -275,6 +410,25 @@ class WebConsultant(Consultant):
 
         self.retriever.search = recording_search
         self.api.chat = recording_chat
+
+    # Потоком идёт только основной вызов ответа: попытки generate / fm_generate до первого напечатанного куска.
+    # Разбор вопроса (EB_PLAN) потоком не идёт — клиенту нужен только ответ после метки ОТВЕТ. Перезапросы
+    # проверки, уточнение и вспомогательные вызовы (основа, опора, переписывание реплики) — тоже нет.
+    def generate(self, messages: list, think: bool, attempts: int, plan: bool = False) -> tuple:
+        with self._streaming(not plan):
+            return super().generate(messages, think, attempts, plan)
+
+    def fm_generate(self, messages: list) -> tuple:
+        with self._streaming(True):
+            return super().fm_generate(messages)
+
+    @contextmanager
+    def _streaming(self, allowed: bool):
+        TRACE.stream_on = bool(allowed and TRACE.stream and not TRACE.streamed)
+        try:
+            yield
+        finally:
+            TRACE.stream_on = False
 
     def retrieve(self, turns, *args, **kwargs):
         cached = self._take_prefetched("retrieve", turns, args, kwargs)
@@ -738,6 +892,9 @@ class App:
         # флагом; автопроверка (eval) и копилот отвечают как раньше при любых значениях.
         self.gate = env("EB_CONFIDENCE_GATE", "0") == "1"
         self.threshold = env_num("EB_CONFIDENCE_THRESHOLD", CONFIDENCE_THRESHOLD, 0.0, 1.0, float)
+        # Потоковая выдача (T13): delta по мере генерации. Выключатель на случай сервера модели, который
+        # плохо держит "stream": true; режим eval не стримит никогда.
+        self.stream = env("EB_STREAM", "1") != "0"
         self.settings = Settings(self.bot, self.api)
         self.kb_path = kb_path
         if self.wants_dense() and not self.bot.dense:
@@ -817,13 +974,15 @@ class App:
         mode = body.get("mode") if body.get("mode") in ("chat", "eval", "copilot") else self.mode
         applied, values = self.settings.overrides(body.get("overrides"))
         # Весь ответ — и поиск, и представление для отладки — с настройками этого запроса.
+        stream = self.stream and mode != "eval" and body.get("stream") is not False
         with overridden(values):
-            payload = self._chat(turns, mode, emit)
+            payload = self._chat(turns, mode, emit, stream)
         payload["overrides"] = applied
         return payload
 
-    def _chat(self, turns: list, mode: str, emit) -> dict:
+    def _chat(self, turns: list, mode: str, emit, stream: bool = False) -> dict:
         TRACE.reset(emit)
+        TRACE.stream = bool(stream and emit)
         t0 = time.perf_counter()
         # Порог решается по поиску до генерации и только в чате: в eval и copilot путь ответа прежний.
         gate = self.gate and mode == "chat"
@@ -873,6 +1032,10 @@ class App:
             "prompt_chars": sum(len(m["content"]) for m in prompt),
             "llm_calls": calls,
             "model": env("LLM_MODEL", ""),
+            # Финальный текст главнее дельт: guard работает после генерации и может переписать или вырезать
+            # напечатанное. Сравнение — после той же чистки (tidy), что прошёл ответ.
+            "streamed": bool(TRACE.streamed),
+            "revised": bool(TRACE.streamed) and tidy(TRACE.streamed) != answer.text,
         }
         # Подписи к источникам: путь раздела для чипов в ответе.
         for cite in payload["citations"]:

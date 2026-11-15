@@ -1,9 +1,10 @@
 "use client";
 
-import { AlertCircle, Check, Copy, PanelRight, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
+import { AlertCircle, Check, Copy, PanelRight, RotateCcw, ShieldCheck, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KbIndex } from "@/hooks/use-kb";
+import { tidyStream } from "@/lib/stream-text";
 import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand";
@@ -60,6 +61,38 @@ function Tag({ tone, children }: { tone: "warning" | "danger" | "neutral"; child
     >
       {children}
     </span>
+  );
+}
+
+/** Ответ, который печатается по мере генерации (T13): тот же шрифт, что у готового, и мигающая каретка. */
+function StreamingText({ text, compact }: { text: string; compact?: boolean }) {
+  return (
+    <div aria-busy="true" className="flex flex-col gap-1">
+      <p className={cn("text-foreground", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}>
+        {tidyStream(text)}
+        <span aria-hidden className="stream-caret" />
+      </p>
+    </div>
+  );
+}
+
+/** Метка у ответа, который проверка по базе поправила уже после того, как он напечатался. */
+function RevisedTag() {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            className="inline-flex h-5 items-center gap-1 rounded-md bg-muted px-1.5 text-[11px] font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-3"
+          />
+        }
+      >
+        <ShieldCheck aria-hidden />
+        Уточнено проверкой
+      </TooltipTrigger>
+      <TooltipContent>Пока ответ печатался, проверка по базе знаний поправила его — показан проверенный текст</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -125,7 +158,9 @@ export function MessageItem({
         onDebug();
       }}
     >
-      {message.pending ? (
+      {message.pending && message.streamed ? (
+        <StreamingText text={message.streamed} compact={compact} />
+      ) : message.pending ? (
         <ThinkingLine message={message} compact={compact} />
       ) : message.error ? (
         <div className="flex flex-wrap items-center gap-2 text-[14px]">
@@ -144,7 +179,8 @@ export function MessageItem({
           )}
         </div>
       ) : (
-        <div className={cn(waited && "answer-in")}>
+        // Напечатанный ответ не проявляется заново; заменённый проверкой — проявляется, чтобы замену было видно.
+        <div className={cn(waited && (!message.typed || message.revised) && "answer-in")}>
           <AnswerText
             answer={a}
             text={message.content}
@@ -183,6 +219,11 @@ export function MessageItem({
               <IconAction label={selected ? "Открыто в отладке" : "Показать в отладке"} onClick={onDebug} active={selected}>
                 <PanelRight className={cn(selected && "text-brand-text")} />
               </IconAction>
+            )}
+            {message.revised && (
+              <span className="ml-2 flex items-center">
+                <RevisedTag />
+              </span>
             )}
             {!compact && a && (
               <span className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">
