@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { type WizardAnswers, type WizardFlow, chatReplica, passportValues } from "@/lib/wizards/engine";
 import { WizardEntry, WizardRunner, WizardSummary } from "@/components/wizard/wizard";
 import { Composer } from "./composer";
+import { StatusBanner } from "./status-banner";
 import { SummaryPanel } from "./consultation-summary";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
@@ -283,6 +284,7 @@ export function ChatView({
             compact ? "gap-5 px-4 pt-4 pb-6" : "max-w-[720px] gap-7 px-5 pt-4 pb-10 sm:px-6",
           )}
         >
+          <StatusBanner answerDegraded={!!last?.answer?.degraded} compact={compact} />
           {!messages.length && compact && openFlow && (
             <WizardRunner
               key={`${chat.activeId}-${openFlow.id}`}
@@ -334,6 +336,7 @@ export function ChatView({
               compact={compact}
               onOpenChunk={onOpenChunk}
               selected={selectedId === m.id}
+              onLead={onLead}
               onDebug={onSelect && m.role === "assistant" ? () => onSelect(m.id, true) : undefined}
               onRegenerate={
                 m.role === "assistant" && !chat.busy

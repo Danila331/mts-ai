@@ -472,6 +472,10 @@ func (s *Server) coreFail(c echo.Context, err error) error {
 		return fail(c, coreErr.Status, coreErr.Msg)
 	}
 	zerolog.Ctx(c.Request().Context()).Error().Err(err).Str("route", c.Path()).Msg("ядро не ответило")
+	if errors.Is(err, core.ErrCircuitOpen) {
+		return fail(c, http.StatusServiceUnavailable,
+			"Ядро консультанта перезапускается — ответ появится через минуту. Заявки и оценки принимаются.")
+	}
 	if errors.Is(err, core.ErrUnavailable) {
 		return fail(c, http.StatusBadGateway, "Ядро консультанта не запущено или перезапускается")
 	}

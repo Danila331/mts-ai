@@ -185,6 +185,7 @@ class Trace(threading.local):
         self.stream = False  # можно ли этому ответу слать delta (веб-режим, не eval)
         self.stream_on = False  # идёт основной вызов генерации — его и только его отдаём потоком
         self.streamed = ""  # текст, уже отправленный клиенту дельтами
+        self.query_dense = False  # вектор вопроса получен: эмбеддинги в этом ответе работали
 
 
 TRACE = Trace()
@@ -436,6 +437,11 @@ class WebConsultant(Consultant):
         finally:
             TRACE.stream_on = False
 
+    def embed_queries(self, semantic_queries: list) -> list:
+        vectors = super().embed_queries(semantic_queries)
+        TRACE.query_dense = TRACE.query_dense or any(v is not None for v in vectors)
+        return vectors
+
     def retrieve(self, turns, *args, **kwargs):
         cached = self._take_prefetched("retrieve", turns, args, kwargs)
         if cached is not None:
@@ -566,9 +572,22 @@ class WebConsultant(Consultant):
             "in_context": h.chunk.id in in_context,
             "preview": h.chunk.text[:280],
         } for i, h in enumerate(TRACE.ranked[:30])]
+        # Ступень поиска, по которой построена выдача (T30): видна в отладке. Реранкер и эмбеддинги, которых
+        # ждали, но не получили, перечислены в skipped — ответ строится по более простой ступени.
+        dense_used = bool(TRACE.query_dense and self.retriever.vectors is not None)
+        reranked = bool(TRACE.ranked) and TRACE.ranked[0].stage == "rerank"
+        skipped = []
+        if self.api.configured:
+            if self.api.use_embeddings and (self.retriever.vectors is None or (self.dense and not dense_used)):
+                skipped.append("embeddings")
+            if self.api.can_rerank and not reranked:
+                skipped.append("reranker")
+        tier = "bm25" + (" + эмбеддинги" if dense_used else "") + (" + реранкер" if reranked else "")
         return {
             "arch": self.arch,
             "dense": self.dense,
+            "tier": tier,
+            "skipped": skipped,
             "queries": TRACE.queries,
             "hits": hits,
             "context": {
@@ -1006,6 +1025,15 @@ class App:
             gated = retrieval is not None and retrieval["score"] < self.threshold
         answer = self.bot.clarify(turns) if gated else self.bot.answer(turns, mode=mode, role=role)
         total = (time.perf_counter() - t0) * 1000
+        # Модель недоступна (T30): только в чате с клиентом. Автопроверка (eval) и копилот остаются при прежнем
+        # FALLBACK — судья сравнивает с эталонами, а копилот обращается к менеджеру, не к клиенту.
+        degraded = None
+        if mode == "chat" and not gated and (answer.text == FALLBACK or answer.error):
+            reason = self.model_down_reason()
+            if reason:
+                degraded = {"reason": reason, "sections": degraded_sections(TRACE.ranked)}
+                answer.text = DEGRADED_TEXT
+                answer.guard = {**answer.guard, "degraded": reason}
         chunks = self.bot.context_chunks()
         by_id = {c.id: c for c in self.bot.kb.chunks}
         sources = []
@@ -1062,7 +1090,48 @@ class App:
         payload["confidence"] = answer_confidence(retrieval, support, self.threshold, gate, gated)
         # «Честные нет» (T26): детерминированно по репликам клиента, только чат; автопроверка и копилот — пусто.
         payload["honest_no"] = self.honest.detect(turns, passport) if mode == "chat" else []
+        if degraded:
+            payload["degraded"] = degraded
         return payload
+
+    def model_down_reason(self) -> str:
+        """Почему нет ответа модели: ключа нет вовсе или ни один вызов за ответ не вернул текст. Ответ,
+        отброшенный проверкой, или пустой ответ живой модели — не сбой, там своя запасная фраза."""
+        if not self.api.configured:
+            return "model_unconfigured"
+        if TRACE.calls and not any(c["output"] for c in TRACE.calls) and all(c["error"] for c in TRACE.calls):
+            return "model_error"
+        return ""
+
+
+DEGRADED_TEXT = "Сейчас не могу сформулировать ответ, вот что есть в материалах."
+DEGRADED_SECTIONS = 3
+DEGRADED_EXCERPT = 360
+
+
+def excerpt(text: str, limit: int = DEGRADED_EXCERPT) -> str:
+    """Начало раздела для показа клиенту: по границе слова, одной строкой."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(",;:—-")
+    return cut + "…"
+
+
+def degraded_sections(ranked: list, limit: int = DEGRADED_SECTIONS) -> list:
+    """2–3 самых релевантных раздела выдачи — поиск работает и без модели (BM25 / эмбеддинги / реранкер).
+    Служебные разделы-ограничения (is_guard) клиенту не показываем: это правила для модели."""
+    out, seen = [], set()
+    for hit in ranked:
+        chunk = hit.chunk
+        if chunk.id in seen or chunk.is_guard or not chunk.text.strip():
+            continue
+        seen.add(chunk.id)
+        out.append({"chunk_id": chunk.id, "doc": chunk.doc, "title": chunk.title, "path": chunk.path,
+                    "excerpt": excerpt(chunk.text)})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def clean_turns(messages, require_user: bool = True) -> list:

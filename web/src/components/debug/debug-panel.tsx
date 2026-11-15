@@ -432,8 +432,13 @@ function SearchTab({ r, kb, onOpen }: { r: Retrieval; kb: KbIndex | null; onOpen
   const stage = r.hits[0]?.stage;
   return (
     <div className="space-y-5 p-5">
-      <Section title="Запрос к базе" aside={<span className="font-mono">{[stage, r.dense ? "bm25 + эмбеддинги" : "bm25", `схема ${r.arch}`].filter(Boolean).join(" · ")}</span>}>
+      <Section title="Запрос к базе" aside={<span className="font-mono">{[r.tier ? undefined : stage, r.tier ?? (r.dense ? "bm25 + эмбеддинги" : "bm25"), `схема ${r.arch}`].filter(Boolean).join(" · ")}</span>}>
         <div className="rounded-xl bg-surface px-3.5 py-3">
+          {!!r.skipped?.length && (
+            <p className="mb-2 text-xs text-tone-warning">
+              Простая ступень, недоступно: {r.skipped.map((k) => (k === "reranker" ? "реранкер" : "эмбеддинги")).join(", ")}
+            </p>
+          )}
           <div className="mb-1 text-xs font-medium text-muted-foreground">Смысловой{stage === "rerank" ? " · реранкер" : ""}</div>
           <p className="text-[13.5px] leading-relaxed">{r.queries.semantic || "—"}</p>
           {r.queries.lexical && (

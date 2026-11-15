@@ -9,6 +9,7 @@ import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand";
 import { AnswerText, SourcesRow } from "./answer-text";
+import { DegradedSections } from "./degraded-sections";
 import { HonestNoNotice } from "./honest-no";
 import { ThinkingLine } from "./thinking-line";
 
@@ -104,6 +105,7 @@ export function MessageItem({
   onRegenerate,
   onRate,
   onDebug,
+  onLead,
   selected,
   compact,
 }: {
@@ -113,6 +115,8 @@ export function MessageItem({
   onRegenerate?: () => void;
   onRate?: (rating: 1 | -1) => void;
   onDebug?: () => void;
+  /** Открыть форму заявки — кнопка в блоке «вот что есть в материалах» (T30). */
+  onLead?: () => void;
   selected?: boolean;
   compact?: boolean;
 }) {
@@ -190,6 +194,8 @@ export function MessageItem({
             showCitations={!compact}
             className={cn("text-foreground", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}
           />
+          {/* Модель недоступна (T30): разделы базы вместо ответа и кнопка заявки — заявка работает без модели. */}
+          <DegradedSections answer={a} onOpenChunk={onOpenChunk} onLead={onLead} compact={compact} />
           {/* «Честно: не подойдёт» (T26) — и на стенде, и в виджете: это ответ клиенту, а не отладка. */}
           <HonestNoNotice answer={a} onOpenChunk={onOpenChunk} compact={compact} />
           {/* Клиенту в виджете — чистый текст; номера и источники нужны жюри на стенде. */}

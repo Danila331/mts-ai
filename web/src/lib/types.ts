@@ -28,6 +28,10 @@ export interface Hit {
 export interface Retrieval {
   arch: string;
   dense: boolean;
+  /** T30: ступень поиска, по которой построена выдача, например «bm25 + реранкер». */
+  tier?: string;
+  /** T30: чего ждали, но не получили: embeddings | reranker — ответ построен по более простой ступени. */
+  skipped?: string[];
   queries: { lexical?: string; semantic?: string; last?: string };
   hits: Hit[];
   context: { full_docs: string[]; chunk_ids: string[]; chars: number };
@@ -114,6 +118,21 @@ export interface HonestNo {
   alternative: { text: string; section: HonestNoSection | null } | null;
 }
 
+/** T30: раздел базы, показанный вместо ответа, когда модель недоступна. */
+export interface DegradedSection {
+  chunk_id: string;
+  doc: string;
+  title: string;
+  path: string;
+  excerpt: string;
+}
+
+export interface Degraded {
+  /** model_error — модель не ответила; model_unconfigured — модели нет вовсе. */
+  reason: string;
+  sections: DegradedSection[];
+}
+
 export interface AnswerPayload {
   id: string;
   /** answer — обычный ответ, clarify — уточняющий вопрос ниже порога уверенности (T12). */
@@ -139,6 +158,8 @@ export interface AnswerPayload {
   confidence?: Confidence;
   /** «Честные нет» (T26): только режим chat; в eval и copilot — пусто. */
   honest_no?: HonestNo[];
+  /** T30: модель недоступна — вместо ответа разделы базы; только режим chat. */
+  degraded?: Degraded;
   /** T13: ответ печатался дельтами по мере генерации. */
   streamed?: boolean;
   /** T13: финальный текст отличается от напечатанного — проверка ответа переписала или вырезала часть. */
