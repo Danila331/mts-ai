@@ -9,6 +9,7 @@ import { BotAvatar } from "@/components/chat/message-item";
 import { topicByName } from "@/components/chat/topics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
+import { FLOWS } from "@/lib/wizards/flows";
 import { kbHref, useKb } from "@/hooks/use-kb";
 import { type PageInfo, isTopicName, sanitizePage } from "@/lib/page-context";
 import { cn } from "@/lib/utils";
@@ -190,6 +191,7 @@ export function EmbedChat() {
               onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
               onLead={() => setLeadOpen(true)}
               summary
+              wizards={FLOWS}
             />
           </div>
         )}

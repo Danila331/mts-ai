@@ -41,6 +41,8 @@ export function useChat(
   const [activeId, setActiveId] = useState<string>("");
   const [ready, setReady] = useState(false);
   const controllers = useRef(new Map<string, AbortController>());
+  // Поля паспорта, которые ждут конца ответа (мастер T7): см. setWizard.
+  const pendingPassport = useRef(new Map<string, Record<string, string>>());
 
   useEffect(() => {
     let loaded: Session[] = [];
@@ -119,6 +121,14 @@ export function useChat(
         });
       } finally {
         controllers.current.delete(sessionId);
+        const values = pendingPassport.current.get(sessionId);
+        if (values) {
+          pendingPassport.current.delete(sessionId);
+          patchPassport(sessionId, values)
+            .then((passport) => update(sessionId, (s) => ({ ...s, passport })))
+            // Нет базы на сервере — паспорт не ведётся; ответы мастера всё равно есть в реплике клиента.
+            .catch(() => undefined);
+        }
       }
     },
     [mode, sandbox, channel, page, patchMessage, update],
@@ -203,6 +213,21 @@ export function useChat(
     [active, update],
   );
 
+  /**
+   * Итог мастера (T7) в сессии — свёрнутая карточка в ленте. passport — ответы мастера для паспорта: они уйдут
+   * правкой клиента (PATCH), когда закончится следующий ответ. Раньше нельзя: сервер узнаёт о диалоге с первым
+   * вопросом, а паспорт по диалогу бот сохраняет до конца потока и мог бы затереть запись, сделанную посреди.
+   */
+  const setWizard = useCallback(
+    (wizard: Session["wizard"], passport: Partial<Record<string, string>> = {}) => {
+      if (!active) return;
+      const values = Object.fromEntries(Object.entries(passport).filter((e): e is [string, string] => !!e[1]));
+      if (Object.keys(values).length) pendingPassport.current.set(active.id, values);
+      update(active.id, (s) => ({ ...s, wizard }));
+    },
+    [active, update],
+  );
+
   /** Клиент поправил паспорт: правка уходит на сервер, бот её больше не перезапишет. */
   const editPassport = useCallback(
     async (values: Record<string, string | null>): Promise<Passport | undefined> => {
@@ -230,6 +255,7 @@ export function useChat(
     stop,
     rate,
     setLead,
+    setWizard,
     editPassport,
     busy,
   };

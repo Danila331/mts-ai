@@ -22,6 +22,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
+import { FLOWS } from "@/lib/wizards/flows";
 import { useKb } from "@/hooks/use-kb";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import type { ChatMode } from "@/lib/types";
@@ -200,6 +201,7 @@ export function Playground() {
             }}
             onLead={() => setLeadOpen(true)}
             summary
+            wizards={mode === "chat" ? FLOWS : undefined}
           />
         )}
       </div>

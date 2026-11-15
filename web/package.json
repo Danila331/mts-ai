@@ -13,7 +13,7 @@
     "stand": "node scripts/stand.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/*.test.ts",
+    "test": "node --experimental-strip-types --test src/lib/*.test.ts src/lib/*/*.test.ts",
     "fixtures:readiness": "node scripts/readiness-fixtures.mjs"
   },
   "dependencies": {
