@@ -17,9 +17,13 @@ import (
 )
 
 // Имена событий потока. Порядок: stage(retrieval) → stage(generation) →
-// answer → done; при сбое вместо answer приходит error.
+// delta… → answer → done; при сбое вместо answer приходит error.
 const (
-	EventStage  = "stage"
+	EventStage = "stage"
+	// EventDelta — кусок ответа модели по мере генерации (T13). Шлюз
+	// пересылает его как есть и в журнал не пишет: главный текст — в
+	// answer, проверка ответа может его переписать.
+	EventDelta  = "delta"
 	EventAnswer = "answer"
 	EventError  = "error"
 	EventDone   = "done"

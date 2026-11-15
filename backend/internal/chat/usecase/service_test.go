@@ -110,6 +110,37 @@ func TestForwardAnswered(t *testing.T) {
 	assert.Equal(t, "req-1", j.recs[0].RequestID)
 }
 
+func TestForwardPassesDeltasAsIs(t *testing.T) {
+	j := &journal{}
+	deltas := []string{`{"text":"Платформа "}`, `{"text":"учёта \u003c 5 кВт"}`, `{"text":"…"}`}
+	var data []string
+	got, outcome := forward(t, &script{events: []chat.Event{
+		ev("stage", `{"name":"generation"}`),
+		ev(chat.EventDelta, deltas[0]), ev(chat.EventDelta, deltas[1]), ev(chat.EventDelta, deltas[2]),
+		ev("answer", `{"id":"a1","text":"Итоговый текст после проверки","streamed":true,"revised":true}`),
+		ev("done", `{}`),
+	}}, j, func(e chat.Event) error {
+		if e.Name == chat.EventDelta {
+			data = append(data, string(e.Data))
+		}
+		return nil
+	})
+
+	assert.Equal(t, []string{"stage", "delta", "delta", "delta", "answer", "done"}, got, "порядок как у ядра")
+	assert.Equal(t, deltas, data, "данные дельт — байт в байт")
+	assert.Equal(t, chat.OutcomeAnswered, outcome)
+	require.Len(t, j.recs, 1, "в журнал — только ответ, дельты не пишутся")
+	assert.Equal(t, "Итоговый текст после проверки", j.recs[0].Text, "в журнале финальный текст, а не напечатанный")
+}
+
+func TestForwardDeltasWithoutAnswerAreBroken(t *testing.T) {
+	got, outcome := forward(t, &script{events: []chat.Event{
+		ev("delta", `{"text":"Начало"}`),
+	}, err: errors.New("обрыв")}, &journal{}, nil)
+	assert.Equal(t, []string{"delta", "error", "done"}, got, "напечатанное без answer — обрыв, клиент узнаёт об этом")
+	assert.Equal(t, chat.OutcomeBroken, outcome)
+}
+
 func TestForwardFallbackAndJournalFailure(t *testing.T) {
 	j := &journal{err: errors.New("база лежит")}
 	got, outcome := forward(t, &script{events: []chat.Event{

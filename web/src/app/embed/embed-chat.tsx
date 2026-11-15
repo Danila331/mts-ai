@@ -12,6 +12,7 @@ import { useChat } from "@/hooks/use-chat";
 import { FLOWS } from "@/lib/wizards/flows";
 import { kbHref, useKb } from "@/hooks/use-kb";
 import { type PageInfo, isTopicName, sanitizePage } from "@/lib/page-context";
+import { parseStreamFlag } from "@/lib/stream-text";
 import { cn } from "@/lib/utils";
 
 const HEX = /^#[0-9a-f]{3,8}$/i;
@@ -20,6 +21,8 @@ const HEX = /^#[0-9a-f]{3,8}$/i;
  * Чат внутри iframe виджета. Общается со страницей-хозяином через postMessage (origin из ?parent=).
  * Страница сайта (путь, заголовок, UTM) приходит сообщением eb:page и уходит с вопросами в сессию — для
  * аналитики, не в промпт. Тема страницы (?topic= или eb:page) меняет приветствие и стартовые вопросы.
+ * Потоковая выдача (T13) — по умолчанию включена; data-stream="0" сайта приходит как ?stream=0 и полем stream
+ * в eb:page: тогда ответ показывается целиком, уже после проверки.
  */
 export function EmbedChat() {
   const params = useSearchParams();
@@ -35,8 +38,11 @@ export function EmbedChat() {
   const topic = topicByName(topicName);
   // У темы своё приветствие; без темы — из data-greeting сайта или общее.
   const greeting = topic?.greeting ?? (params.get("greeting") || undefined);
+  // undefined — флаг сообщением не приходил, берём из адреса; без него — печатаем.
+  const [pageStream, setPageStream] = useState<boolean | undefined>();
+  const stream = pageStream ?? parseStreamFlag(params.get("stream")) ?? true;
 
-  const chat = useChat("eb.widget.sessions.v1", "chat", { channel: "embed", page });
+  const chat = useChat("eb.widget.sessions.v1", "chat", { channel: "embed", page, stream });
   const { kb } = useKb();
   const [leadOpen, setLeadOpen] = useState(false);
   const sendRef = useRef(chat.send);
@@ -73,10 +79,12 @@ export function EmbedChat() {
         document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
       } else if (data?.type === "eb:page") {
         // Сообщению не верим на слово: только известные поля, строки и пределы сервера.
-        const { page: raw, topic: next } = data as { page?: unknown; topic?: unknown };
+        const { page: raw, topic: next, stream: flag } = data as { page?: unknown; topic?: unknown; stream?: unknown };
         const clean = sanitizePage(raw);
         setPage(Object.keys(clean).length ? clean : undefined);
         setPageTopic(isTopicName(next) ? next : null);
+        // Только true/false: старый загрузчик без поля оставляет флаг из адреса.
+        if (typeof flag === "boolean") setPageStream(flag);
       }
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && window.parent.postMessage({ type: "eb:close" }, parent);

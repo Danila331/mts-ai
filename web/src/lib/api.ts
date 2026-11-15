@@ -25,6 +25,9 @@ export function getKb(): Promise<KbData> {
 export interface StreamHandlers {
   onRetrieval?: (r: Retrieval & { ms?: number }) => void;
   onGeneration?: () => void;
+  /** Кусок ответа по мере генерации (T13). Без обработчика дельты пропускаются — ответ придёт целиком в onAnswer. */
+  onDelta?: (text: string) => void;
+  /** Готовый ответ. Главнее дельт: проверка могла переписать напечатанное. */
   onAnswer: (a: AnswerPayload) => void;
   /** Паспорт задачи после ответа (режим chat с сессией). */
   onPassport?: (p: Passport) => void;
@@ -44,7 +47,7 @@ export interface ChatOptions {
   page?: PageInfo;
 }
 
-/** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → answer → done. */
+/** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → delta… → answer → passport → done. */
 export async function streamChat(
   messages: Turn[],
   mode: ChatMode,
@@ -88,7 +91,9 @@ export async function streamChat(
       const payload = JSON.parse(data);
       if (event === "stage" && payload.name === "retrieval") handlers.onRetrieval?.(payload);
       else if (event === "stage" && payload.name === "generation") handlers.onGeneration?.();
-      else if (event === "answer") {
+      else if (event === "delta") {
+        if (!answered && typeof payload.text === "string") handlers.onDelta?.(payload.text);
+      } else if (event === "answer") {
         answered = true;
         handlers.onAnswer(payload);
       } else if (event === "passport") handlers.onPassport?.(payload);

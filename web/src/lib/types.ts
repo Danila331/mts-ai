@@ -136,6 +136,10 @@ export interface AnswerPayload {
   confidence?: Confidence;
   /** «Честные нет» (T26): только режим chat; в eval и copilot — пусто. */
   honest_no?: HonestNo[];
+  /** T13: ответ печатался дельтами по мере генерации. */
+  streamed?: boolean;
+  /** T13: финальный текст отличается от напечатанного — проверка ответа переписала или вырезала часть. */
+  revised?: boolean;
 }
 
 export interface LlmCall {
@@ -197,6 +201,12 @@ export interface Message {
   answer?: AnswerPayload;
   error?: string;
   rating?: 1 | -1;
+  /** Текст, напечатанный дельтами, пока ответ не готов (T13). Живёт только в памяти, в localStorage не пишется. */
+  streamed?: string;
+  /** Ответ печатался на глазах — готовый текст не проявляется заново. */
+  typed?: boolean;
+  /** Финальный текст заменил напечатанный — метка «Уточнено проверкой». */
+  revised?: boolean;
 }
 
 // ---------- паспорт задачи (T2, событие passport и PATCH /api/sessions/:id/passport) ----------
