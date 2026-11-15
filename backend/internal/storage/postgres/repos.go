@@ -38,14 +38,16 @@ func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
 
 // TouchSession создаёт сессию на первом вопросе и обновляет её время на
 // каждом следующем; заголовок остаётся от первого. Страница виджета
-// пишется при создании и заменяется, только если пришла непустая.
-func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title string) error {
+// пишется при создании и заменяется, только если пришла непустая. Роль
+// заменяется, только если у вопроса она известна или клиент её снял.
+func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint) error {
 	page := []byte(ref.Page)
 	if len(page) == 0 {
 		page = []byte("{}")
 	}
 	return s.Queries.UpsertSession(ctx, db.UpsertSessionParams{
 		ID: ref.ID, Channel: string(ref.Channel), Mode: mode, Title: title, Page: page,
+		Role: string(role.Role), RoleSource: string(role.Source),
 	})
 }
 
@@ -66,7 +68,8 @@ func (s *Store) History(ctx context.Context, id string) (session.History, error)
 	h := session.History{
 		Session: session.Session{
 			ID: row.ID, Channel: row.Channel, Mode: row.Mode, Title: row.Title,
-			Page: json.RawMessage(row.Page), Passport: &view, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+			Page: json.RawMessage(row.Page), Passport: &view, Role: row.Role, RoleSource: row.RoleSource, Level: row.Level,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		},
 		Turns: make([]session.Turn, 0, 2*len(answers)),
 	}

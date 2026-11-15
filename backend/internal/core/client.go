@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
+	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
 )
 
@@ -87,6 +88,11 @@ func (c *Client) Chat(ctx context.Context, req chat.Request) (chat.Stream, error
 	}
 	if len(req.Overrides) > 0 {
 		body["overrides"] = req.Overrides
+	}
+	// Роль — подсказка промпту только в чате с клиентом: автопроверка и
+	// копилот отвечают как без неё (ядро проверяет режим ещё раз).
+	if req.Mode == dialog.ModeChat && req.Role.Known() {
+		body["role"] = req.Role.Role
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

@@ -115,6 +115,12 @@ type chatRequest struct {
 	// UTM (session.ParsePage). Пишется в сессию для аналитики, ядру и в
 	// промпт не уходит.
 	Page json.RawMessage `json:"page"`
+	// Role — роль-подсказка собеседника (T15, session.Roles), RoleSource —
+	// client (выбрал кнопкой) или auto (фронт определил по репликам).
+	// Необязательны: без роли служба определит её сама. В промпт роль
+	// попадает только в режиме chat.
+	Role       string `json:"role"`
+	RoleSource string `json:"role_source"`
 }
 
 // maxOverrides — предел поля overrides. Настроек полтора десятка, и их
@@ -169,10 +175,14 @@ func (s *Server) chat(c echo.Context) error {
 	if ref.ID != "" {
 		ref.Page = page
 	}
+	role, err := session.ParseRole(body.Role, body.RoleSource)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
 
 	mode := dialog.ParseMode(body.Mode)
 	relay, err := s.deps.Chat.Ask(c.Request().Context(),
-		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref})
+		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref, Role: role})
 	if err != nil {
 		return s.coreFail(c, err)
 	}

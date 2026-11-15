@@ -14,9 +14,11 @@
     GET  /healthz               жива ли служба (без токена: это проба хостинга)
     GET  /core/health           схема ответа, есть ли модель, эмбеддинги, размер базы
     GET  /core/kb               база знаний разделами (те же фрагменты, что видит модель)
-    POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"|"copilot", "overrides": {…}}
+    POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"|"copilot", "overrides": {…},
+                                 "role": "grid"|…}
                                 → SSE: stage, answer, done. overrides — настройки RAG только для этого ответа
-                                (песочница стенда), те же ключи и пределы, что у /core/settings.
+                                (песочница стенда), те же ключи и пределы, что у /core/settings. role — роль-подсказка
+                                собеседника (T15): одна строка в промпте, только в режиме chat; неизвестная — без неё.
                                 В answer — confidence (уверенность: поиск + опора, порог) и route:
                                 answer | clarify (уточнение ниже порога, только chat при EB_CONFIDENCE_GATE=1)
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
@@ -71,7 +73,7 @@ from energybot.guard import SENTENCE, numbers  # noqa: E402
 from energybot.kb import KnowledgeBase  # noqa: E402
 from energybot.llm import Api, env, env_num  # noqa: E402
 from energybot.pipeline import FALLBACK, Answer, Consultant, tidy  # noqa: E402
-from energybot.prompts import CLARIFY_SYSTEM, render_dialog  # noqa: E402
+from energybot.prompts import CLARIFY_SYSTEM, ROLES, render_dialog  # noqa: E402
 from energybot.text import tokens  # noqa: E402
 
 MAX_BODY = 256_000
@@ -816,13 +818,17 @@ class App:
         turns = clean_turns(body.get("messages"))
         mode = body.get("mode") if body.get("mode") in ("chat", "eval", "copilot") else self.mode
         applied, values = self.settings.overrides(body.get("overrides"))
+        # Роль (T15) — только подсказка промпту чата. Список ролей проверяет шлюз; здесь неизвестная или чужому
+        # режиму — просто без подсказки: ответ не должен ломаться из-за расхождения списков.
+        role = body.get("role") if isinstance(body.get("role"), str) else ""
+        role = role if mode == "chat" and role in ROLES else ""
         # Весь ответ — и поиск, и представление для отладки — с настройками этого запроса.
         with overridden(values):
-            payload = self._chat(turns, mode, emit)
+            payload = self._chat(turns, mode, emit, role)
         payload["overrides"] = applied
         return payload
 
-    def _chat(self, turns: list, mode: str, emit) -> dict:
+    def _chat(self, turns: list, mode: str, emit, role: str = "") -> dict:
         TRACE.reset(emit)
         t0 = time.perf_counter()
         # Порог решается по поиску до генерации и только в чате: в eval и copilot путь ответа прежний.
@@ -831,7 +837,7 @@ class App:
         if gate:
             retrieval = self.bot.prefetch(turns)
             gated = retrieval is not None and retrieval["score"] < self.threshold
-        answer = self.bot.clarify(turns) if gated else self.bot.answer(turns, mode=mode)
+        answer = self.bot.clarify(turns) if gated else self.bot.answer(turns, mode=mode, role=role)
         total = (time.perf_counter() - t0) * 1000
         chunks = self.bot.context_chunks()
         by_id = {c.id: c for c in self.bot.kb.chunks}
@@ -863,6 +869,7 @@ class App:
             "fallback": answer.text == FALLBACK or bool(answer.error),
             "error": answer.error,
             "mode": mode,
+            "role": role,
             "timings": timings | {"server_total": round(total)},
             "guard": answer.guard,
             "trace": getattr(answer, "trace", ""),

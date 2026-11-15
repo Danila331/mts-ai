@@ -1,4 +1,5 @@
 // Контракт API (Go-служба backend/, ответ строит ядро scripts/core_api.py). Поля — как в JSON сервера.
+import type { RoleId, RoleSource } from "./roles";
 
 export type Role = "user" | "assistant";
 
@@ -98,6 +99,8 @@ export interface AnswerPayload {
   fallback: boolean;
   error: string;
   mode: ChatMode;
+  /** Роль-подсказка, с которой ядро собрало промпт (T15); пусто — без неё. */
+  role?: string;
   timings: Record<string, number>;
   guard: Guard;
   trace: string;
@@ -207,6 +210,12 @@ export interface Session {
   messages: Message[];
   lead?: { id: string; summary: string };
   passport?: Passport;
+  /**
+   * Роль-подсказка (T15): кто, вероятно, пишет. Пусто при roleSource "client" — клиент сам снял подсказку,
+   * автоопределение её не вернёт. Уходит на сервер с каждым вопросом режима chat.
+   */
+  role?: RoleId | "";
+  roleSource?: RoleSource;
 }
 
 // ---------- настройки RAG (GET/POST /api/settings) ----------

@@ -228,14 +228,16 @@ class Consultant:
         return self.think or self.evidence == 1 or bool(self.check_kb)
 
     def answer(self, question, mode: str = "eval", query_vec=None, fast: bool = False,
-               offline: bool = False, premium: bool = True) -> Answer:
+               offline: bool = False, premium: bool = True, role: str = "") -> Answer:
         """fast — без реранкера, дорогих шагов и повторных проходов (нехватка времени);
         offline — без модели вообще (время вышло): корректный отказ, как при сбое генерации;
         premium — разрешены ли для этого вопроса дорогие шаги: размышления (EB_THINK) и опора из базы
-        (EB_EVIDENCE). Без них вопрос отвечается одним обычным вызовом."""
+        (EB_EVIDENCE). Без них вопрос отвечается одним обычным вызовом.
+        role — роль-подсказка веб-чата (T15): строка о собеседнике в промпте, только при mode == "chat"
+        (prompts.role_hint); поиск и автопроверку не меняет."""
         turns = parse(question) if isinstance(question, str) else question
         if self.arch == "factmap":
-            return self.answer_factmap(turns, mode, query_vec, fast, offline)
+            return self.answer_factmap(turns, mode, query_vec, fast, offline, role=role)
         timings = {}
         t0 = time.perf_counter()
         # В быстром режиме контекст тоже сокращается: время ответа модели растёт с длиной промпта.
@@ -264,12 +266,12 @@ class Consultant:
             except Exception as exc:  # noqa: BLE001 — без основы отвечаем обычным одним вызовом
                 print(f"[consultant] основа ответа: {type(exc).__name__}: {exc}", file=sys.stderr)
             if draft:
-                messages = build_write_messages(materials, turns, draft, mode, self.use_examples, exclude)
+                messages = build_write_messages(materials, turns, draft, mode, self.use_examples, exclude, role=role)
                 text, error = self.generate(messages, think=think, attempts=2)
         if not text and self.full_kb and not fast:
             materials = "\n\n".join(c.render() for c in top_chunks[: self.top_k] or top_chunks)
             messages = build_messages(self.kb_text, materials, turns, mode, self.use_examples, exclude, full_kb=True,
-                                      plan=self.plan, style=self.style, near=self.near)
+                                      plan=self.plan, style=self.style, near=self.near, role=role)
             text, error = self.generate(messages, think=think, attempts=1 if fast else 2, plan=bool(self.plan))
             if error == "overflow":
                 print("[consultant] вся база не помещается в контекст модели — дальше без неё", file=sys.stderr)
@@ -280,7 +282,7 @@ class Consultant:
             if self.evidence == 2 and not fast:
                 # Опора и ответ одним вызовом; если формат не соблюдён — ниже обычный ответ без опоры.
                 inline = build_messages(self.reference_text, materials, turns, mode, self.use_examples, exclude,
-                                        style=self.style, task=EVIDENCE_INLINE_TAIL)
+                                        style=self.style, task=EVIDENCE_INLINE_TAIL, role=role)
                 try:
                     answer, draft = split_inline_evidence(self.api.chat(inline, think=think))
                     text = tidy(answer)
@@ -292,7 +294,7 @@ class Consultant:
                 try:
                     raw = self.api.chat(build_messages(
                         self.reference_text, materials, turns, mode, self.use_examples, exclude,
-                        style=self.style, task=EVIDENCE_TAIL), max_tokens=450)
+                        style=self.style, task=EVIDENCE_TAIL, role=role), max_tokens=450)
                     evidence, missing = parse_evidence(raw)
                     if evidence:
                         note, draft = evidence_note(evidence, missing), evidence
@@ -301,7 +303,7 @@ class Consultant:
             elif self.check_kb and premium:
                 try:
                     check = build_messages(self.reference_text, materials, turns, mode, self.use_examples, exclude,
-                                           style=self.style, task=CHECK_TAIL) if self.check_kb == 2 \
+                                           style=self.style, task=CHECK_TAIL, role=role) if self.check_kb == 2 \
                         else build_check_messages(self.reference_text, materials, turns)
                     verdict = self.api.chat(check, max_tokens=160)
                     missing = parse_check(verdict)
@@ -312,13 +314,13 @@ class Consultant:
             if not text:
                 messages = build_messages(self.reference_text, materials, turns, mode, self.use_examples, exclude,
                                           plan=self.plan, style=self.style, near=self.near, note=note,
-                                          brief_think=think and self.think_brief)
+                                          brief_think=think and self.think_brief, role=role)
                 text, error = self.generate(messages, think=think, attempts=1 if fast else 2, plan=self.plan)
         if error == "overflow":
             # Промпт не поместился в контекст модели — сокращаем материалы до одного документа.
             ranked, docs, extra = self.retrieve(turns, query_vec, fast=True, compact=True)
             materials = self.render_materials(docs, extra)
-            messages = build_messages("", materials, turns, mode, self.use_examples, exclude)
+            messages = build_messages("", materials, turns, mode, self.use_examples, exclude, role=role)
             text, error = self.generate(messages, think=False, attempts=1)
         timings["generation"] = time.perf_counter() - t1
         guard = {}
@@ -446,7 +448,7 @@ class Consultant:
         return "", error
 
     def answer_factmap(self, turns: list, mode: str = "eval", query_vec=None, fast: bool = False,
-                       offline: bool = False) -> Answer:
+                       offline: bool = False, role: str = "") -> Answer:
         """Запасная цепочка: нет реранкера → RRF; нет эмбеддингов → только лексика; поиск сломан → вся база
         в контексте; модель недоступна → выдержка из базы или безопасный шаблон."""
         timings, guard = {}, {}
@@ -473,10 +475,11 @@ class Consultant:
         t1 = time.perf_counter()
         if self.fm_prompt in ("v3", "jury"):
             messages = build_messages(self.fact_map, materials, turns, mode, self.use_examples,
-                                      self._exclude_example(turns), style="jury" if self.fm_prompt == "jury" else "tight")
+                                      self._exclude_example(turns), style="jury" if self.fm_prompt == "jury" else "tight",
+                                      role=role)
         else:
             messages = build_fm_messages(self.fact_map, materials, turns, mode, self.use_examples,
-                                         self._exclude_example(turns))
+                                         self._exclude_example(turns), role=role)
         text, error = self.fm_generate(messages)
         timings["generation"] = time.perf_counter() - t1
         if text:

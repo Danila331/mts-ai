@@ -24,18 +24,22 @@ func (q *Queries) GetPassport(ctx context.Context, id string) ([]byte, error) {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, channel, mode, title, page, passport, created_at, updated_at FROM sessions WHERE id = $1
+SELECT id, channel, mode, title, page, passport, role, role_source, level, created_at, updated_at
+FROM sessions WHERE id = $1
 `
 
 type GetSessionRow struct {
-	ID        string
-	Channel   string
-	Mode      string
-	Title     string
-	Page      []byte
-	Passport  []byte
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID         string
+	Channel    string
+	Mode       string
+	Title      string
+	Page       []byte
+	Passport   []byte
+	Role       string
+	RoleSource string
+	Level      string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, error) {
@@ -48,6 +52,9 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 		&i.Title,
 		&i.Page,
 		&i.Passport,
+		&i.Role,
+		&i.RoleSource,
+		&i.Level,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -118,26 +125,32 @@ func (q *Queries) SessionAnswers(ctx context.Context, sessionID *string) ([]Sess
 }
 
 const upsertSession = `-- name: UpsertSession :exec
-INSERT INTO sessions (id, channel, mode, title, page)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO sessions (id, channel, mode, title, page, role, role_source)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (id) DO UPDATE
-SET updated_at = now(),
-    mode       = EXCLUDED.mode,
-    title      = CASE WHEN sessions.title = '' THEN EXCLUDED.title ELSE sessions.title END,
-    page       = CASE WHEN EXCLUDED.page = '{}'::jsonb THEN sessions.page ELSE EXCLUDED.page END
+SET updated_at  = now(),
+    mode        = EXCLUDED.mode,
+    title       = CASE WHEN sessions.title = '' THEN EXCLUDED.title ELSE sessions.title END,
+    page        = CASE WHEN EXCLUDED.page = '{}'::jsonb THEN sessions.page ELSE EXCLUDED.page END,
+    role        = CASE WHEN EXCLUDED.role_source = '' THEN sessions.role ELSE EXCLUDED.role END,
+    role_source = CASE WHEN EXCLUDED.role_source = '' THEN sessions.role_source ELSE EXCLUDED.role_source END
 `
 
 type UpsertSessionParams struct {
-	ID      string
-	Channel string
-	Mode    string
-	Title   string
-	Page    []byte
+	ID         string
+	Channel    string
+	Mode       string
+	Title      string
+	Page       []byte
+	Role       string
+	RoleSource string
 }
 
 // Сессия создаётся на первом вопросе и «трогается» на каждом следующем.
 // Заголовок — первая реплика: следующие вопросы его не перезаписывают.
 // Страница виджета (T8) — последняя присланная: пустой {} её не стирает.
+// Роль (T15) — последняя известная: вопрос без роли (role_source = ”)
+// прежнюю не стирает, а выбор клиента, в том числе «не указывать», — да.
 func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
 	_, err := q.db.Exec(ctx, upsertSession,
 		arg.ID,
@@ -145,6 +158,8 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.Mode,
 		arg.Title,
 		arg.Page,
+		arg.Role,
+		arg.RoleSource,
 	)
 	return err
 }

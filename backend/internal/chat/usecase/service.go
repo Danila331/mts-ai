@@ -22,8 +22,9 @@ import (
 type Journal interface {
 	SaveAnswer(ctx context.Context, rec chat.Record) error
 	// TouchSession создаёт сессию на первом вопросе и отмечает каждый
-	// следующий.
-	TouchSession(ctx context.Context, ref session.Ref, mode, title string) error
+	// следующий; роль вопроса (T15) пишется в сессию, неизвестная прежнюю
+	// не стирает.
+	TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint) error
 }
 
 // journalTimeout — потолок на запись ответа в журнал.
@@ -72,6 +73,7 @@ func (s *Service) WithPassport(store Passports, model passport.Model) *Service {
 // вкладкой. Потолок при этом свой — timeout. Значения контекста (логгер,
 // request_id) WithoutCancel сохраняет.
 func (s *Service) Ask(ctx context.Context, req chat.Request) (*Relay, error) {
+	req.Role = s.role(ctx, req)
 	s.touch(ctx, req)
 	upstream, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
 	started := time.Now()
@@ -223,6 +225,47 @@ func (s *Service) passport(ctx context.Context, req chat.Request, a chat.Answer)
 	return chat.Event{Name: chat.EventPassport, Data: data}, true
 }
 
+// role — роль-подсказка вопроса (T15). Только режим chat: в автопроверке
+// и копилоте роли нет. Выбор клиента главнее всего, в том числе «не
+// указывать»; роль, которую прислал фронт, — как есть. Иначе служба
+// определяет её сама: по репликам клиента, затем по типу организации из
+// паспорта сессии (T2). Так роль есть и у клиента, который её не прислал
+// (старый фронт, Telegram), и одна и та же реплика даёт одну и ту же роль.
+func (s *Service) role(ctx context.Context, req chat.Request) session.RoleHint {
+	if req.Mode != dialog.ModeChat {
+		return session.RoleHint{}
+	}
+	if req.Role.Source == session.RoleByClient || req.Role.Known() {
+		return req.Role
+	}
+	var client []string
+	for _, t := range req.Turns {
+		if t.Role == dialog.RoleUser {
+			client = append(client, t.Content)
+		}
+	}
+	if r := session.DetectRole(client); r != "" {
+		return session.RoleHint{Role: r, Source: session.RoleAuto}
+	}
+	if s.passports == nil || req.Session.ID == "" {
+		return session.RoleHint{}
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
+	defer cancel()
+	p, err := s.passports.LoadPassport(pctx, req.Session.ID)
+	if err != nil {
+		// Сессии ещё нет (первый вопрос) или база не ответила: без роли.
+		if !errors.Is(err, session.ErrNotFound) {
+			zerolog.Ctx(ctx).Warn().Err(err).Str("session_id", req.Session.ID).Msg("роль: паспорт не прочитан")
+		}
+		return session.RoleHint{}
+	}
+	if r := session.RoleFromOrgType(p.Values["org_type"].Value); r != "" {
+		return session.RoleHint{Role: r, Source: session.RoleAuto}
+	}
+	return session.RoleHint{}
+}
+
 // touch записывает сессию до ответа: разговор виден на сервере, даже если
 // ядро так и не ответит. Сбой базы ответ не останавливает — он в журнале
 // службы.
@@ -233,7 +276,7 @@ func (s *Service) touch(ctx context.Context, req chat.Request) {
 	jctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
 	defer cancel()
 	title := session.Title(dialog.LastQuestion(req.Turns))
-	if err := s.journal.TouchSession(jctx, req.Session, string(req.Mode), title); err != nil {
+	if err := s.journal.TouchSession(jctx, req.Session, string(req.Mode), title, req.Role); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("session_id", req.Session.ID).Msg("сессия не записана")
 	}
 }

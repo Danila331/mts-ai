@@ -55,12 +55,15 @@ type Lead struct {
 }
 
 type Session struct {
-	ID        string
-	Channel   string
-	Mode      string
-	Title     string
-	Page      []byte
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Passport  []byte
+	ID         string
+	Channel    string
+	Mode       string
+	Title      string
+	Page       []byte
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Passport   []byte
+	Role       string
+	RoleSource string
+	Level      string
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Channel, patchPassport, streamChat } from "@/lib/api";
 import type { PageInfo } from "@/lib/page-context";
+import { type RoleId, type RoleState, resolveRole } from "@/lib/roles";
 import { readSandbox } from "@/lib/sandbox";
 import type { ChatMode, Message, Passport, Session, Turn } from "@/lib/types";
 
@@ -18,6 +19,10 @@ function titleFrom(text: string) {
   return clean.length > 48 ? `${clean.slice(0, 46)}…` : clean;
 }
 
+/** Реплики клиента — по ним определяется роль-подсказка (T15). */
+const clientTexts = (messages: Message[]) => messages.filter((m) => m.role === "user" && !m.error).map((m) => m.content);
+const orgType = (passport?: Passport) => passport?.fields.find((f) => f.key === "org_type")?.value;
+
 /** История для API: только завершённые реплики, без отладочных полей. */
 export function toTurns(messages: Message[]): Turn[] {
   return messages
@@ -31,6 +36,8 @@ export function toTurns(messages: Message[]): Turn[] {
  * всегда отвечает с общими настройками. channel — откуда разговор: id сессии уходит на сервер с каждым
  * вопросом, и менеджер видит диалог целиком, даже если клиент очистил браузер. page — страница сайта, где
  * открыт виджет (T8): уходит с вопросом и пишется в сессию для аналитики, ядру и в промпт не попадает.
+ * Роль-подсказка (T15) — только режим chat: клиент выбирает её кнопкой или она определяется по репликам и паспорту
+ * (src/lib/roles.ts), хранится в сессии и уходит с каждым вопросом.
  */
 export function useChat(
   storageKey: string,
@@ -82,7 +89,7 @@ export function useChat(
   );
 
   const run = useCallback(
-    async (sessionId: string, history: Message[], assistantId: string) => {
+    async (sessionId: string, history: Message[], assistantId: string, profile: RoleState = {}) => {
       const controller = new AbortController();
       controllers.current.set(sessionId, controller);
       try {
@@ -92,7 +99,13 @@ export function useChat(
           {
             onRetrieval: (retrieval) => patchMessage(sessionId, assistantId, { stage: "retrieval", retrieval }),
             onGeneration: () => patchMessage(sessionId, assistantId, { stage: "generation" }),
-            onPassport: (passport) => update(sessionId, (s) => ({ ...s, passport })),
+            // Тип организации из паспорта — ещё одна примета роли, если её не выбрали и не нашли по репликам.
+            onPassport: (passport) =>
+              update(sessionId, (s) => ({
+                ...s,
+                passport,
+                ...(mode === "chat" ? resolveRole(s, clientTexts(s.messages), orgType(passport)) : {}),
+              })),
             onAnswer: (answer) =>
               patchMessage(sessionId, assistantId, {
                 content: answer.text,
@@ -109,6 +122,8 @@ export function useChat(
             sessionId,
             channel,
             page,
+            role: profile.role,
+            roleSource: profile.roleSource,
           },
         );
       } catch (err) {
@@ -132,16 +147,18 @@ export function useChat(
       const user: Message = { id: uid(), role: "user", content, createdAt: now };
       const assistant: Message = { id: uid(), role: "assistant", content: "", createdAt: now, pending: true };
       const history = [...active.messages.filter((m) => !m.error), user];
+      const profile = mode === "chat" ? resolveRole(active, clientTexts(history), orgType(active.passport)) : {};
       update(active.id, (s) => ({
         ...s,
+        ...profile,
         title: s.messages.length ? s.title : titleFrom(content),
         updatedAt: now,
         messages: [...s.messages, user, assistant],
       }));
-      void run(active.id, history, assistant.id);
+      void run(active.id, history, assistant.id, profile);
       return assistant.id;
     },
-    [active, run, update],
+    [active, mode, run, update],
   );
 
   /** Ответить заново на ту же реплику клиента: ответ и всё после него заменяются. */
@@ -159,10 +176,11 @@ export function useChat(
         pending: true,
       };
       update(active.id, (s) => ({ ...s, messages: [...s.messages.slice(0, index), assistant] }));
-      void run(active.id, history, assistant.id);
+      const profile = mode === "chat" ? resolveRole(active, clientTexts(history), orgType(active.passport)) : {};
+      void run(active.id, history, assistant.id, profile);
       return assistant.id;
     },
-    [active, run, update],
+    [active, mode, run, update],
   );
 
   const stop = useCallback(() => {
@@ -203,6 +221,15 @@ export function useChat(
     [active, update],
   );
 
+  /**
+   * Клиент выбрал роль кнопкой или снял подсказку (""). Выбор главнее автоопределения и уходит на сервер со
+   * следующим вопросом; до вопроса меняет только приветствие и быстрые вопросы.
+   */
+  const setRole = useCallback(
+    (role: RoleId | "") => active && update(active.id, (s) => ({ ...s, role, roleSource: "client" })),
+    [active, update],
+  );
+
   /** Клиент поправил паспорт: правка уходит на сервер, бот её больше не перезапишет. */
   const editPassport = useCallback(
     async (values: Record<string, string | null>): Promise<Passport | undefined> => {
@@ -230,6 +257,7 @@ export function useChat(
     stop,
     rate,
     setLead,
+    setRole,
     editPassport,
     busy,
   };
