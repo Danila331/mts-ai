@@ -1,39 +1,27 @@
 "use client";
 
 import {
-  BookOpen,
   Check,
   ChevronsUpDown,
-  Code2,
-  FileText,
   Menu,
-  MessageSquare,
-  Monitor,
-  Moon,
   PanelLeft,
   RefreshCw,
   Search,
-  SlidersHorizontal,
   SquarePen,
-  Sun,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLockup } from "@/components/brand";
+import { NAV, THEMES } from "@/components/nav-items";
 import { Shortcut } from "@/components/shortcut";
+
+// Палитра ⌘K — отдельный чанк: загрузится при первом открытии.
+const CommandPalette = dynamic(() => import("@/components/command-palette"), { ssr: false });
 import { Button } from "@/components/ui/button";
-import {
-  Command,
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandShortcut,
-} from "@/components/ui/command";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,20 +31,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useKb } from "@/hooks/use-kb";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { getHealth } from "@/lib/api";
-import type { Health, Session } from "@/lib/types";
+import type { Health } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const NAV = [
-  { href: "/playground", label: "Чат и отладка", icon: MessageSquare },
-  { href: "/kb", label: "База знаний", icon: BookOpen },
-  { href: "/widget", label: "Виджет для сайта", icon: Code2 },
-  { href: "/settings", label: "Настройки RAG", icon: SlidersHorizontal },
-];
 
-const SESSIONS_KEY = "eb.playground.sessions.v1";
+
 const COLLAPSE_KEY = "eb.sidebar.collapsed";
 
 /** Пункт сайдбара: 32px, иконка 16px в тон текста, нейтральная плашка при наведении и у текущего. */
@@ -78,104 +59,6 @@ const ShellContext = createContext<ShellState>({
   openPalette: () => {},
 });
 export const useShell = () => useContext(ShellContext);
-
-// ---------- Палитра команд ⌘K ----------
-
-function readSessions(): Session[] {
-  try {
-    const list = JSON.parse(localStorage.getItem(SESSIONS_KEY) || "[]") as Session[];
-    return list.filter((s) => s.messages.length > 0).sort((a, b) => b.updatedAt - a.updatedAt);
-  } catch {
-    return [];
-  }
-}
-
-const THEMES = [
-  { value: "light", label: "Светлая тема", icon: Sun },
-  { value: "dark", label: "Тёмная тема", icon: Moon },
-  { value: "system", label: "Тема как в системе", icon: Monitor },
-] as const;
-
-function PaletteBody({
-  close,
-  onNew,
-  onSelectSession,
-}: {
-  close: () => void;
-  onNew?: () => void;
-  onSelectSession?: (id: string) => void;
-}) {
-  const router = useRouter();
-  const { setTheme } = useTheme();
-  const [sessions] = useState(readSessions);
-  const { kb } = useKb();
-  const run = (fn: () => void) => {
-    close();
-    fn();
-  };
-
-  return (
-    <>
-      <CommandInput placeholder="Найти диалог, документ или команду…" />
-      <CommandList className="max-h-[min(60vh,420px)]">
-        <CommandEmpty>Ничего не нашлось</CommandEmpty>
-        <CommandGroup heading="Действия">
-          <CommandItem value="новый диалог" onSelect={() => run(() => (onNew ? onNew() : router.push("/playground?new=1")))}>
-            <SquarePen /> Новый диалог
-            <CommandShortcut>
-              <Shortcut keys={["mod", "shift", "O"]} />
-            </CommandShortcut>
-          </CommandItem>
-          {THEMES.map(({ value, label, icon: Icon }) => (
-            <CommandItem key={value} value={label} onSelect={() => run(() => setTheme(value))}>
-              <Icon /> {label}
-            </CommandItem>
-          ))}
-        </CommandGroup>
-        <CommandGroup heading="Разделы">
-          {NAV.map(({ href, label, icon: Icon }) => (
-            <CommandItem key={href} value={label} onSelect={() => run(() => router.push(href))}>
-              <Icon /> {label}
-            </CommandItem>
-          ))}
-        </CommandGroup>
-        {sessions.length > 0 && (
-          <CommandGroup heading="Диалоги">
-            {sessions.slice(0, 30).map((s) => (
-              <CommandItem
-                key={s.id}
-                value={`${s.title} ${s.id}`}
-                keywords={s.messages.slice(0, 4).map((m) => m.content.slice(0, 80))}
-                onSelect={() =>
-                  run(() => (onSelectSession ? onSelectSession(s.id) : router.push(`/playground?s=${s.id}`)))
-                }
-              >
-                <MessageSquare /> <span className="min-w-0 flex-1 truncate">{s.title}</span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-        {kb && (
-          <CommandGroup heading="База знаний">
-            {kb.data.docs.map((d) => (
-              <CommandItem
-                key={d.doc}
-                value={`${d.title} ${d.doc}`}
-                onSelect={() => run(() => router.push(`/kb?doc=${encodeURIComponent(d.doc)}`))}
-              >
-                <FileText /> <span className="min-w-0 flex-1 truncate">{d.title}</span>
-                {/* data-slot прячет пустую галочку пункта, и имя файла встаёт ровно к правому краю */}
-                <span data-slot="command-shortcut" className="ml-auto shrink-0 pl-3 text-right font-mono text-[11px] text-muted-foreground">
-                  {d.doc.split("/").pop()?.replace(/\.md$/, "")}
-                </span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-      </CommandList>
-    </>
-  );
-}
 
 // ---------- Статус стенда ----------
 
@@ -483,19 +366,19 @@ export function AppShell({
         )}
         <main className="relative flex min-w-0 flex-1 flex-col bg-background">{children}</main>
       </div>
-      <CommandDialog
-        open={palette}
-        onOpenChange={setPalette}
-        title="Поиск и команды"
-        description="Диалоги, документы базы знаний, разделы стенда и действия"
-        className="top-[16vh] sm:max-w-[580px]"
-      >
-        {palette && (
-          <Command className="rounded-none! bg-transparent p-1">
-            <PaletteBody close={() => setPalette(false)} onNew={onNew} onSelectSession={onSelectSession} />
-          </Command>
-        )}
-      </CommandDialog>
+      {/* Обычный Dialog, а не CommandDialog: тот живёт рядом с cmdk и потянул бы его в основной чанк. */}
+      <Dialog open={palette} onOpenChange={setPalette}>
+        <DialogContent
+          showCloseButton={false}
+          className="top-[16vh] translate-y-0 gap-0 overflow-hidden rounded-xl! p-0 sm:max-w-[580px]"
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>Поиск и команды</DialogTitle>
+            <DialogDescription>Диалоги, документы базы знаний, разделы стенда и действия</DialogDescription>
+          </DialogHeader>
+          {palette && <CommandPalette close={() => setPalette(false)} onNew={onNew} onSelectSession={onSelectSession} />}
+        </DialogContent>
+      </Dialog>
     </ShellContext.Provider>
   );
 }

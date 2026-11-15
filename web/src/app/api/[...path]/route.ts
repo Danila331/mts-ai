@@ -43,6 +43,11 @@ async function proxy(request: Request, params: Promise<{ path: string[] }>) {
     "Cache-Control": "no-cache, no-transform",
   });
   if (name === "chat") out.set("X-Accel-Buffering", "no");
+  // База знаний меняется только с выкаткой ядра: отдаём её с края Vercel, а не гоняем каждый раз до Railway.
+  // Свежесть держит stale-while-revalidate — новая версия базы подтянется в фоне.
+  if (name === "kb" && request.method === "GET" && upstream.ok) {
+    out.set("Cache-Control", "public, max-age=60, s-maxage=600, stale-while-revalidate=86400");
+  }
   return new Response(upstream.body, { status: upstream.status, headers: out });
 }
 

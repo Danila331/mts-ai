@@ -8,7 +8,7 @@ import { LeadPanel } from "@/components/chat/lead-dialog";
 import { BrandMark } from "@/components/brand";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
-import { kbHref, useKb } from "@/hooks/use-kb";
+import { kbHref } from "@/hooks/use-kb";
 import { cn } from "@/lib/utils";
 
 const HEX = /^#[0-9a-f]{3,8}$/i;
@@ -24,7 +24,6 @@ export function EmbedChat() {
   const [embedded, setEmbedded] = useState(false);
 
   const chat = useChat("eb.widget.sessions.v1", "chat");
-  const { kb } = useKb();
   const [leadOpen, setLeadOpen] = useState(false);
   const sendRef = useRef(chat.send);
   const pending = useRef<string[]>([]);
@@ -149,7 +148,7 @@ export function EmbedChat() {
           <div className={cn("h-full", leadOpen && "invisible")} aria-hidden={leadOpen}>
             <ChatView
               chat={chat}
-              kb={kb}
+              kb={null}
               compact
               greeting={greeting}
               onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
