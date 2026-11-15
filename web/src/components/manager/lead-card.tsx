@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { GradeBadge, KindBadge, StatusBadge } from "@/components/manager/badges";
 import { ManagerProblem } from "@/components/manager/manager-chrome";
+import { MeetingBrief } from "@/components/manager/meeting-brief";
 import { Button } from "@/components/ui/button";
 import { KbIndex, kbHref, useKb } from "@/hooks/use-kb";
 import {
@@ -189,6 +190,10 @@ export function LeadCardView({
             </ul>
           </div>
         )}
+      </Block>
+
+      <Block title="Шпаргалка к встрече">
+        <MeetingBrief card={card} />
       </Block>
 
       <Block title={card.history ? `Переписка (${card.history.session.channel === "embed" ? "виджет" : "стенд"})` : "Переписка на момент отправки"}>
