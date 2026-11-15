@@ -4,6 +4,7 @@ import { ArrowUpRight, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { KbIndex } from "@/hooks/use-kb";
+import { safeAnswerText } from "@/lib/answer-links";
 import type { AnswerPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -183,14 +184,14 @@ export function AnswerText({
   className?: string;
 }) {
   if (!answer?.citations?.length || !showCitations) {
-    return <p className={cn("whitespace-pre-wrap", className)}>{text}</p>;
+    return <p className={cn("whitespace-pre-wrap", className)}>{safeAnswerText(text)}</p>;
   }
   const order = citationOrder(answer);
   return (
     <p className={className}>
       {answer.citations.map((c, i) => (
         <span key={i}>
-          {c.sentence}
+          {safeAnswerText(c.sentence)}
           {!c.question && c.support.length > 0 && (
             <span className="whitespace-nowrap">
               {c.support.slice(0, 2).map((s) => (

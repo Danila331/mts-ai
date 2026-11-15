@@ -163,6 +163,14 @@ type Limits struct {
 	// документов за разговор, а не десятки в минуту.
 	OCRPerHour int `yaml:"ocr_per_hour" env:"EB_LIMIT_OCR_PER_HOUR" env-default:"30"`
 	OCRBurst   int `yaml:"ocr_burst" env:"EB_LIMIT_OCR_BURST" env-default:"5"`
+	// ChatPerDay — потолок вопросов с одного адреса за сутки (T35): минутный
+	// предел не останавливает того, кто льёт медленно, но всё время.
+	// Каждый ответ стоит денег на модель.
+	ChatPerDay int `yaml:"chat_per_day" env:"EB_LIMIT_CHAT_PER_DAY" env-default:"300"`
+	// LeadMinFill — быстрее этого заявка не принимается (антибот без
+	// CAPTCHA, T35): человек форму за долю секунды не заполняет. Ноль
+	// выключает проверку.
+	LeadMinFill time.Duration `yaml:"lead_min_fill" env:"EB_LEAD_MIN_FILL" env-default:"2s"`
 	// RedisURL — общее хранилище пределов для нескольких реплик. Пусто —
 	// пределы в памяти процесса: верно ровно для одной реплики, на двух
 	// каждый предел молча удваивается. REDIS_URL — имя, под которым
@@ -315,7 +323,7 @@ func (c *Config) Verify() error {
 	l := c.Limits
 	if l.ChatPerMinute <= 0 || l.ChatBurst <= 0 || l.LeadPerHour <= 0 || l.LeadBurst <= 0 ||
 		l.FeedbackPerMinute <= 0 || l.FeedbackBurst <= 0 || l.SettingsPerMinute <= 0 || l.SettingsBurst <= 0 ||
-		l.OCRPerHour <= 0 || l.OCRBurst <= 0 {
+		l.OCRPerHour <= 0 || l.OCRBurst <= 0 || l.ChatPerDay <= 0 {
 		errs = append(errs, errors.New("пределы EB_LIMIT_* в бою не могут быть нулевыми"))
 	}
 	return errors.Join(errs...)

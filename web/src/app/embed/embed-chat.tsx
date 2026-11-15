@@ -11,26 +11,34 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useChat } from "@/hooks/use-chat";
 import { FLOWS } from "@/lib/wizards/flows";
 import { kbHref, useKb } from "@/hooks/use-kb";
+import { MAX_MESSAGE, messageLength } from "@/lib/document-text";
+import { isTrustedMessage, resolveParent } from "@/lib/embed-origin";
 import { type PageInfo, isTopicName, sanitizePage } from "@/lib/page-context";
 import { parseStreamFlag } from "@/lib/stream-text";
 import { cn } from "@/lib/utils";
 
 const HEX = /^#[0-9a-f]{3,8}$/i;
+const NO_ORIGINS: string[] = [];
 
 /**
- * Чат внутри iframe виджета. Общается со страницей-хозяином через postMessage (origin из ?parent=).
+ * Чат внутри iframe виджета. Общается со страницей-хозяином через postMessage. Origin хозяина берётся из ?parent=,
+ * но принимается, только если он есть в EB_EMBED_ALLOWED_ORIGINS (allowedOrigins) и совпадает с настоящим хозяином
+ * окна, где браузер его сообщает (T35, resolveParent). Отправка — на этот точный origin, приём — только от него и только
+ * от window.parent (isTrustedMessage).
  * Страница сайта (путь, заголовок, UTM) приходит сообщением eb:page и уходит с вопросами в сессию — для
  * аналитики, не в промпт. Тема страницы (?topic= или eb:page) меняет приветствие и стартовые вопросы.
  * Потоковая выдача (T13) — по умолчанию включена; data-stream="0" сайта приходит как ?stream=0 и полем stream
  * в eb:page: тогда ответ показывается целиком, уже после проверки.
  */
-export function EmbedChat() {
+export function EmbedChat({ allowedOrigins = NO_ORIGINS }: { allowedOrigins?: string[] }) {
   const params = useSearchParams();
   const title = params.get("title") || "Консультант EnergyTool";
   const subtitle = params.get("subtitle") || "Отвечает по базе знаний МТС";
   const color = HEX.test(params.get("color") ?? "") ? params.get("color")! : undefined;
-  const parent = params.get("parent");
+  const parentParam = params.get("parent");
   const [embedded, setEmbedded] = useState(false);
+  // Доверенный origin хозяина; null — хозяин не прошёл проверку, сообщений ему не шлём и от него не принимаем.
+  const [parent, setParent] = useState<string | null>(null);
   const [page, setPage] = useState<PageInfo | undefined>();
   // undefined — тему ещё не присылали сообщением, берём из адреса; null — страница без темы.
   const [pageTopic, setPageTopic] = useState<string | null | undefined>();
@@ -55,7 +63,10 @@ export function EmbedChat() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- window доступен только после монтирования
     setEmbedded(window.parent !== window);
-  }, []);
+    // ancestorOrigins есть в Chrome и Safari; в Firefox проверка опирается на allowlist и frame-ancestors.
+    const ancestor = (window.location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins?.[0];
+    setParent(resolveParent(parentParam, allowedOrigins, ancestor, window.location.origin));
+  }, [parentParam, allowedOrigins]);
 
   // Вопросы, пришедшие до загрузки истории, отправляем, как только чат готов.
   useEffect(() => {
@@ -70,11 +81,14 @@ export function EmbedChat() {
   useEffect(() => {
     if (!embedded || !parent) return;
     const onMessage = (e: MessageEvent) => {
-      if (e.origin !== parent || e.source !== window.parent) return;
-      const data = e.data as { type?: string; text?: string };
-      if (data?.type === "eb:ask" && data.text) {
-        if (chat.ready) sendRef.current(data.text);
-        else pending.current.push(data.text);
+      if (!isTrustedMessage(e, parent, window.parent)) return;
+      const data = e.data as { type?: string; text?: unknown };
+      if (data?.type === "eb:ask" && typeof data.text === "string" && data.text.trim()) {
+        // Вопрос от страницы тоже ограничен длиной реплики: сервер подрезал бы остальное молча.
+        const text = data.text.trim();
+        if (messageLength(text) > MAX_MESSAGE) return;
+        if (chat.ready) sendRef.current(text);
+        else pending.current.push(text);
       } else if (data?.type === "eb:open") {
         document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
       } else if (data?.type === "eb:page") {

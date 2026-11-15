@@ -41,9 +41,13 @@ echo "$stream" | grep -q '^event: answer' || fail "/api/chat: нет событ�
 echo "$stream" | grep -q '^event: done' || fail "/api/chat: нет события done"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" -H "Content-Type: application/json" \
-  --data '{"name":"Смоук","phone":"+70000000000","messages":[]}' "$api/api/lead")
+  --data '{"name":"Смоук","phone":"+70000000000","elapsed_ms":5000,"messages":[]}' "$api/api/lead")
 [ "$code" = 400 ] || fail "/api/lead без согласия: $code, ожидался 400"
-call POST /api/lead '{"name":"Смоук","phone":"+70000000000","company":"","comment":"","consent":true,"messages":[{"role":"user","content":"Нужен АСКУЭ"}]}' \
+# Антибот (T35): заполненная ловушка и слишком быстрая форма отклоняются.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" -H "Content-Type: application/json" \
+  --data '{"name":"Смоук","phone":"+70000000000","consent":true,"website":"x","elapsed_ms":5000,"messages":[]}' "$api/api/lead")
+[ "$code" = 400 ] || fail "/api/lead с заполненной ловушкой: $code, ожидался 400"
+call POST /api/lead '{"name":"Смоук","phone":"+70000000000","company":"","comment":"","consent":true,"elapsed_ms":5000,"messages":[{"role":"user","content":"Нужен АСКУЭ"}]}' \
   | grep -q '"summary"' || fail "/api/lead: нет summary"
 call POST /api/feedback '{"session_id":"s","message_id":"m","rating":1}' \
   | grep -q '"ok":true' || fail "/api/feedback"

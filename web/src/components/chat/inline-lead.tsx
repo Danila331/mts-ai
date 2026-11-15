@@ -12,6 +12,7 @@ import { type LeadKind, kindInfo, sessionKinds } from "@/lib/lead-kinds";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { CallbackPicker } from "./callback-picker";
+import { useAntibot } from "./honeypot";
 import { LeadKindPicker } from "./lead-kind-picker";
 import { Consent } from "./consent";
 
@@ -49,6 +50,7 @@ export function InlineLead({
   const kind = picked && kinds.some((k) => k.kind === picked) ? picked : guess;
   const [consent, setConsent] = useState(false);
   const [sending, setSending] = useState(false);
+  const antibot = useAntibot();
   const digits = form.phone.replace(/\D/g, "").length;
   const ready = consent && !!form.name.trim() && digits >= 10 && !sending;
 
@@ -65,6 +67,7 @@ export function InlineLead({
         callback,
         kind,
         consent,
+        ...(await antibot.settle()),
       });
       onDone(lead);
       toast.success(leadSavedText(callback, kindInfo(kind).note), { description: `Номер заявки №${lead.id}` });
@@ -114,6 +117,7 @@ export function InlineLead({
           </div>
         ))}
       </div>
+      {antibot.field}
       <LeadKindPicker id={id("kind")} kinds={kinds} value={kind} onChange={setKind} className="mt-3" />
       <CallbackPicker id={id("callback")} value={callback} onChange={setCallback} className="mt-3" />
       <Consent id={id("consent")} checked={consent} onChange={setConsent} className="mt-3.5" />

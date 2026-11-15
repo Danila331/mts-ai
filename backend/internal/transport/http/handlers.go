@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/logger"
 	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
@@ -203,7 +205,18 @@ func (s *Server) chat(c echo.Context) error {
 
 	out := &sseWriter{w: w}
 	stop := out.heartbeat(s.cfg.HTTP.SSEHeartbeat)
-	outcome := relay.Forward(out.event)
+	emit := out.event
+	if chat.PublicChannel(strings.TrimSpace(body.Channel)) {
+		// Виджет получает ответ без полей отладки (промпт, выдача поиска,
+		// вызовы модели). Журнал пишется из полного события до этой точки.
+		emit = func(ev chat.Event) error {
+			if ev.Name == chat.EventAnswer {
+				ev.Data = chat.StripDebug(ev.Data)
+			}
+			return out.event(ev)
+		}
+	}
+	outcome := relay.Forward(emit)
 	stop()
 	s.deps.Metrics.ChatOutcome(string(outcome), string(mode))
 	return nil
@@ -358,6 +371,11 @@ type leadRequest struct {
 	// что и контакты (раздел базы «Согласие на обработку персональных
 	// данных»). Без него заявки нет.
 	Consent bool `json:"consent"`
+	// Website — скрытое поле-ловушка формы (T35): человек его не видит и
+	// не заполняет. ElapsedMS — сколько форма была на экране до отправки.
+	// Оба поля нужны только антиботу и дальше обработчика не идут.
+	Website   string `json:"website"`
+	ElapsedMS *int64 `json:"elapsed_ms"`
 }
 
 type leadResponse struct {
@@ -373,6 +391,12 @@ func (s *Server) lead(c echo.Context) error {
 	if err := decode(c, &body); err != nil {
 		return s.mapErr(c, err)
 	}
+	if msg := checkHuman(body.Website, body.ElapsedMS, s.cfg.Limits.LeadMinFill); msg != "" {
+		s.deps.Metrics.RateLimited("lead_antibot")
+		zerolog.Ctx(c.Request().Context()).Warn().Bool("honeypot", body.Website != "").
+			Msg("заявка отклонена антиботом")
+		return fail(c, http.StatusBadRequest, msg)
+	}
 	if !body.Consent {
 		return fail(c, http.StatusBadRequest, "Нужно согласие на обработку персональных данных")
 	}
@@ -380,6 +404,8 @@ func (s *Server) lead(c echo.Context) error {
 	if err != nil {
 		return s.mapErr(c, err)
 	}
+	// Контакты из формы не должны попасть в журнал, даже в тексте ошибки.
+	logger.Remember(body.Name, body.Company, body.Phone)
 	l, err := s.deps.Leads.CreateForSession(c.Request().Context(), lead.Contacts{
 		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment, Callback: body.Callback,
 		Kind: lead.Kind(body.Kind),

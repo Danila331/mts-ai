@@ -1,6 +1,7 @@
 // Только для сервера Next (route handlers): адрес Go-API, его токен и вход администратора.
 // В браузер ничего отсюда не попадает — клиентский код ходит в /api/* (src/lib/api.ts).
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { clientIpFrom } from "./client-ip.ts";
 
 // На Vercel: EB_API_URL — публичный адрес службы api на Railway, EB_API_TOKEN — тот же секрет, что у api
 // (docs/deploy.md). Локально оба можно не задавать: API на :8787 без токена.
@@ -20,10 +21,13 @@ export const ADMIN_HEADER = "X-Admin-Token";
 const ADMIN_COOKIE = "eb_admin";
 const ADMIN_TTL_SEC = 12 * 60 * 60;
 
-/** Адрес посетителя: API считает по нему пределы частоты. Без него все посетители — один адрес Vercel. */
+/**
+ * Адрес посетителя: API считает по нему пределы частоты. Без него все посетители — один адрес Vercel.
+ * X-Forwarded-For принимается только от доверенного прокси (EB_TRUST_PROXY_HEADERS, по умолчанию — на Vercel):
+ * где перед Next никого нет, заголовок подделывает сам клиент. Правила — src/lib/client-ip.ts.
+ */
 export function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip") || "";
+  return clientIpFrom((name) => request.headers.get(name), process.env);
 }
 
 /** Заголовки запроса к Go-API: токен прокси и адрес посетителя. */

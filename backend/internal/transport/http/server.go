@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -190,6 +191,10 @@ func (s *Server) routes() {
 	// адреса — это живой человек, сотня — скрипт.
 	chatLimit := s.limiter(ratelimit.Rule{Name: "chat", PerPeriod: l.ChatPerMinute, Period: time.Minute, Burst: l.ChatBurst},
 		"Слишком много вопросов подряд — подождите минуту")
+	// Суточный потолок (T35): тот же счётчик пределов (Redis или память), окно
+	// в сутки. Без давления: чат вернётся завтра, а заявка менеджеру работает всегда.
+	chatDayLimit := s.limiter(ratelimit.Rule{Name: "chat_day", PerPeriod: l.ChatPerDay, Period: 24 * time.Hour, Burst: l.ChatPerDay},
+		"На сегодня лимит вопросов с вашего адреса исчерпан. Завтра чат снова заработает, а заявку менеджеру можно оставить в любое время")
 	// Каждая заявка — звонок менеджера. Поток заявок с одного адреса —
 	// это не клиенты.
 	leadLimit := s.limiter(ratelimit.Rule{Name: "lead", PerPeriod: l.LeadPerHour, Period: time.Hour, Burst: l.LeadBurst},
@@ -209,7 +214,7 @@ func (s *Server) routes() {
 	api := s.echo.Group("/api", s.requireToken)
 	api.GET("/health", s.health)
 	api.GET("/kb", s.kb)
-	api.POST("/chat", s.chat, chatLimit)
+	api.POST("/chat", s.chat, chatLimit, chatDayLimit)
 	api.POST("/lead", s.lead, leadLimit)
 	api.POST("/feedback", s.feedback, feedbackLimit)
 	// Документы (T9): что принимается — и сам документ → текст на проверку
@@ -384,11 +389,22 @@ func requireSecret(token, header, msg string) echo.MiddlewareFunc {
 // и обошёл предел.
 func (s *Server) clientIP(c echo.Context) string {
 	if s.cfg.HTTP.Token != "" {
-		if ip := strings.TrimSpace(c.Request().Header.Get("X-Client-IP")); ip != "" {
+		// Только настоящий адрес: произвольная строка стала бы ключом
+		// предела и записью в журнале.
+		if ip := parseIP(c.Request().Header.Get("X-Client-IP")); ip != "" {
 			return ip
 		}
 	}
 	return c.RealIP()
+}
+
+// parseIP отдаёт канонический адрес или пустую строку, если это не адрес.
+func parseIP(raw string) string {
+	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return addr.Unmap().String()
 }
 
 // limiter — предел частоты по адресу клиента.

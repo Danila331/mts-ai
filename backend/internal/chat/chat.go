@@ -163,3 +163,38 @@ type Record struct {
 	// SessionID — разговор; пусто — ответ без сессии.
 	SessionID string
 }
+
+// DebugFields — поля события answer для стенда разработчика: промпт целиком,
+// выдача поиска, вызовы модели и разбор. Виджету на чужом сайте они не
+// нужны, а промпт и устройство поиска — не то, что стоит отдавать каждому
+// посетителю (T35, LLM07). Журнал (Answer) их не хранит и так.
+var DebugFields = []string{"prompt", "prompt_chars", "retrieval", "llm_calls", "trace"}
+
+// PublicChannel — для канала нужна короткая выдача без полей отладки:
+// виджет на сайте клиента и Telegram. Стенд (playground) и вызов без канала
+// получают событие как есть.
+func PublicChannel(channel string) bool {
+	switch channel {
+	case "embed", "telegram":
+		return true
+	}
+	return false
+}
+
+// StripDebug вырезает из данных события answer поля отладки. Остальное —
+// байт в байт как в ответе ядра, кроме порядка ключей. Данные, которые не
+// объект, возвращаются как есть.
+func StripDebug(data json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil || m == nil {
+		return data
+	}
+	for _, k := range DebugFields {
+		delete(m, k)
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return data
+	}
+	return out
+}
