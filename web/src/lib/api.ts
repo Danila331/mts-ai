@@ -22,7 +22,12 @@ const BASE = "/api";
 
 export async function getHealth(signal?: AbortSignal): Promise<Health> {
   const res = await fetch(`${BASE}/health`, { signal, cache: "no-store" });
-  if (!res.ok) throw new Error(`API недоступен (${res.status})`);
+  if (!res.ok) {
+    // API отвечает, а ядро за ним перезапускается (502 с текстом Go-API) — это не «API недоступен» (QA).
+    const detail = await res.json().catch(() => ({}));
+    if (res.status === 502 && /ядро/i.test(String(detail.error ?? ""))) throw new Error("Ядро перезапускается");
+    throw new Error(`API недоступен (${res.status})`);
+  }
   return res.json();
 }
 
