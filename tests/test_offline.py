@@ -138,6 +138,18 @@ class PostprocessTest(unittest.TestCase):
         self.assertIn("40–60 слов", repair_instruction([], True))
         self.assertIn("150 слов", repair_instruction([], True, "150 слов"))
 
+    def test_chat_mode_only_in_chat(self):
+        """Заявка в чате (T2): правила про контакты и форму — только в режиме chat; автопроверка их не видит."""
+        from energybot.prompts import CHAT_MODE, build_messages, build_write_messages
+        turns = [{"role": "user", "content": "Нужен учёт на складе"}]
+        for style in ("tight", "full", "recipe", "jury", "jury2"):
+            for msgs in (build_messages("СПР", "МАТ", turns, "eval", style=style), build_write_messages("МАТ", turns, "ч", "eval")):
+                self.assertNotIn(CHAT_MODE.strip(), "\n".join(m["content"] for m in msgs), style)
+            chat = "\n".join(m["content"] for m in build_messages("СПР", "МАТ", turns, "chat", style=style))
+            self.assertIn(CHAT_MODE.strip(), chat)
+        self.assertIn("ниже откроется форма", CHAT_MODE)
+        self.assertIn("Никогда не пиши, что заявка уже отправлена", CHAT_MODE)
+
     def test_tidy_removes_markdown(self):
         self.assertEqual(tidy("Консультант: **Да**, можно:\n- раз\n- два\nВопрос?"), "Да, можно: раз два Вопрос?")
 

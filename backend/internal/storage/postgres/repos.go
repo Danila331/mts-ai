@@ -12,6 +12,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 	"github.com/Danila331/mts-ai/backend/internal/storage/postgres/db"
 )
@@ -56,10 +57,11 @@ func (s *Store) History(ctx context.Context, id string) (session.History, error)
 	if err != nil {
 		return session.History{}, err
 	}
+	view := passport.Parse(row.Passport).Render()
 	h := session.History{
 		Session: session.Session{
 			ID: row.ID, Channel: row.Channel, Mode: row.Mode, Title: row.Title,
-			Page: json.RawMessage(row.Page), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+			Page: json.RawMessage(row.Page), Passport: &view, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		},
 		Turns: make([]session.Turn, 0, 2*len(answers)),
 	}
@@ -95,6 +97,8 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 		SummarySource: summarySource(l.SummarySource),
 		Messages:      messages,
 		RequestID:     l.RequestID,
+		SessionID:     optional(l.SessionID),
+		Passport:      object(l.Passport),
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == "leads_code_uq" {
@@ -172,4 +176,32 @@ func jsonArray(items []string) []byte {
 	}
 	raw, _ := json.Marshal(items)
 	return raw
+}
+
+// LoadPassport — паспорт сессии; сессии нет — session.ErrNotFound.
+func (s *Store) LoadPassport(ctx context.Context, id string) (passport.Passport, error) {
+	raw, err := s.Queries.GetPassport(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return passport.Passport{}, session.ErrNotFound
+	}
+	if err != nil {
+		return passport.Passport{}, err
+	}
+	return passport.Parse(raw), nil
+}
+
+// SavePassport записывает паспорт сессии целиком.
+func (s *Store) SavePassport(ctx context.Context, id string, p passport.Passport) error {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	n, err := s.Queries.SavePassport(ctx, db.SavePassportParams{ID: id, Passport: raw})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return session.ErrNotFound
+	}
+	return nil
 }

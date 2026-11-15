@@ -144,6 +144,31 @@ export interface Message {
   rating?: 1 | -1;
 }
 
+// ---------- паспорт задачи (T2, событие passport и PATCH /api/sessions/:id/passport) ----------
+export type PassportGroup = "general" | "wholesale" | "solar" | "platform" | "losses" | "recognition" | "contacts";
+
+export interface PassportField {
+  key: string;
+  label: string;
+  group: PassportGroup;
+  options?: string[];
+  value?: string;
+  /** bot — понял бот из реплик клиента, client — клиент заполнил сам. */
+  source?: "bot" | "client";
+}
+
+export interface Passport {
+  fields: PassportField[];
+  product_candidates: { product: PassportGroup; sections: string[] }[];
+  product: PassportGroup;
+  product_label: string;
+  filled: number;
+  total: number;
+  handoff_agreed: boolean;
+  /** Есть имя, телефон и компания или клиент согласился на передачу — показать карточку заявки. */
+  ready_for_lead: boolean;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -151,6 +176,7 @@ export interface Session {
   updatedAt: number;
   messages: Message[];
   lead?: { id: string; summary: string };
+  passport?: Passport;
 }
 
 // ---------- настройки RAG (GET/POST /api/settings) ----------

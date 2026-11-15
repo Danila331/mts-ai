@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 import { Composer } from "./composer";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
+import { InlineLead } from "./inline-lead";
+import { PassportCard } from "./passport-card";
 import { type Starter, Starters } from "./starters";
 
 const GREETING =
@@ -122,6 +124,13 @@ export function ChatView({
   };
 
   const hasAnswers = messages.some((m) => m.role === "assistant" && m.answer);
+  const session = chat.active;
+  const passport = session?.passport;
+  // Паспорт показываем, когда в нём что-то есть; карточку заявки — когда есть контакты или согласие
+  // и заявка ещё не отправлена, и только после ответа (не посреди генерации).
+  const hasPassport = !!passport?.fields.some((f) => f.value);
+  const showInlineLead = !!session && !!passport?.ready_for_lead && !session.lead && !chat.busy;
+  const leadDone = (lead: { id: string; summary: string }) => chat.setLead(lead);
   const composer = (
     <Composer
       onSend={send}
@@ -180,6 +189,11 @@ export function ChatView({
               </div>
             </div>
           )}
+          {hasPassport && passport && (
+            <div className={cn("sticky top-0 z-10 -mt-1 bg-background/95 pb-1 backdrop-blur", !compact && "pt-1")}>
+              <PassportCard key={session?.id} passport={passport} onEdit={chat.editPassport} compact={compact} />
+            </div>
+          )}
           {messages.map((m) => (
             <MessageItem
               key={m.id}
@@ -200,6 +214,7 @@ export function ChatView({
               onRate={m.role === "assistant" && m.answer ? (r) => rate(m.id, r) : undefined}
             />
           ))}
+          {showInlineLead && session && <InlineLead key={session.id} session={session} onDone={leadDone} compact={compact} />}
           <div ref={bottom} />
         </div>
       </div>

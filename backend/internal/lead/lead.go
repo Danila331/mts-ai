@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
+
 	"github.com/google/uuid"
 
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
@@ -88,6 +90,10 @@ type Lead struct {
 	// RequestID — обращение, в котором принята заявка.
 	RequestID string
 	CreatedAt time.Time
+	// SessionID — разговор, из которого пришла заявка; пусто — старая форма.
+	SessionID string
+	// Passport — паспорт задачи на момент отправки (internal/passport.View).
+	Passport json.RawMessage
 }
 
 // NewCode — десять случайных шестнадцатеричных знаков. Уникальность

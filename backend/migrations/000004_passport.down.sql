@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS leads_session_idx;
+ALTER TABLE leads DROP COLUMN IF EXISTS passport;
+ALTER TABLE leads DROP COLUMN IF EXISTS session_id;
+ALTER TABLE sessions DROP COLUMN IF EXISTS passport;

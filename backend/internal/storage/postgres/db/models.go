@@ -50,6 +50,8 @@ type Lead struct {
 	CreatedAt     time.Time
 	RequestID     string
 	SummarySource string
+	SessionID     *string
+	Passport      []byte
 }
 
 type Session struct {
@@ -60,4 +62,5 @@ type Session struct {
 	Page      []byte
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Passport  []byte
 }

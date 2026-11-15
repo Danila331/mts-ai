@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type Channel, streamChat } from "@/lib/api";
+import { type Channel, patchPassport, streamChat } from "@/lib/api";
 import { readSandbox } from "@/lib/sandbox";
-import type { ChatMode, Message, Session, Turn } from "@/lib/types";
+import type { ChatMode, Message, Passport, Session, Turn } from "@/lib/types";
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
@@ -90,6 +90,7 @@ export function useChat(
           {
             onRetrieval: (retrieval) => patchMessage(sessionId, assistantId, { stage: "retrieval", retrieval }),
             onGeneration: () => patchMessage(sessionId, assistantId, { stage: "generation" }),
+            onPassport: (passport) => update(sessionId, (s) => ({ ...s, passport })),
             onAnswer: (answer) =>
               patchMessage(sessionId, assistantId, {
                 content: answer.text,
@@ -117,7 +118,7 @@ export function useChat(
         controllers.current.delete(sessionId);
       }
     },
-    [mode, sandbox, channel, patchMessage],
+    [mode, sandbox, channel, patchMessage, update],
   );
 
   const send = useCallback(
@@ -199,6 +200,17 @@ export function useChat(
     [active, update],
   );
 
+  /** Клиент поправил паспорт: правка уходит на сервер, бот её больше не перезапишет. */
+  const editPassport = useCallback(
+    async (values: Record<string, string | null>): Promise<Passport | undefined> => {
+      if (!active) return;
+      const passport = await patchPassport(active.id, values);
+      update(active.id, (s) => ({ ...s, passport }));
+      return passport;
+    },
+    [active, update],
+  );
+
   const busy = !!active?.messages.some((m) => m.pending);
 
   return {
@@ -215,6 +227,7 @@ export function useChat(
     stop,
     rate,
     setLead,
+    editPassport,
     busy,
   };
 }

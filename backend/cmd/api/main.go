@@ -127,13 +127,14 @@ func run() error {
 	}
 
 	srv := transport.New(cfg, transport.Deps{
-		Chat:      chatuc.New(coreClient, store, cfg.Core.Timeout),
-		Leads:     leaduc.New(store, model),
+		Chat:      chatuc.New(coreClient, store, cfg.Core.Timeout).WithPassport(store, model),
+		Leads:     leaduc.New(store, model).WithPassports(store),
 		Feedback:  feedbackuc.New(store),
 		Health:    health.New(coreClient, store),
 		KB:        coreClient,
 		Settings:  coreClient,
 		Sessions:  store,
+		Passports: store,
 		Metrics:   m,
 		RateStore: rateStore,
 	}, log)

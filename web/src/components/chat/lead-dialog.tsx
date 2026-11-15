@@ -12,6 +12,7 @@ import { toTurns } from "@/hooks/use-chat";
 import { sendLead } from "@/lib/api";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Consent } from "./consent";
 
 function plural(n: number, one: string, few: string, many: string) {
   const m10 = n % 10;
@@ -101,14 +102,21 @@ function LeadForm({
   closeButton: (label: string, primary?: boolean) => React.ReactNode;
   panel?: boolean;
 }) {
-  const [form, setForm] = useState({ name: "", phone: "", company: "", comment: "" });
+  const fromPassport = (key: string) => session.passport?.fields.find((f) => f.key === key)?.value ?? "";
+  const [form, setForm] = useState(() => ({
+    name: fromPassport("name"),
+    phone: fromPassport("phone"),
+    company: fromPassport("company"),
+    comment: fromPassport("callback_preference"),
+  }));
+  const [consent, setConsent] = useState(false);
   const [touched, setTouched] = useState({ name: false, phone: false });
   const [sending, setSending] = useState(false);
   const lead = session.lead;
   const digits = form.phone.replace(/\D/g, "").length;
   const nameError = touched.name && !form.name.trim() ? "Как к вам обращаться?" : "";
   const phoneError = touched.phone && digits < 10 ? "Нужен номер из 10–11 цифр, например +7 900 000-00-00" : "";
-  const valid = form.name.trim() && digits >= 10;
+  const valid = form.name.trim() && digits >= 10 && consent;
   const turns = session.messages.filter((m) => !m.pending && !m.error && m.content).length;
 
   const submit = async (e?: React.FormEvent) => {
@@ -117,7 +125,7 @@ function LeadForm({
     if (!valid || sending) return;
     setSending(true);
     try {
-      const res = await sendLead({ ...form, messages: toTurns(session.messages) });
+      const res = await sendLead({ ...form, messages: toTurns(session.messages), session_id: session.id, consent });
       onDone(res);
       toast.success("Заявка передана менеджеру");
     } catch (err) {
@@ -232,22 +240,21 @@ function LeadForm({
             />
           </Field>
         </div>
-        {!panel && <p className="-mt-2 text-xs text-muted-foreground">Это демо-стенд: вводите только тестовые данные.</p>}
+        <Consent id={`lead-consent-${session.id}`} checked={consent} onChange={setConsent} />
       </div>
 
       <div className={footer}>
         {panel ? (
           <>
-            <Button type="submit" size="lg" disabled={sending} className="h-11 w-full text-[15px]">
+            <Button type="submit" size="lg" disabled={sending || !consent} className="h-11 w-full text-[15px]">
               {sending && <Loader2 className="animate-spin" />}
               {sending ? "Отправляю" : "Отправить заявку"}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">Демо-стенд: вводите только тестовые данные</p>
           </>
         ) : (
           <>
             {closeButton("Отмена")}
-            <Button type="submit" size="lg" disabled={sending}>
+            <Button type="submit" size="lg" disabled={sending || !consent}>
               {sending && <Loader2 className="animate-spin" />}
               {sending ? "Отправляю" : "Отправить заявку"}
             </Button>
