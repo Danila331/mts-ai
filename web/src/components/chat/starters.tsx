@@ -30,16 +30,16 @@ export function Starters({ onPick, compact }: { onPick: (text: string) => void; 
     );
   }
   return (
-    <ul className="flex flex-wrap justify-center gap-2" aria-label="Примеры вопросов">
+    <ul className="flex flex-wrap justify-center gap-1.5" aria-label="Примеры вопросов">
       {STARTERS.map(({ icon: Icon, label, text }) => (
         <li key={label}>
           <button
             type="button"
             onClick={() => onPick(text)}
             title={text}
-            className="group inline-flex h-9 items-center gap-2 rounded-full border bg-background px-3.5 text-[13.5px] text-foreground/85 transition-colors hover:border-input hover:bg-muted hover:text-foreground dark:bg-transparent"
+            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border/80 px-3 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <Icon className="size-4 text-muted-foreground transition-colors group-hover:text-brand-text" />
+            <Icon className="size-[15px]" strokeWidth={1.75} />
             {label}
           </button>
         </li>

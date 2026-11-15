@@ -1,4 +1,4 @@
-import type { AnswerPayload, ChatMode, Health, KbData, Retrieval, Turn } from "./types";
+import type { AnswerPayload, ChatMode, Health, KbData, RagSettings, Retrieval, SettingValue, Turn } from "./types";
 
 // Все запросы идут на тот же origin (/api/* проксируется в Python-API), поэтому работает и внутри iframe виджета.
 const BASE = "/api";
@@ -103,4 +103,31 @@ export async function sendFeedback(body: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+async function settingsJson(res: Response): Promise<RagSettings> {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `API ответил ${res.status}`);
+  return data as RagSettings;
+}
+
+/** Настройки RAG ядра: текущие, из окружения и пределы. */
+export async function getSettings(): Promise<RagSettings> {
+  return settingsJson(await fetch(`${BASE}/settings`, { cache: "no-store" }));
+}
+
+/** Сохранить настройки — глобально, для всех ответов стенда до перезапуска ядра. */
+export async function saveSettings(values: Record<string, SettingValue>): Promise<RagSettings> {
+  return settingsJson(
+    await fetch(`${BASE}/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    }),
+  );
+}
+
+/** Вернуть значения из окружения ядра. */
+export async function resetSettings(): Promise<RagSettings> {
+  return settingsJson(await fetch(`${BASE}/settings/reset`, { method: "POST" }));
 }
