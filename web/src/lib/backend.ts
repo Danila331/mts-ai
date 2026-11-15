@@ -9,7 +9,13 @@ const TOKEN = process.env.EB_API_TOKEN ?? "";
 
 // EB_ADMIN_TOKEN — тот же секрет, что у api: с ним /settings меняет настройки RAG для всех.
 // Пусто — глобальные настройки закрыты, страница работает песочницей.
-const ADMIN_TOKEN = process.env.EB_ADMIN_TOKEN ?? "";
+// Короче 32 знаков — не токен, а пароль, который подбирают: такой вход не включается вовсе.
+const ADMIN_TOKEN_MIN = 32;
+const RAW_ADMIN_TOKEN = process.env.EB_ADMIN_TOKEN ?? "";
+if (RAW_ADMIN_TOKEN && RAW_ADMIN_TOKEN.length < ADMIN_TOKEN_MIN) {
+  console.warn(`EB_ADMIN_TOKEN короче ${ADMIN_TOKEN_MIN} знаков — вход администратора выключен`);
+}
+const ADMIN_TOKEN = RAW_ADMIN_TOKEN.length >= ADMIN_TOKEN_MIN ? RAW_ADMIN_TOKEN : "";
 export const ADMIN_HEADER = "X-Admin-Token";
 const ADMIN_COOKIE = "eb_admin";
 const ADMIN_TTL_SEC = 12 * 60 * 60;

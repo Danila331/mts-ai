@@ -261,6 +261,13 @@ export function SettingsView() {
   const [login, setLogin] = useState(false);
   const admin = session.admin;
 
+  /** Поля с пределами режима: в песочнице у контекста и токенов потолок ниже, чем у администратора. */
+  const fields = useMemo(
+    () =>
+      (data?.fields ?? []).map((f) => (!admin && f.sandbox_max !== undefined ? { ...f, max: f.sandbox_max } : f)),
+    [data, admin],
+  );
+
   /** Значения, от которых считаются правки: у администратора — общие, в песочнице — общие поверх своих. */
   const current = useMemo(() => (data ? (admin ? data.values : overlay(data, sandbox)) : {}), [data, admin, sandbox]);
 
@@ -291,7 +298,7 @@ export function SettingsView() {
     const changes: Record<string, SettingValue> = {};
     const values: Record<string, SettingValue> = {};
     let invalid = 0;
-    for (const f of data.fields) {
+    for (const f of fields) {
       const { value, error: err } = parse(f, draft[f.key]);
       if (err) invalid++;
       else if (value !== undefined) {
@@ -300,7 +307,7 @@ export function SettingsView() {
       }
     }
     return { changes, values, invalid };
-  }, [data, draft, current]);
+  }, [data, fields, draft, current]);
   const dirty = Object.keys(parsed.changes).length;
 
   const save = async () => {
@@ -441,7 +448,7 @@ export function SettingsView() {
                     {g.title}
                   </h2>
                   <ul className="mt-2 divide-y border-y">
-                    {data.fields
+                    {fields
                       .filter((f) => f.group === g.key)
                       .map((f) => (
                         <Row

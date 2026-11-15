@@ -389,9 +389,12 @@ def attribute(answer: str, chunks: list) -> list:
 # на этот ответ (overridden() выше). Так жюри может пробовать настройки, не меняя бота другим посетителям.
 class Field:
     def __init__(self, key, group, kind, env_name, obj, name, lo=None, hi=None, options=None, available=None,
-                 to_attr=None, from_attr=None):
+                 to_attr=None, from_attr=None, sandbox_hi=None):
         self.key, self.group, self.kind, self.env = key, group, kind, env_name
         self.obj, self.name, self.lo, self.hi, self.options = obj, name, lo, hi, options
+        # Потолок песочницы: анонимный посетитель не должен раздувать цену ответа (контекст, токены)
+        # до предела, доступного администратору. Общее значение выше потолка песочница не урезает.
+        self.sandbox_hi = sandbox_hi
         self.available = available or (lambda: True)
         # Значение настройки и значение атрибута не всегда совпадают: справочник включается его текстом,
         # эмбеддинги — только при построенных векторах.
@@ -407,6 +410,14 @@ class Field:
     def override(self, value) -> tuple:
         """Ключ и значение для overridden(): атрибут этого поля только в текущем ответе."""
         return (id(self.obj), self.name), self.to_attr(value)
+
+    def coerce_sandbox(self, value):
+        number = self.coerce(value)
+        if self.sandbox_hi is not None:
+            cap = max(self.sandbox_hi, self.get())
+            if number > cap:
+                raise ValueError(f"{self.key}: в песочнице — не больше {cap}")
+        return number
 
     def coerce(self, value):
         if self.kind == "bool":
@@ -429,6 +440,8 @@ class Field:
         out = {"key": self.key, "group": self.group, "kind": self.kind, "env": self.env, "available": self.available()}
         if self.kind in ("int", "float"):
             out |= {"min": self.lo, "max": self.hi}
+            if self.sandbox_hi is not None:
+                out["sandbox_max"] = max(self.sandbox_hi, self.get())
         if self.kind == "enum":
             out["options"] = self.options
         return out
@@ -444,9 +457,10 @@ class Settings:
 
         self.fields = [
             Field("top_k", "search", "int", "EB_TOP_K", bot, "top_k", lo=0, hi=30),
-            Field("n_candidates", "search", "int", "EB_N_CANDIDATES", bot, "n_candidates", lo=5, hi=80),
-            Field("full_docs", "search", "int", "EB_FULL_DOCS", bot, "full_docs", lo=0, hi=6),
-            Field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=200000),
+            Field("n_candidates", "search", "int", "EB_N_CANDIDATES", bot, "n_candidates", lo=5, hi=80, sandbox_hi=40),
+            Field("full_docs", "search", "int", "EB_FULL_DOCS", bot, "full_docs", lo=0, hi=6, sandbox_hi=3),
+            Field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=200000,
+                  sandbox_hi=60000),
             Field("use_dense", "search", "bool", "EB_USE_EMBEDDINGS", bot, "dense",
                   to_attr=lambda v: bool(v) and has_vectors(), available=has_vectors),
             Field("use_reranker", "search", "bool", "EB_USE_RERANKER", api, "can_rerank",
@@ -459,9 +473,10 @@ class Settings:
             Field("style", "generation", "enum", "EB_STYLE", bot, "style",
                   options=list(dict.fromkeys(["tight", "full", "recipe", "jury", "jury2", bot.style]))),
             Field("use_examples", "generation", "bool", "EB_EXAMPLES", bot, "use_examples"),
-            Field("near", "generation", "int", "EB_NEAR", bot, "near", lo=0, hi=8),
+            Field("near", "generation", "int", "EB_NEAR", bot, "near", lo=0, hi=8, sandbox_hi=4),
             Field("temperature", "generation", "float", "EB_TEMPERATURE", api, "temperature", lo=0.0, hi=2.0),
-            Field("max_tokens", "generation", "int", "EB_MAX_TOKENS", api, "max_tokens", lo=128, hi=8192),
+            Field("max_tokens", "generation", "int", "EB_MAX_TOKENS", api, "max_tokens", lo=128, hi=8192,
+                  sandbox_hi=2048),
             Field("think", "generation", "bool", "EB_THINK", bot, "think"),
             Field("refine", "generation", "bool", "EB_REFINE", bot, "refine"),
             Field("check_kb", "generation", "enum", "EB_CHECK", bot, "check_kb", options=[0, 1, 2]),
@@ -485,14 +500,15 @@ class Settings:
             "updated_at": self.updated_at,
         }
 
-    def validate(self, values, name: str = "values") -> dict:
-        """Ключи и пределы — одни для глобальных настроек и для песочницы. Ошибка — ValueError с текстом для человека."""
+    def validate(self, values, name: str = "values", sandbox: bool = False) -> dict:
+        """Ключи и пределы — одни для глобальных настроек и для песочницы; у песочницы ниже потолок
+        у полей, от которых растёт цена ответа. Ошибка — ValueError с текстом для человека."""
         if not isinstance(values, dict):
             raise ValueError(f"{name}: ожидается объект {{ключ: значение}}")
         unknown = sorted(set(values) - set(self.by_key))
         if unknown:
             raise ValueError(f"неизвестные настройки: {', '.join(unknown)}")
-        return {k: self.by_key[k].coerce(v) for k, v in values.items()}
+        return {k: (self.by_key[k].coerce_sandbox(v) if sandbox else self.by_key[k].coerce(v)) for k, v in values.items()}
 
     def update(self, values) -> None:
         clean = self.validate(values)  # сначала проверить всё, потом менять
@@ -506,7 +522,7 @@ class Settings:
         """Переопределения песочницы: (проверенные значения, аргумент для overridden()). Пусто — ({}, {})."""
         if values is None:
             return {}, {}
-        clean = self.validate(values, "overrides")
+        clean = self.validate(values, "overrides", sandbox=True)
         return clean, dict(self.by_key[k].override(v) for k, v in clean.items())
 
     def reset(self) -> None:

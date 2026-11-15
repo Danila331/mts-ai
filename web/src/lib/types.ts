@@ -166,6 +166,8 @@ export interface SettingField {
   available: boolean;
   min?: number;
   max?: number;
+  /** Потолок песочницы для полей, от которых растёт цена ответа (контекст, токены). */
+  sandbox_max?: number;
   options?: (string | number)[];
 }
 

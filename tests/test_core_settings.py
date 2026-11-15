@@ -47,6 +47,18 @@ class SandboxOverrides(unittest.TestCase):
             self.settings.overrides(["top_k"])
         self.assertEqual(self.settings.overrides(None), ({}, {}))
 
+    def test_sandbox_cannot_inflate_answer_cost(self):
+        # Администратор может поднять контекст и токены до предела, анонимная песочница — нет.
+        with self.assertRaisesRegex(ValueError, "context_chars: в песочнице — не больше"):
+            self.settings.overrides({"context_chars": 200000})
+        with self.assertRaisesRegex(ValueError, "max_tokens: в песочнице — не больше"):
+            self.settings.overrides({"max_tokens": 8192})
+        self.settings.validate({"context_chars": 200000, "max_tokens": 8192})  # глобально — можно
+        applied, _ = self.settings.overrides({"context_chars": 30000, "max_tokens": 1024})
+        self.assertEqual(applied, {"context_chars": 30000, "max_tokens": 1024})
+        meta = {f["key"]: f for f in self.settings.snapshot("")["fields"]}
+        self.assertEqual(meta["max_tokens"]["sandbox_max"], max(2048, self.settings.values()["max_tokens"]))
+
     def test_override_is_visible_only_in_its_own_thread(self):
         before = self.settings.values()
         top_k = 1 if before["top_k"] != 1 else 2
