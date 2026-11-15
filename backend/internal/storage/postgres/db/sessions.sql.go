@@ -118,12 +118,13 @@ func (q *Queries) SessionAnswers(ctx context.Context, sessionID *string) ([]Sess
 }
 
 const upsertSession = `-- name: UpsertSession :exec
-INSERT INTO sessions (id, channel, mode, title)
-VALUES ($1, $2, $3, $4)
+INSERT INTO sessions (id, channel, mode, title, page)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (id) DO UPDATE
 SET updated_at = now(),
     mode       = EXCLUDED.mode,
-    title      = CASE WHEN sessions.title = '' THEN EXCLUDED.title ELSE sessions.title END
+    title      = CASE WHEN sessions.title = '' THEN EXCLUDED.title ELSE sessions.title END,
+    page       = CASE WHEN EXCLUDED.page = '{}'::jsonb THEN sessions.page ELSE EXCLUDED.page END
 `
 
 type UpsertSessionParams struct {
@@ -131,16 +132,19 @@ type UpsertSessionParams struct {
 	Channel string
 	Mode    string
 	Title   string
+	Page    []byte
 }
 
 // Сессия создаётся на первом вопросе и «трогается» на каждом следующем.
 // Заголовок — первая реплика: следующие вопросы его не перезаписывают.
+// Страница виджета (T8) — последняя присланная: пустой {} её не стирает.
 func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
 	_, err := q.db.Exec(ctx, upsertSession,
 		arg.ID,
 		arg.Channel,
 		arg.Mode,
 		arg.Title,
+		arg.Page,
 	)
 	return err
 }

@@ -38,10 +38,13 @@
         var s = document.createElement("script");
         s.src = "/widget.js?v=" + Date.now();
         s.async = true;
-        ["title", "color", "position", "greeting", "greetingDelay", "quick", "open"].forEach(function (k) {
+        ["title", "color", "position", "greeting", "greetingDelay", "quick", "open", "topics"].forEach(function (k) {
           var v = p.get(k);
           if (v !== null) s.dataset[k] = v;
         });
+        // Страница сайта, которую изображает превью: виджет читает location.pathname и берёт тему из data-topics.
+        var path = p.get("path");
+        if (path && /^\/[^\s"'<>]{0,199}$/.test(path)) history.replaceState(null, "", path);
         try {
           sessionStorage.removeItem("energytool-chat:greeted");
           sessionStorage.removeItem("energytool-chat:open");

@@ -9,6 +9,7 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -41,6 +42,10 @@ const TitleRunes = 80
 type Ref struct {
 	ID      string
 	Channel Channel
+	// Page — страница сайта, с которой открыт виджет (ParsePage): только
+	// для аналитики разговоров. Ядру и в промпт не уходит. Пусто — фронт
+	// страницу не прислал, у сессии остаётся прежняя.
+	Page json.RawMessage
 }
 
 // Parse проверяет id и канал из запроса. Пустой id — нулевой Ref без
@@ -61,6 +66,64 @@ func Parse(id, channel string) (Ref, error) {
 	default:
 		return Ref{}, apperr.Invalidf("channel: playground, embed или telegram")
 	}
+}
+
+// Страница виджета — что загрузчик виджета (web/widget/loader.ts) знает о
+// странице сайта: путь, заголовок и UTM-метки. Только эти поля: без
+// cookies, полного адреса с другими параметрами и referrer.
+const (
+	// PageBytes — предел объекта page в теле запроса.
+	PageBytes = 2 << 10
+	// PageValueRunes — предел каждого значения.
+	PageValueRunes = 300
+)
+
+// pageKeys — разрешённые ключи page.
+var pageKeys = map[string]bool{
+	"path": true, "title": true,
+	"utm_source": true, "utm_medium": true, "utm_campaign": true, "utm_term": true, "utm_content": true,
+}
+
+// ParsePage строго проверяет страницу из запроса и отдаёт её компактным
+// JSON без пустых значений. Пусто, null и {} — nil без ошибки: поле
+// необязательно. Всё, что не объект из разрешённых ключей со строками
+// до PageValueRunes знаков, — ошибка формата.
+func ParsePage(raw json.RawMessage) (json.RawMessage, error) {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	if len(raw) > PageBytes {
+		return nil, apperr.Invalidf(fmt.Sprintf("page: не больше %d байт", PageBytes))
+	}
+	var fields map[string]any
+	if raw[0] != '{' || json.Unmarshal(raw, &fields) != nil {
+		return nil, apperr.Invalidf("page: ожидается объект {path, title, utm_*}")
+	}
+	page := make(map[string]string, len(fields))
+	for k, v := range fields {
+		if !pageKeys[k] {
+			return nil, apperr.Invalidf(fmt.Sprintf("page: неизвестное поле «%s» — только path, title и utm_source|medium|campaign|term|content", k))
+		}
+		s, ok := v.(string)
+		if !ok {
+			return nil, apperr.Invalidf(fmt.Sprintf("page.%s: ожидается строка", k))
+		}
+		if utf8.RuneCountInString(s) > PageValueRunes {
+			return nil, apperr.Invalidf(fmt.Sprintf("page.%s: не длиннее %d знаков", k, PageValueRunes))
+		}
+		if s = strings.TrimSpace(s); s != "" {
+			page[k] = s
+		}
+	}
+	if len(page) == 0 {
+		return nil, nil
+	}
+	out, err := json.Marshal(page)
+	if err != nil {
+		return nil, apperr.Invalidf("page: ожидается объект {path, title, utm_*}")
+	}
+	return out, nil
 }
 
 // Title — заголовок сессии из первой реплики клиента.

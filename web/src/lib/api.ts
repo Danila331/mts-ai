@@ -1,3 +1,4 @@
+import type { PageInfo } from "./page-context";
 import type { AnswerPayload, ChatMode, Health, KbData, Passport, RagSettings, Retrieval, SettingValue, Turn } from "./types";
 
 // Все запросы идут на тот же origin (/api/* проксируется в Python-API), поэтому работает и внутри iframe виджета.
@@ -39,6 +40,8 @@ export interface ChatOptions {
   /** id разговора на фронте: сервер собирает по нему историю сессии для менеджера. */
   sessionId?: string;
   channel?: Channel;
+  /** Страница сайта, где открыт виджет (путь, заголовок, UTM): пишется в сессию для аналитики, в промпт не идёт. */
+  page?: PageInfo;
 }
 
 /** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → answer → done. */
@@ -46,11 +49,14 @@ export async function streamChat(
   messages: Turn[],
   mode: ChatMode,
   handlers: StreamHandlers,
-  { signal, overrides, sessionId, channel }: ChatOptions = {},
+  { signal, overrides, sessionId, channel, page }: ChatOptions = {},
 ): Promise<void> {
   const body: Record<string, unknown> = { messages, mode };
   if (overrides && Object.keys(overrides).length) body.overrides = overrides;
-  if (sessionId) Object.assign(body, { session_id: sessionId, channel: channel ?? "playground" });
+  if (sessionId) {
+    Object.assign(body, { session_id: sessionId, channel: channel ?? "playground" });
+    if (page && Object.keys(page).length) body.page = page;
+  }
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

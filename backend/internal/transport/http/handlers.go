@@ -111,6 +111,10 @@ type chatRequest struct {
 	// ответ пишется в журнал без сессии.
 	SessionID string `json:"session_id"`
 	Channel   string `json:"channel"`
+	// Page — страница сайта, с которой открыт виджет: путь, заголовок,
+	// UTM (session.ParsePage). Пишется в сессию для аналитики, ядру и в
+	// промпт не уходит.
+	Page json.RawMessage `json:"page"`
 }
 
 // maxOverrides — предел поля overrides. Настроек полтора десятка, и их
@@ -155,6 +159,15 @@ func (s *Server) chat(c echo.Context) error {
 	ref, err := session.Parse(body.SessionID, body.Channel)
 	if err != nil {
 		return s.mapErr(c, err)
+	}
+	// Страницу проверяем и без сессии: кривой page — ошибка клиента,
+	// даже если записать его некуда.
+	page, err := session.ParsePage(body.Page)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	if ref.ID != "" {
+		ref.Page = page
 	}
 
 	mode := dialog.ParseMode(body.Mode)

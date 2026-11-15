@@ -6,24 +6,36 @@ import { useEffect, useRef, useState } from "react";
 import { ChatView } from "@/components/chat/chat-view";
 import { LeadPanel } from "@/components/chat/lead-dialog";
 import { BotAvatar } from "@/components/chat/message-item";
+import { topicByName } from "@/components/chat/topics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
 import { kbHref, useKb } from "@/hooks/use-kb";
+import { type PageInfo, isTopicName, sanitizePage } from "@/lib/page-context";
 import { cn } from "@/lib/utils";
 
 const HEX = /^#[0-9a-f]{3,8}$/i;
 
-/** Чат внутри iframe виджета. Общается со страницей-хозяином через postMessage (origin из ?parent=). */
+/**
+ * Чат внутри iframe виджета. Общается со страницей-хозяином через postMessage (origin из ?parent=).
+ * Страница сайта (путь, заголовок, UTM) приходит сообщением eb:page и уходит с вопросами в сессию — для
+ * аналитики, не в промпт. Тема страницы (?topic= или eb:page) меняет приветствие и стартовые вопросы.
+ */
 export function EmbedChat() {
   const params = useSearchParams();
   const title = params.get("title") || "Консультант EnergyTool";
   const subtitle = params.get("subtitle") || "Отвечает по базе знаний МТС";
-  const greeting = params.get("greeting") || undefined;
   const color = HEX.test(params.get("color") ?? "") ? params.get("color")! : undefined;
   const parent = params.get("parent");
   const [embedded, setEmbedded] = useState(false);
+  const [page, setPage] = useState<PageInfo | undefined>();
+  // undefined — тему ещё не присылали сообщением, берём из адреса; null — страница без темы.
+  const [pageTopic, setPageTopic] = useState<string | null | undefined>();
+  const topicName = pageTopic === undefined ? params.get("topic") : pageTopic;
+  const topic = topicByName(topicName);
+  // У темы своё приветствие; без темы — из data-greeting сайта или общее.
+  const greeting = topic?.greeting ?? (params.get("greeting") || undefined);
 
-  const chat = useChat("eb.widget.sessions.v1", "chat", { channel: "embed" });
+  const chat = useChat("eb.widget.sessions.v1", "chat", { channel: "embed", page });
   const { kb } = useKb();
   const [leadOpen, setLeadOpen] = useState(false);
   const sendRef = useRef(chat.send);
@@ -58,6 +70,12 @@ export function EmbedChat() {
         else pending.current.push(data.text);
       } else if (data?.type === "eb:open") {
         document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+      } else if (data?.type === "eb:page") {
+        // Сообщению не верим на слово: только известные поля, строки и пределы сервера.
+        const { page: raw, topic: next } = data as { page?: unknown; topic?: unknown };
+        const clean = sanitizePage(raw);
+        setPage(Object.keys(clean).length ? clean : undefined);
+        setPageTopic(isTopicName(next) ? next : null);
       }
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && window.parent.postMessage({ type: "eb:close" }, parent);
@@ -168,6 +186,7 @@ export function EmbedChat() {
               kb={kb}
               compact
               greeting={greeting}
+              starters={topic?.starters}
               onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
               onLead={() => setLeadOpen(true)}
             />

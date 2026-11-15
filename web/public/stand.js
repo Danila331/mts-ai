@@ -6,7 +6,7 @@
  * стенд вместе с каждой выкладкой стенда EnergyTool AI, и стенд сайта МТС не нужно пересобирать.
  *
  * Настройки превью приходят в адресе страницы: ?w_title=…&w_color=…&w_position=…&w_greeting=…
- * &w_greetingDelay=…&w_quick=a|b. Чего нет в адресе, то виджет берёт из своих умолчаний — ровно как на
+ * &w_greetingDelay=…&w_quick=a|b&w_topics={"/solar":"solar"}&w_path=/solar. Чего нет в адресе, то виджет берёт из своих умолчаний — ровно как на
  * сайте клиента с тегом без настроек. ?w_preview=1 заново показывает подсказку у кнопки и принимает
  * команды ask/toggle от страницы /widget (iframe с другого origin не может вызвать EnergyToolChat напрямую).
  */
@@ -33,11 +33,21 @@
     });
   }
 
+  // ?w_path=/solar — превью страницы с темой: виджет видит этот путь (адрес меняется без перезагрузки).
+  var path = params.get("w_path");
+  if (path && /^\/[^\s"'<>]{0,199}$/.test(path)) {
+    try {
+      history.replaceState(null, "", path);
+    } catch {
+      /* не тот origin или запрет — превью покажет главную */
+    }
+  }
+
   var tag = document.createElement("script");
   tag.async = true;
   // Без кэша: превью должно показывать виджет из последней выкладки, а не из кэша браузера.
   tag.src = origin + "/widget.js?v=" + Date.now();
-  ["title", "color", "position", "greeting", "greetingDelay", "quick"].forEach(function (key) {
+  ["title", "color", "position", "greeting", "greetingDelay", "quick", "topics"].forEach(function (key) {
     var value = params.get("w_" + key);
     if (value === null) return;
     if (key === "color" && !/^#[0-9a-f]{3,8}$/i.test(value)) return;

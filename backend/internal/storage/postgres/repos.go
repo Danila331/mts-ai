@@ -37,10 +37,15 @@ func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
 }
 
 // TouchSession создаёт сессию на первом вопросе и обновляет её время на
-// каждом следующем; заголовок остаётся от первого.
+// каждом следующем; заголовок остаётся от первого. Страница виджета
+// пишется при создании и заменяется, только если пришла непустая.
 func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title string) error {
+	page := []byte(ref.Page)
+	if len(page) == 0 {
+		page = []byte("{}")
+	}
 	return s.Queries.UpsertSession(ctx, db.UpsertSessionParams{
-		ID: ref.ID, Channel: string(ref.Channel), Mode: mode, Title: title,
+		ID: ref.ID, Channel: string(ref.Channel), Mode: mode, Title: title, Page: page,
 	})
 }
 

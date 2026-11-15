@@ -1,12 +1,14 @@
 -- Сессия создаётся на первом вопросе и «трогается» на каждом следующем.
 -- Заголовок — первая реплика: следующие вопросы его не перезаписывают.
+-- Страница виджета (T8) — последняя присланная: пустой {} её не стирает.
 -- name: UpsertSession :exec
-INSERT INTO sessions (id, channel, mode, title)
-VALUES ($1, $2, $3, $4)
+INSERT INTO sessions (id, channel, mode, title, page)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (id) DO UPDATE
 SET updated_at = now(),
     mode       = EXCLUDED.mode,
-    title      = CASE WHEN sessions.title = '' THEN EXCLUDED.title ELSE sessions.title END;
+    title      = CASE WHEN sessions.title = '' THEN EXCLUDED.title ELSE sessions.title END,
+    page       = CASE WHEN EXCLUDED.page = '{}'::jsonb THEN sessions.page ELSE EXCLUDED.page END;
 
 -- name: GetSession :one
 SELECT id, channel, mode, title, page, passport, created_at, updated_at FROM sessions WHERE id = $1;

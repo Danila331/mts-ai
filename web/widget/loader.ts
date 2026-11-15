@@ -2,12 +2,18 @@
  * Загрузчик виджета ИИ-консультанта МТС EnergyTool. Собирается в public/widget.js (npm run build:widget).
  *
  *   <script src="https://<хост>/widget.js" async data-title="…" data-color="#FF0032" data-position="right"
- *           data-greeting="…" data-greeting-delay="6"></script>
+ *           data-greeting="…" data-greeting-delay="6" data-topics='{"/solar":"solar","/askue":"askue"}'></script>
  *
  * Кнопка и подсказка живут в Shadow DOM (стили сайта их не ломают и наоборот), чат — в iframe на /embed.
  * Связь с iframe — postMessage с проверкой origin. API страницы: window.EnergyToolChat.{open, close, toggle, ask, destroy}.
  * Любой элемент с data-energytool-ask="вопрос" открывает виджет с этим вопросом.
+ *
+ * Страница (T8): iframe получает сообщением eb:page только путь, заголовок и UTM-метки страницы — без cookies,
+ * других параметров адреса и referrer — и тему страницы по data-topics (префикс пути → тема). Тема ещё и в адресе
+ * iframe (?topic=), чтобы приветствие было верным с первого кадра; путь и метки в адрес iframe не попадают.
  */
+
+import { type PageInfo, matchTopic, pageFrom, parseTopics } from "../src/lib/page-context";
 
 interface Config {
   title: string;
@@ -21,6 +27,8 @@ interface Config {
   open: boolean;
   /** Быстрые вопросы в подсказке: data-quick="вопрос 1|вопрос 2", data-quick="" — без них. */
   quick: string[];
+  /** Темы страниц: data-topics='{"/solar":"solar"}' — префикс пути → тема приветствия и вопросов в чате. */
+  topics: Record<string, string>;
 }
 
 interface Api {
@@ -68,6 +76,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
       .map((q) => q.trim())
       .filter(Boolean)
       .slice(0, 3),
+    topics: parseTopics(d.topics),
   };
 
   const side = cfg.position;
@@ -173,24 +182,35 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   let isOpen = false;
   const queue: unknown[] = [];
 
+  // Страница — в момент вопроса: на сайтах-SPA путь меняется без перезагрузки виджета.
+  const page = (): PageInfo => pageFrom(location.pathname, document.title, location.search);
+  const topic = () => matchTopic(location.pathname, cfg.topics);
+
   const embedUrl = () => {
     const u = new URL("/embed", origin);
     u.searchParams.set("title", cfg.title);
     u.searchParams.set("subtitle", cfg.subtitle);
     u.searchParams.set("color", cfg.color);
     if (cfg.greeting) u.searchParams.set("greeting", cfg.greeting);
+    const t = topic();
+    if (t) u.searchParams.set("topic", t);
     u.searchParams.set("parent", location.origin);
     return u.toString();
   };
+
+  /** Путь, заголовок и UTM — только сообщением с точным targetOrigin, не в адресе iframe. */
+  const sendPage = () => post({ type: "eb:page", page: page(), topic: topic() ?? null });
 
   function ensureFrame() {
     if (iframe) return;
     iframe = document.createElement("iframe");
     iframe.title = cfg.title;
     iframe.src = embedUrl();
-    iframe.allow = "clipboard-write";
+    // microphone — голосовой ввод в чате; без него браузер не покажет запрос доступа внутри iframe.
+    iframe.allow = "clipboard-write; microphone";
     iframe.addEventListener("load", () => root.querySelector(".loading")?.remove());
     panel.appendChild(iframe);
+    sendPage();
   }
 
   function post(msg: unknown) {
@@ -212,6 +232,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     launcher.setAttribute("aria-label", "Закрыть чат");
     sessionStorage.setItem(STORAGE_OPEN, "1");
     sessionStorage.setItem(STORAGE_GREETED, "1");
+    if (ready) sendPage();
     post({ type: "eb:open" });
   }
 
