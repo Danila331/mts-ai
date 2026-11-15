@@ -126,7 +126,7 @@ function StandStatus() {
 
   const ok = health && !error;
   const tone = ok ? (health.llm ? "bg-success" : "bg-warning") : error ? "bg-destructive" : "bg-dim";
-  const label = ok ? (health.llm ? health.model.split("/").pop() : "без модели") : error ? "API недоступен" : "проверяю API…";
+  const label = ok ? (health.llm ? health.model.split("/").pop() : "без модели") : error ? (error.startsWith("Ядро") ? "ядро перезапускается" : "API недоступен") : "проверяю API…";
 
   return (
     <DropdownMenu>

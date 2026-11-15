@@ -12,6 +12,14 @@ import { markTerms } from "@/lib/glossary";
 import { TermText } from "./glossary-term";
 
 /** Номера источников по порядку первого упоминания — как сноски. */
+/** Превью раздела без разметки Markdown: «[Облачная платформа учёта](22-askue.md)» → «Облачная платформа учёта» (QA). */
+export function plainPreview(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "");
+}
+
 export function citationOrder(answer: AnswerPayload | undefined): string[] {
   const order: string[] = [];
   for (const c of answer?.citations ?? []) {
@@ -69,7 +77,7 @@ function SourcePreview({
     <div className="space-y-2">
       <div className="text-xs text-muted-foreground">{entry.doc.title}</div>
       <div className="text-[14px] leading-snug font-medium">{entry.chunk.path.split(" > ").pop()}</div>
-      <p className="line-clamp-5 text-[13px] leading-relaxed text-muted-foreground">{preview}</p>
+      <p className="line-clamp-5 text-[13px] leading-relaxed text-muted-foreground">{plainPreview(preview)}</p>
       <button
         type="button"
         onClick={() => onOpen(id, match?.line)}
