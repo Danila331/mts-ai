@@ -65,6 +65,8 @@ type Contacts struct {
 	Phone   string
 	Company string
 	Comment string
+	// Callback — удобное время для звонка (T4): предпочтение, не запись.
+	Callback Callback
 }
 
 // Normalize подрезает поля до пределов.
@@ -77,6 +79,9 @@ func (c Contacts) Normalize() Contacts {
 		Phone:   dialog.Clip(strings.TrimSpace(c.Phone), MaxPhone),
 		Company: dialog.Clip(strings.TrimSpace(c.Company), MaxCompany),
 		Comment: dialog.Clip(strings.TrimSpace(c.Comment), MaxComment),
+		// Часть дня проверяет сценарий (Callback.Normalize): неизвестная —
+		// отказ, а не подрезка.
+		Callback: c.Callback,
 	}
 }
 

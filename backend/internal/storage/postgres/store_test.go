@@ -90,6 +90,15 @@ func TestStore(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &back))
 		assert.Equal(t, withScore.Score, back, "оценка лежит в заявке как есть")
 
+		var callback string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT callback_preference::text FROM leads WHERE id = $1", l.ID).Scan(&callback))
+		assert.Equal(t, "{}", callback, "время не выбрано — пустой объект")
+		withCallback := lead.Lead{Code: "5555555555", Summary: "s",
+			Contacts: lead.Contacts{Callback: lead.Callback{Time: "day", Timezone: "Europe/Moscow"}}}
+		require.NoError(t, s.CreateLead(ctx, &withCallback))
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT callback_preference FROM leads WHERE id = $1", withCallback.ID).Scan(&raw))
+		assert.JSONEq(t, `{"time": "day", "timezone": "Europe/Moscow"}`, string(raw))
+
 		l.Summary, l.SummarySource = "резюме моделью", lead.SummaryLLM
 		require.NoError(t, s.UpdateLeadSummary(ctx, &l))
 		var summary string

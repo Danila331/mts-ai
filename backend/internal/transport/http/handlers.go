@@ -338,6 +338,9 @@ type leadRequest struct {
 	Messages json.RawMessage `json:"messages"`
 	// SessionID — разговор: заявка возьмёт его паспорт задачи с сервера.
 	SessionID string `json:"session_id"`
+	// Callback — когда удобнее звонок (T4): часть дня и часовой пояс
+	// браузера. Предпочтение, а не запись на время.
+	Callback lead.Callback `json:"callback"`
 	// Consent — согласие на обработку персональных данных, на том же шаге,
 	// что и контакты (раздел базы «Согласие на обработку персональных
 	// данных»). Без него заявки нет.
@@ -363,7 +366,7 @@ func (s *Server) lead(c echo.Context) error {
 		return s.mapErr(c, err)
 	}
 	l, err := s.deps.Leads.CreateForSession(c.Request().Context(), lead.Contacts{
-		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment,
+		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment, Callback: body.Callback,
 	}, body.Messages, ref.ID)
 	if err != nil {
 		return s.mapErr(c, err)

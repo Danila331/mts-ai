@@ -81,7 +81,8 @@ func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) (passport.Pa
 		return empty, nil
 	}
 	now := time.Now()
-	for key, v := range map[string]string{"name": l.Name, "phone": l.Phone, "company": l.Company} {
+	for key, v := range map[string]string{"name": l.Name, "phone": l.Phone, "company": l.Company,
+		"callback_preference": l.Callback.Label()} {
 		if clean, err := passport.Clean(key, v); err == nil && clean != "" {
 			p.Set(key, clean, passport.FromClient, now)
 		}
@@ -94,6 +95,16 @@ func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) (passport.Pa
 		l.Passport = raw
 	}
 	return p, &view
+}
+
+// callbackLine — удобное время отдельной строкой в конце резюме: его
+// выбрал клиент кнопкой, пересказывать его модели незачем. Пусто — не
+// выбрано.
+func callbackLine(c lead.Callback) string {
+	if c.Empty() {
+		return ""
+	}
+	return "\nУдобное время для звонка: " + c.Label()
 }
 
 // missingLine — строка резюме «что уточнить» из скоринга; пусто — нечего.
@@ -140,6 +151,9 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 	if err != nil {
 		return lead.Lead{}, err
 	}
+	if c.Callback, err = c.Callback.Normalize(); err != nil {
+		return lead.Lead{}, err
+	}
 
 	// Клиент, закрывший вкладку после «Отправить», заявку уже отправил:
 	// отмена запроса не должна её терять. Потолок свой.
@@ -163,6 +177,7 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 	if line := missingLine(l.Score); line != "" {
 		l.Summary += "\n" + line
 	}
+	l.Summary += callbackLine(l.Callback)
 	for attempt := 0; attempt < codeAttempts; attempt++ {
 		l.Code = lead.NewCode()
 		err = s.repo.CreateLead(ctx, &l)
@@ -212,7 +227,7 @@ func (s *Service) summarize(ctx context.Context, l *lead.Lead, turns []dialog.Tu
 	}
 
 	updated := *l
-	updated.Summary, updated.SummarySource = text, lead.SummaryLLM
+	updated.Summary, updated.SummarySource = text+callbackLine(l.Callback), lead.SummaryLLM
 	if err := s.repo.UpdateLeadSummary(ctx, &updated); err != nil {
 		// Клиенту показываем то же, что увидит менеджер, — то, что в базе.
 		log.Error().Err(err).Str("lead_code", l.Code).Msg("резюме моделью не записано — в заявке список вопросов")

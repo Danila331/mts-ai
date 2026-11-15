@@ -825,18 +825,27 @@ func TestLeadFromChatWithConsent(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(evs[1].data), &v))
 	assert.True(t, v.ReadyForLead, "есть имя, телефон и компания — карточка заявки")
 
-	lead := `{"name": "Тестов Тест", "phone": "+7 900 000 00 00", "company": "ООО Учебный склад",
+	form := `{"name": "Тестов Тест", "phone": "+7 900 000 00 00", "company": "ООО Учебный склад",
 		"messages": [{"role": "user", "content": "q"}], "session_id": "sess-lead-1"`
-	rec = do(s, http.MethodPost, "/api/lead", lead+`}`)
+	rec = do(s, http.MethodPost, "/api/lead", form+`}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "без согласия заявки нет")
 	assert.Contains(t, rec.Body.String(), "согласие")
 	assert.Empty(t, store.leads)
 
-	rec = do(s, http.MethodPost, "/api/lead", lead+`, "consent": true}`)
+	rec = do(s, http.MethodPost, "/api/lead", form+`, "consent": true, "callback": {"time": "15:00"}}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "точное время — не вариант выбора")
+	assert.Empty(t, store.leads)
+
+	rec = do(s, http.MethodPost, "/api/lead", form+`, "consent": true,
+		"callback": {"time": "morning", "timezone": "Europe/Moscow"}}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, store.leads, 1)
 	assert.Equal(t, "sess-lead-1", store.leads[0].SessionID)
 	assert.Contains(t, string(store.leads[0].Passport), "ООО Учебный склад", "паспорт сессии ушёл в заявку")
+	assert.Equal(t, lead.Callback{Time: "morning", Timezone: "Europe/Moscow"}, store.leads[0].Callback)
+	assert.Contains(t, string(store.leads[0].Passport), "утро, часовой пояс Europe/Moscow")
+	// T4: в ответе API нет обещаний точного времени, срока звонка или имени.
+	assert.NotRegexp(t, `\d{1,2}:\d{2}|через \d+|в течение|сегодня|завтра`, rec.Body.String())
 }
 
 func TestPatchPassportByClient(t *testing.T) {

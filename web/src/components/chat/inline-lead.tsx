@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toTurns } from "@/hooks/use-chat";
 import { sendLead } from "@/lib/api";
+import { browserTimezone, type CallbackPreference, guessTime, leadSavedText } from "@/lib/callback";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { CallbackPicker } from "./callback-picker";
 import { Consent } from "./consent";
 
 const value = (s: Session, key: string) => s.passport?.fields.find((f) => f.key === key)?.value ?? "";
@@ -31,7 +33,11 @@ export function InlineLead({
     name: value(session, "name"),
     phone: value(session, "phone"),
     company: value(session, "company"),
-    comment: value(session, "callback_preference"),
+  }));
+  // Удобное время (T4): предвыбор — по словам клиента в паспорте, пояс — из браузера.
+  const [callback, setCallback] = useState<CallbackPreference>(() => ({
+    time: guessTime(value(session, "callback_preference")),
+    timezone: browserTimezone(),
   }));
   const [consent, setConsent] = useState(false);
   const [sending, setSending] = useState(false);
@@ -45,12 +51,14 @@ export function InlineLead({
     try {
       const lead = await sendLead({
         ...form,
+        comment: "",
         messages: toTurns(session.messages),
         session_id: session.id,
+        callback,
         consent,
       });
       onDone(lead);
-      toast.success("Заявка передана менеджеру");
+      toast.success(leadSavedText(callback), { description: `Номер заявки №${lead.id}` });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось отправить заявку");
     } finally {
@@ -80,7 +88,6 @@ export function InlineLead({
             ["name", "Как к вам обращаться", "Тестов Тест Тестович"],
             ["phone", "Телефон", "+7 900 000-00-00"],
             ["company", "Компания", "ООО Учебный склад"],
-            ["comment", "Удобное время для звонка", "необязательно"],
           ] as const
         ).map(([k, label, placeholder]) => (
           <div key={k} className="grid gap-1">
@@ -98,6 +105,7 @@ export function InlineLead({
           </div>
         ))}
       </div>
+      <CallbackPicker id={id("callback")} value={callback} onChange={setCallback} className="mt-3" />
       <Consent id={id("consent")} checked={consent} onChange={setConsent} className="mt-3.5" />
       <div className="mt-3.5 flex items-center justify-end gap-2">
         <Button type="submit" disabled={!ready}>

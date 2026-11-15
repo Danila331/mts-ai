@@ -163,3 +163,29 @@ func TestCreateScoresFromSessionPassport(t *testing.T) {
 	assert.Contains(t, m.user, "Количество и тип приборов: около 40 счётчиков", "и известные параметры паспорта")
 	assert.Contains(t, lead.SummarySystem, "Известные параметры:")
 }
+
+func TestCreateKeepsCallbackPreference(t *testing.T) {
+	pp := &passports{p: passport.Parse(nil)}
+	r := &repo{}
+	l, err := New(r, nil).WithPassports(pp).CreateForSession(context.Background(), lead.Contacts{
+		Name: "Тестов Тест", Phone: "+7 900 000-00-00",
+		Callback: lead.Callback{Time: "evening", Timezone: "Asia/Yekaterinburg"},
+	}, json.RawMessage(dialogJSON), "sess-1")
+	require.NoError(t, err)
+	assert.Equal(t, lead.Callback{Time: "evening", Timezone: "Asia/Yekaterinburg"}, r.saved[0].Callback)
+	assert.True(t, strings.HasSuffix(l.Summary, "\nУдобное время для звонка: вечер, часовой пояс Asia/Yekaterinburg"), l.Summary)
+	v := pp.p.Values["callback_preference"]
+	assert.Equal(t, "вечер, часовой пояс Asia/Yekaterinburg", v.Value, "предпочтение видно в паспорте")
+	assert.Equal(t, passport.FromClient, v.Source, "его выбрал клиент")
+
+	// С моделью строка про время остаётся: её выбрал клиент, а не пересказала модель.
+	r2 := &repo{}
+	l, err = New(r2, &model{text: "Задача клиента: учёт"}).Create(context.Background(),
+		lead.Contacts{Callback: lead.Callback{Time: "morning"}}, json.RawMessage(dialogJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "Задача клиента: учёт\nУдобное время для звонка: утро", l.Summary)
+
+	_, err = New(&repo{}, nil).Create(context.Background(), lead.Contacts{Callback: lead.Callback{Time: "в 15:00"}},
+		json.RawMessage(dialogJSON))
+	require.Error(t, err, "точное время — не вариант выбора")
+}

@@ -10,8 +10,18 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toTurns } from "@/hooks/use-chat";
 import { sendLead } from "@/lib/api";
+import {
+  browserTimezone,
+  CALLBACK_PLAIN,
+  type CallbackPreference,
+  callbackNote,
+  guessTime,
+  LEAD_SAVED_TITLE,
+  leadSavedText,
+} from "@/lib/callback";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { CallbackPicker } from "./callback-picker";
 import { Consent } from "./consent";
 
 function plural(n: number, one: string, few: string, many: string) {
@@ -107,8 +117,15 @@ function LeadForm({
     name: fromPassport("name"),
     phone: fromPassport("phone"),
     company: fromPassport("company"),
-    comment: fromPassport("callback_preference"),
+    comment: "",
   }));
+  // Удобное время (T4) — пожелание, а не запись на время.
+  const [callback, setCallback] = useState<CallbackPreference>(() => ({
+    time: guessTime(fromPassport("callback_preference")),
+    timezone: browserTimezone(),
+  }));
+  // Текст после отправки зависит от того, выбрал ли клиент время, — запоминаем выбор на момент отправки.
+  const [savedNote, setSavedNote] = useState(CALLBACK_PLAIN);
   const [consent, setConsent] = useState(false);
   const [touched, setTouched] = useState({ name: false, phone: false });
   const [sending, setSending] = useState(false);
@@ -125,9 +142,10 @@ function LeadForm({
     if (!valid || sending) return;
     setSending(true);
     try {
-      const res = await sendLead({ ...form, messages: toTurns(session.messages), session_id: session.id, consent });
+      const res = await sendLead({ ...form, messages: toTurns(session.messages), session_id: session.id, callback, consent });
+      setSavedNote(callbackNote(callback));
       onDone(res);
-      toast.success("Заявка передана менеджеру");
+      toast.success(leadSavedText(callback), { description: `Номер заявки №${res.id}` });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось отправить заявку. Попробуйте ещё раз.");
     } finally {
@@ -153,10 +171,10 @@ function LeadForm({
               <Check className="size-5" strokeWidth={2.5} />
             </span>
             <Title className="font-heading text-[19px] leading-snug font-semibold tracking-[-0.015em]">
-              Заявка передана
+              {LEAD_SAVED_TITLE}
             </Title>
             <Description className="text-[14px] leading-relaxed text-muted-foreground">
-              Менеджер свяжется с вами и уже будет знать контекст разговора. Номер заявки{" "}
+              {savedNote} Он уже будет знать контекст разговора. Номер заявки{" "}
               <span className="font-mono text-[13px] text-foreground">№{lead.id}</span>
             </Description>
           </div>
@@ -235,11 +253,12 @@ function LeadForm({
               value={form.comment}
               onChange={set("comment")}
               rows={3}
-              placeholder="Удобное время для звонка, адрес объекта"
+              placeholder="Адрес объекта, что важно знать менеджеру"
               className="field-sizing-fixed min-h-[84px] w-full resize-none"
             />
           </Field>
         </div>
+        <CallbackPicker id={`lead-callback-${session.id}`} value={callback} onChange={setCallback} />
         <Consent id={`lead-consent-${session.id}`} checked={consent} onChange={setConsent} />
       </div>
 

@@ -100,6 +100,12 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 			return err
 		}
 	}
+	callback := []byte("{}")
+	if !l.Callback.Empty() {
+		if callback, err = json.Marshal(l.Callback); err != nil {
+			return err
+		}
+	}
 	row, err := s.Queries.CreateLead(ctx, db.CreateLeadParams{
 		Code:          l.Code,
 		Name:          l.Name,
@@ -113,6 +119,8 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 		SessionID:     optional(l.SessionID),
 		Passport:      object(l.Passport),
 		Score:         scored,
+		// Предпочтение по времени звонка (T4), не запись на время.
+		CallbackPreference: callback,
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == "leads_code_uq" {

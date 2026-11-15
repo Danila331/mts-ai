@@ -12,7 +12,7 @@
 | `GET /api/health` | состояние ядра как есть + `db` |
 | `GET /api/kb` | база знаний разделами — байт в байт как у ядра |
 | `POST /api/chat` `{messages, mode}` | SSE ядра насквозь: `stage` → `stage` → `answer` → `done`; ответ ложится в `answers` |
-| `POST /api/lead` | заявка с резюме модели (без модели — список вопросов) и оценкой правилами (`leads.score`: hot/warm/cold, причины, что спросить) → `leads`; ответ `{id, summary}` — оценку клиент не видит |
+| `POST /api/lead` | заявка с резюме модели (без модели — список вопросов) и оценкой правилами (`leads.score`: hot/warm/cold, причины, что спросить) → `leads`; `callback: {time: morning\|day\|evening\|any, timezone}` — удобное время, пожелание, а не запись (`leads.callback_preference`); ответ `{id, summary}` — оценку клиент не видит |
 | `POST /api/feedback` | 👍/👎 → `feedback` |
 | `GET /api/settings` | настройки RAG ядра: текущие, из окружения, пределы |
 | `POST /api/settings` | `{"values": {...}}` — глобально, до перезапуска ядра; проверяет ядро |
