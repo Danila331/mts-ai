@@ -18,6 +18,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/rs/zerolog"
 
+	"github.com/Danila331/mts-ai/backend/internal/analytics"
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	chatuc "github.com/Danila331/mts-ai/backend/internal/chat/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/config"
@@ -69,6 +70,16 @@ type (
 		Photos() bool
 		MaxPages() int
 	}
+	// Board — заявки на экране менеджера (T5).
+	Board interface {
+		LeadList(ctx context.Context, status lead.Status, limit, offset int) (lead.ListPage, error)
+		LeadCard(ctx context.Context, code string) (lead.Card, error)
+		SetLeadStatus(ctx context.Context, code string, status lead.Status) error
+	}
+	// Analytics — отчёт экрана менеджера (T6).
+	Analytics interface {
+		Analytics(ctx context.Context, days int) (analytics.Report, error)
+	}
 	Settings interface {
 		Settings(ctx context.Context) (json.RawMessage, error)
 		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
@@ -86,6 +97,10 @@ type Deps struct {
 	Settings  Settings
 	Sessions  Sessions
 	Passports Passports
+	// Board — nil выключает заявки менеджера.
+	Board Board
+	// Analytics — nil выключает аналитику.
+	Analytics Analytics
 	// Documents — nil выключает приём документов.
 	Documents Documents
 	// Metrics — nil выключает метрики.
@@ -201,6 +216,11 @@ func (s *Server) routes() {
 	settingsLimit := s.limiter(ratelimit.Rule{Name: "settings", PerPeriod: l.SettingsPerMinute, Period: time.Minute, Burst: l.SettingsBurst},
 		"Слишком много запросов к настройкам — подождите минуту")
 
+	// Экран менеджера опрашивает список раз в несколько секунд — у него
+	// свой предел, чтобы не делить его с настройками.
+	managerLimit := s.limiter(ratelimit.Rule{Name: "manager", PerPeriod: l.ManagerPerMinute, Period: time.Minute, Burst: l.ManagerBurst},
+		"Слишком много запросов менеджера — подождите минуту")
+
 	// Документ — до десяти мегабайт в памяти и, для фото, платный запрос
 	// к vision-модели. Свой предел — чтобы не отнимать вопросы и заявки.
 	ocrLimit := s.limiter(ratelimit.Rule{Name: "ocr", PerPeriod: l.OCRPerHour, Period: time.Hour, Burst: l.OCRBurst},
@@ -228,6 +248,13 @@ func (s *Server) routes() {
 	// Разговоры клиентов — только менеджеру (EB_MANAGER_TOKEN): там их
 	// реплики, то есть персональные данные.
 	api.GET("/sessions/:id", s.sessionHistory, settingsLimit, s.requireManager)
+	// Заявки на экране менеджера (T5): список, карточка с историей
+	// разговора и смена статуса. Тот же токен, что у разговоров.
+	api.GET("/leads", s.leadList, managerLimit, s.requireManager)
+	api.GET("/leads/:code", s.leadCard, managerLimit, s.requireManager)
+	api.PATCH("/leads/:code/status", s.leadStatus, managerLimit, s.requireManager)
+	// Аналитика воронки и пробелов базы (T6): ?days=7|30.
+	api.GET("/analytics", s.analytics, managerLimit, s.requireManager)
 	// Паспорт задачи правит сам клиент: id сессии знает только его браузер.
 	api.PATCH("/sessions/:id/passport", s.patchPassport, feedbackLimit)
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Answer struct {
@@ -54,6 +55,8 @@ type Lead struct {
 	Passport           []byte
 	Score              []byte
 	CallbackPreference []byte
+	Status             string
+	StatusChangedAt    pgtype.Timestamptz
 	Kind               string
 }
 

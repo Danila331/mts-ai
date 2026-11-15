@@ -111,6 +111,8 @@ type Lead struct {
 	Passport json.RawMessage
 	// Score — оценка заявки с причинами и «что спросить» (T3).
 	Score score.Score
+	// Status — статус на экране менеджера (T5); пусто — новая.
+	Status Status
 }
 
 // NewCode — десять случайных шестнадцатеричных знаков. Уникальность

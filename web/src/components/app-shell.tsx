@@ -13,7 +13,7 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
-  Sparkles,
+  Users,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -34,7 +34,7 @@ const NAV = [
   { href: "/kb", label: "База знаний", icon: BookOpen },
   { href: "/widget", label: "Виджет для сайта", icon: Code2 },
   { href: "/check-data", label: "Проверить выгрузку", icon: FileCheck2 },
-  { href: "/manager/copilot", label: "Копилот менеджера", icon: Sparkles },
+  { href: "/manager", label: "Менеджер", icon: Users },
   { href: "/lab", label: "Стресс-тест", icon: FlaskConical },
   { href: "/settings", label: "Настройки RAG", icon: SlidersHorizontal },
 ];

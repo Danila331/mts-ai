@@ -3,6 +3,7 @@
 import { Mail, MessageSquareWarning, Scale, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { AppShell, PageBar } from "@/components/app-shell";
+import { DemoBanner, ManagerTabs } from "@/components/manager/manager-chrome";
 import { ChatView } from "@/components/chat/chat-view";
 import type { Starter } from "@/components/chat/starters";
 import { ChunkSheet } from "@/components/kb/chunk-sheet";
@@ -40,7 +41,9 @@ export function Copilot() {
 
   return (
     <AppShell onNew={() => chat.create()} sidebar={chat.ready ? <SessionsList chat={chat} query="" /> : null}>
-      <PageBar icon={Sparkles} title="Копилот менеджера" subtitle="спросить базу знаний" />
+      <PageBar icon={Sparkles} title="Менеджер" subtitle="спросить базу знаний" />
+      <ManagerTabs />
+      <DemoBanner />
       <div className="min-h-0 flex-1">
         {chat.ready && (
           <ChatView

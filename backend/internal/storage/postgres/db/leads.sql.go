@@ -10,7 +10,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countLeads = `-- name: CountLeads :one
+SELECT count(*) FROM leads WHERE ($1::text = '' OR status = $1::text)
+`
+
+func (q *Queries) CountLeads(ctx context.Context, status string) (int64, error) {
+	row := q.db.QueryRow(ctx, countLeads, status)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const createLead = `-- name: CreateLead :one
 INSERT INTO leads (code, name, phone, company, comment, summary, summary_source, messages, request_id,
@@ -61,6 +73,133 @@ func (q *Queries) CreateLead(ctx context.Context, arg CreateLeadParams) (CreateL
 	var i CreateLeadRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
 	return i, err
+}
+
+const getLeadByCode = `-- name: GetLeadByCode :one
+SELECT id, code, name, phone, company, comment, summary, summary_source, messages, created_at,
+       session_id, passport, score, callback_preference, kind, status, status_changed_at
+FROM leads WHERE code = $1
+`
+
+type GetLeadByCodeRow struct {
+	ID                 uuid.UUID
+	Code               string
+	Name               string
+	Phone              string
+	Company            string
+	Comment            string
+	Summary            string
+	SummarySource      string
+	Messages           []byte
+	CreatedAt          time.Time
+	SessionID          *string
+	Passport           []byte
+	Score              []byte
+	CallbackPreference []byte
+	Kind               string
+	Status             string
+	StatusChangedAt    pgtype.Timestamptz
+}
+
+func (q *Queries) GetLeadByCode(ctx context.Context, code string) (GetLeadByCodeRow, error) {
+	row := q.db.QueryRow(ctx, getLeadByCode, code)
+	var i GetLeadByCodeRow
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Phone,
+		&i.Company,
+		&i.Comment,
+		&i.Summary,
+		&i.SummarySource,
+		&i.Messages,
+		&i.CreatedAt,
+		&i.SessionID,
+		&i.Passport,
+		&i.Score,
+		&i.CallbackPreference,
+		&i.Kind,
+		&i.Status,
+		&i.StatusChangedAt,
+	)
+	return i, err
+}
+
+const listLeads = `-- name: ListLeads :many
+SELECT code, created_at, name, company, kind, status, status_changed_at,
+       COALESCE(score->>'grade', '')::text   AS grade,
+       COALESCE(score->>'product', '')::text AS product
+FROM leads
+WHERE ($1::text = '' OR status = $1::text)
+ORDER BY created_at DESC, id
+LIMIT $3 OFFSET $2
+`
+
+type ListLeadsParams struct {
+	Status    string
+	RowOffset int32
+	RowLimit  int32
+}
+
+type ListLeadsRow struct {
+	Code            string
+	CreatedAt       time.Time
+	Name            string
+	Company         string
+	Kind            string
+	Status          string
+	StatusChangedAt pgtype.Timestamptz
+	Grade           string
+	Product         string
+}
+
+// Экран менеджера (T5). Список — новые сверху; статус ” — все.
+func (q *Queries) ListLeads(ctx context.Context, arg ListLeadsParams) ([]ListLeadsRow, error) {
+	rows, err := q.db.Query(ctx, listLeads, arg.Status, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLeadsRow{}
+	for rows.Next() {
+		var i ListLeadsRow
+		if err := rows.Scan(
+			&i.Code,
+			&i.CreatedAt,
+			&i.Name,
+			&i.Company,
+			&i.Kind,
+			&i.Status,
+			&i.StatusChangedAt,
+			&i.Grade,
+			&i.Product,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setLeadStatus = `-- name: SetLeadStatus :one
+UPDATE leads SET status = $2, status_changed_at = now() WHERE code = $1
+RETURNING status_changed_at
+`
+
+type SetLeadStatusParams struct {
+	Code   string
+	Status string
+}
+
+func (q *Queries) SetLeadStatus(ctx context.Context, arg SetLeadStatusParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, setLeadStatus, arg.Code, arg.Status)
+	var status_changed_at pgtype.Timestamptz
+	err := row.Scan(&status_changed_at)
+	return status_changed_at, err
 }
 
 const updateLeadSummary = `-- name: UpdateLeadSummary :execrows

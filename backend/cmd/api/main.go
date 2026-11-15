@@ -144,6 +144,8 @@ func run() error {
 		Settings:  coreClient,
 		Sessions:  store,
 		Passports: store,
+		Board:     store,
+		Analytics: store,
 		Documents: documents,
 		Metrics:   m,
 		RateStore: rateStore,

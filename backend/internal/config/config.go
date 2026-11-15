@@ -165,6 +165,11 @@ type Limits struct {
 	// глобальных настроек — не то, что человек делает десятки раз в минуту.
 	SettingsPerMinute int `yaml:"settings_per_minute" env:"EB_LIMIT_SETTINGS_PER_MINUTE" env-default:"10"`
 	SettingsBurst     int `yaml:"settings_burst" env:"EB_LIMIT_SETTINGS_BURST" env-default:"5"`
+	// Экран менеджера (T5): список опрашивается раз в десять секунд, плюс
+	// карточки и смена статуса — на порядок чаще настроек, но тоже не
+	// скрипт.
+	ManagerPerMinute int `yaml:"manager_per_minute" env:"EB_LIMIT_MANAGER_PER_MINUTE" env-default:"120"`
+	ManagerBurst     int `yaml:"manager_burst" env:"EB_LIMIT_MANAGER_BURST" env-default:"30"`
 	// Документы (T9): каждый — до десяти мегабайт в памяти и, для фото,
 	// запрос к платной vision-модели. Человек прикладывает несколько
 	// документов за разговор, а не десятки в минуту.
@@ -322,6 +327,7 @@ func (c *Config) Verify() error {
 	l := c.Limits
 	if l.ChatPerMinute <= 0 || l.ChatBurst <= 0 || l.LeadPerHour <= 0 || l.LeadBurst <= 0 ||
 		l.FeedbackPerMinute <= 0 || l.FeedbackBurst <= 0 || l.SettingsPerMinute <= 0 || l.SettingsBurst <= 0 ||
+		l.ManagerPerMinute <= 0 || l.ManagerBurst <= 0 ||
 		l.OCRPerHour <= 0 || l.OCRBurst <= 0 {
 		errs = append(errs, errors.New("пределы EB_LIMIT_* в бою не могут быть нулевыми"))
 	}
