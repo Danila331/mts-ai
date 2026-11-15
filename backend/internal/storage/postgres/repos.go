@@ -11,28 +11,28 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
-	leaduc "github.com/Danila331/mts-ai/backend/internal/lead/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/storage/postgres/db"
 )
 
 // SaveAnswer кладёт ответ в журнал.
 func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
 	return s.Queries.SaveAnswer(ctx, db.SaveAnswerParams{
-		ID:       rec.ID,
-		Mode:     rec.Mode,
-		Question: rec.Question,
-		Answer:   rec.Text,
-		Fallback: rec.Fallback,
-		Error:    rec.Error,
-		Model:    rec.Model,
-		Turns:    int32(rec.Turns),
-		Timings:  object(rec.Timings),
-		Guard:    object(rec.Guard),
+		ID:        rec.ID,
+		Mode:      rec.Mode,
+		Question:  rec.Question,
+		Answer:    rec.Text,
+		Fallback:  rec.Fallback,
+		Error:     rec.Error,
+		Model:     rec.Model,
+		Turns:     int32(rec.Turns),
+		Timings:   object(rec.Timings),
+		Guard:     object(rec.Guard),
+		RequestID: rec.RequestID,
 	})
 }
 
 // CreateLead сохраняет заявку. Занятый номер отдаётся как
-// leaduc.ErrCodeTaken — сервис попробует другой.
+// lead.ErrCodeTaken — сервис попробует другой.
 func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 	messages, err := json.Marshal(l.Messages)
 	if err != nil {
@@ -42,23 +42,53 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 		messages = []byte("[]")
 	}
 	row, err := s.Queries.CreateLead(ctx, db.CreateLeadParams{
-		Code:     l.Code,
-		Name:     l.Name,
-		Phone:    l.Phone,
-		Company:  l.Company,
-		Comment:  l.Comment,
-		Summary:  l.Summary,
-		Messages: messages,
+		Code:          l.Code,
+		Name:          l.Name,
+		Phone:         l.Phone,
+		Company:       l.Company,
+		Comment:       l.Comment,
+		Summary:       l.Summary,
+		SummarySource: summarySource(l.SummarySource),
+		Messages:      messages,
+		RequestID:     l.RequestID,
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == "leads_code_uq" {
-		return leaduc.ErrCodeTaken
+		return lead.ErrCodeTaken
 	}
 	if err != nil {
 		return err
 	}
 	l.ID, l.CreatedAt = row.ID, row.CreatedAt
 	return nil
+}
+
+// errLeadNotFound — обновлять нечего: заявки с таким id нет.
+var errLeadNotFound = errors.New("заявка не найдена")
+
+// UpdateLeadSummary заменяет резюме сохранённой заявки.
+func (s *Store) UpdateLeadSummary(ctx context.Context, l *lead.Lead) error {
+	n, err := s.Queries.UpdateLeadSummary(ctx, db.UpdateLeadSummaryParams{
+		ID:            l.ID,
+		Summary:       l.Summary,
+		SummarySource: summarySource(l.SummarySource),
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errLeadNotFound
+	}
+	return nil
+}
+
+// summarySource — пустой источник — это список вопросов: так заявка
+// записывается до резюме моделью.
+func summarySource(s lead.SummarySource) string {
+	if s == "" {
+		return string(lead.SummaryDigest)
+	}
+	return string(s)
 }
 
 // CreateFeedback сохраняет оценку.

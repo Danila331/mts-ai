@@ -17,13 +17,15 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/rs/zerolog"
-	"golang.org/x/time/rate"
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	chatuc "github.com/Danila331/mts-ai/backend/internal/chat/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/config"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/metrics"
+	"github.com/Danila331/mts-ai/backend/internal/ratelimit"
+	"github.com/Danila331/mts-ai/backend/internal/requestid"
 )
 
 // MaxBody — предел тела запроса. Самое объёмное, что сюда приходит, —
@@ -65,10 +67,20 @@ type Deps struct {
 	Health   Health
 	KB       KB
 	Settings Settings
+	// Metrics — nil выключает метрики.
+	Metrics *metrics.Metrics
+	// RateStore — хранилище пределов; nil — память процесса.
+	RateStore ratelimit.Factory
 }
 
 type Server struct {
 	echo *echo.Echo
+	// http — сервер, который слушает сокет. Свой, а не echo.Server:
+	// echo.Shutdown останавливает только собственный сервер echo, а
+	// сервер, запущенный через StartServer, продолжал бы работать —
+	// Shutdown возвращался мгновенно, процесс выходил, и текущие ответы
+	// обрывались на середине.
+	http *http.Server
 	cfg  *config.Config
 	log  zerolog.Logger
 	deps Deps
@@ -79,6 +91,15 @@ func New(cfg *config.Config, deps Deps, log zerolog.Logger) *Server {
 	e.HideBanner = true
 	e.HidePort = true
 	s := &Server{echo: e, cfg: cfg, log: log, deps: deps}
+	// Таймаута на запись нет намеренно: ответ идёт потоком до нескольких
+	// минут, и общий таймаут обрывал бы его на середине. Таймаут на
+	// заголовки есть — от медленных клиентов, держащих соединения
+	// открытыми.
+	s.http = &http.Server{
+		Handler:           e,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
 		if c.Response().Committed {
@@ -105,42 +126,29 @@ func New(cfg *config.Config, deps Deps, log zerolog.Logger) *Server {
 	// адресу превращается в общий предел на всех.
 	e.IPExtractor = echo.ExtractIPFromXFFHeader()
 
-	e.Use(middleware.Recover())
-	e.Use(middleware.BodyLimit(MaxBody))
-
-	// Журнал запросов: метод, путь, статус, длительность. Тела не
-	// пишем — там телефоны из заявок.
-	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
-		// Пробу хостинга не пишем: раз в несколько секунд — это журнал,
-		// в котором из-за проб не видно запросов людей.
-		Skipper:     func(c echo.Context) bool { return c.Path() == "/healthz" },
-		LogMethod:   true,
-		LogURI:      true,
-		LogStatus:   true,
-		LogLatency:  true,
-		LogError:    true,
-		HandleError: true,
-		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
-			event := log.Info()
-			if v.Status >= 500 || v.Error != nil {
-				event = log.Error().Err(v.Error)
-			} else if v.Status >= 400 {
-				event = log.Warn()
-			}
-			event.Str("method", v.Method).Str("uri", v.URI).Int("status", v.Status).
-				Dur("took", v.Latency).Str("ip", s.clientIP(c)).Msg("запрос")
-			return nil
+	// Порядок важен: сначала идентификатор и логгер в контексте — их
+	// видят все слои ниже; затем журнал запросов — он видит итоговый
+	// код, в том числе 500 от перехваченной паники; затем перехват паник.
+	e.Use(s.requestContext)
+	e.Use(s.accessLog)
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
+		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			zerolog.Ctx(c.Request().Context()).Error().Err(err).Str("stack", string(stack)).
+				Msg("паника в обработчике")
+			return err
 		},
 	}))
+	e.Use(middleware.BodyLimit(MaxBody))
 
 	// CORS нужен только тем, кто зовёт API из браузера напрямую: фронт
 	// ходит через свой прокси на том же origin. Пустой список — CORS
 	// выключен, и это правильное состояние для боя.
 	if len(cfg.HTTP.AllowedOrigins) > 0 {
 		e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-			AllowOrigins: cfg.HTTP.AllowedOrigins,
-			AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAuthorization},
-			AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+			AllowOrigins:  cfg.HTTP.AllowedOrigins,
+			AllowHeaders:  []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAuthorization, requestid.Header},
+			ExposeHeaders: []string{requestid.Header},
+			AllowMethods:  []string{http.MethodGet, http.MethodPost, http.MethodOptions},
 		}))
 	}
 
@@ -154,13 +162,13 @@ func (s *Server) routes() {
 	l := s.cfg.Limits
 	// Ответ стоит денег на модель: десяток вопросов в минуту с одного
 	// адреса — это живой человек, сотня — скрипт.
-	chatLimit := s.limiter(l.ChatPerMinute, time.Minute, l.ChatBurst,
+	chatLimit := s.limiter(ratelimit.Rule{Name: "chat", PerPeriod: l.ChatPerMinute, Period: time.Minute, Burst: l.ChatBurst},
 		"Слишком много вопросов подряд — подождите минуту")
 	// Каждая заявка — звонок менеджера. Поток заявок с одного адреса —
 	// это не клиенты.
-	leadLimit := s.limiter(l.LeadPerHour, time.Hour, l.LeadBurst,
+	leadLimit := s.limiter(ratelimit.Rule{Name: "lead", PerPeriod: l.LeadPerHour, Period: time.Hour, Burst: l.LeadBurst},
 		"Заявок с этого адреса слишком много — попробуйте позже")
-	feedbackLimit := s.limiter(l.FeedbackPerMinute, time.Minute, l.FeedbackBurst,
+	feedbackLimit := s.limiter(ratelimit.Rule{Name: "feedback", PerPeriod: l.FeedbackPerMinute, Period: time.Minute, Burst: l.FeedbackBurst},
 		"Слишком много оценок подряд")
 
 	api := s.echo.Group("/api", s.requireToken)
@@ -175,21 +183,18 @@ func (s *Server) routes() {
 	api.POST("/settings/reset", s.resetSettings)
 }
 
-// Start слушает адрес. Таймаута на запись нет намеренно: ответ идёт
-// потоком до нескольких минут, и общий таймаут обрывал бы его на
-// середине. Таймаут на заголовки есть — от медленных клиентов,
-// держащих соединения открытыми.
+// Start слушает адрес до Shutdown; после него — http.ErrServerClosed.
 func (s *Server) Start(addr string) error {
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           s.echo,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-	}
-	return s.echo.StartServer(srv)
+	s.http.Addr = addr
+	return s.http.ListenAndServe()
 }
 
-func (s *Server) Shutdown(ctx context.Context) error { return s.echo.Shutdown(ctx) }
+// Shutdown перестаёт принимать соединения и ждёт, пока текущие запросы
+// — в том числе потоки ответа — закончатся, но не дольше ctx.
+func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }
+
+// Close обрывает всё сразу — когда ждать больше нельзя.
+func (s *Server) Close() error { return s.http.Close() }
 
 // Handler — для тестов: сервер без сокета.
 func (s *Server) Handler() http.Handler { return s.echo }
@@ -200,6 +205,73 @@ type errorBody struct {
 
 func fail(c echo.Context, status int, msg string) error {
 	return c.JSON(status, errorBody{Error: msg})
+}
+
+// requestContext выдаёт обращению идентификатор и кладёт в контекст
+// логгер с ним.
+//
+// Присланный X-Request-ID принимается, если он похож на идентификатор:
+// так прокси фронта или балансировщик могут начать цепочку сами.
+// Идентификатор возвращается заголовком ответа — по нему клиент, у
+// которого что-то сломалось, называет обращение.
+func (s *Server) requestContext(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		req := c.Request()
+		id := req.Header.Get(requestid.Header)
+		if !requestid.Valid(id) {
+			id = requestid.New()
+		}
+		c.Response().Header().Set(requestid.Header, id)
+
+		log := s.log.With().Str("request_id", id).Logger()
+		ctx := requestid.With(log.WithContext(req.Context()), id)
+		c.SetRequest(req.WithContext(ctx))
+		return next(c)
+	}
+}
+
+// accessLog — строка журнала и метрики на каждый запрос: метод, маршрут,
+// код, размер, длительность, адрес клиента. Тела не пишем — там телефоны
+// из заявок.
+func (s *Server) accessLog(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		started := time.Now()
+		err := next(c)
+		if err != nil {
+			// Ответ пишет общий обработчик; дальше ошибка не идёт, чтобы
+			// echo не записал ответ второй раз.
+			c.Error(err)
+		}
+		took := time.Since(started)
+
+		req, res := c.Request(), c.Response()
+		route := c.Path()
+		if route == "" {
+			route = "unmatched"
+		}
+		s.deps.Metrics.ObserveHTTP(route, req.Method, res.Status, took)
+
+		// Пробу хостинга не пишем: раз в несколько секунд — это журнал,
+		// в котором из-за проб не видно запросов людей.
+		if route == "/healthz" && res.Status < 400 {
+			return nil
+		}
+		log := zerolog.Ctx(req.Context())
+		event := log.Info()
+		switch {
+		case res.Status >= 500:
+			event = log.Error()
+		case res.Status >= 400:
+			event = log.Warn()
+		}
+		if err != nil {
+			event = event.Err(err)
+		}
+		event.Str("method", req.Method).Str("route", route).Str("uri", req.RequestURI).
+			Int("status", res.Status).Int64("bytes_out", res.Size).Dur("took", took).
+			Str("ip", s.clientIP(c)).Msg("запрос")
+		return nil
+	}
 }
 
 // requireToken пускает к API только прокси фронта.
@@ -237,22 +309,21 @@ func (s *Server) clientIP(c echo.Context) string {
 	return c.RealIP()
 }
 
-// limiter — предел частоты на память процесса, по адресу клиента.
+// limiter — предел частоты по адресу клиента.
 //
+// Хранилище — RateStore (Redis на несколько реплик) или память процесса.
 // Ноль выключает предел: в тестах и на машине разработчика упираться в
 // него незачем, а в бою ноль не пройдёт Verify.
-func (s *Server) limiter(perPeriod int, period time.Duration, burst int, message string) echo.MiddlewareFunc {
-	if perPeriod <= 0 || burst <= 0 {
+func (s *Server) limiter(rule ratelimit.Rule, message string) echo.MiddlewareFunc {
+	if rule.PerPeriod <= 0 || rule.Burst <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc { return next }
 	}
-	store := middleware.NewRateLimiterMemoryStoreWithConfig(middleware.RateLimiterMemoryStoreConfig{
-		Rate:  rate.Limit(float64(perPeriod) / period.Seconds()),
-		Burst: burst,
-		// Запись живёт немногим дольше окна: держать её вечно — течь
-		// памяти, открытая любому, кто меняет адрес.
-		ExpiresIn: period + time.Minute,
-	})
+	store := ratelimit.Memory(rule)
+	if s.deps.RateStore != nil {
+		store = s.deps.RateStore(rule)
+	}
 	deny := func(c echo.Context, _ string, _ error) error {
+		s.deps.Metrics.RateLimited(rule.Name)
 		return fail(c, http.StatusTooManyRequests, message)
 	}
 	return middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{

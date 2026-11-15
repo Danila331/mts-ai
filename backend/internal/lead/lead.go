@@ -5,6 +5,7 @@ package lead
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"time"
 
@@ -36,6 +37,21 @@ const SummarySystem = `Ты готовишь заявку для менедже�
 Подходящий продукт: … (какой продукт обсуждали; если не ясно — «уточнить»)
 Что уточнить менеджеру: …`
 
+// ErrCodeTaken — номер заявки уже занят. Хранилище отдаёт его, чтобы
+// сервис попробовал другой, а не отказал клиенту. Ошибка предмета, а не
+// сценария: её порождает хранилище, и знать о сценариях ему незачем.
+var ErrCodeTaken = errors.New("lead: номер заявки занят")
+
+// SummarySource — кто написал резюме.
+type SummarySource string
+
+const (
+	// SummaryDigest — резюме без модели: последние вопросы клиента.
+	SummaryDigest SummarySource = "digest"
+	// SummaryLLM — резюме написала модель.
+	SummaryLLM SummarySource = "llm"
+)
+
 // Contacts — то, что клиент написал в форме сам.
 type Contacts struct {
 	Name    string
@@ -64,8 +80,13 @@ type Lead struct {
 	// читается по телефону.
 	Code string
 	Contacts
-	Summary   string
-	Messages  []dialog.Turn
+	Summary string
+	// SummarySource — модель или список вопросов: заявки, где модель
+	// не справилась, видно одним запросом.
+	SummarySource SummarySource
+	Messages      []dialog.Turn
+	// RequestID — обращение, в котором принята заявка.
+	RequestID string
 	CreatedAt time.Time
 }
 

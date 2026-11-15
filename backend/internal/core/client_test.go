@@ -15,6 +15,7 @@ import (
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
+	"github.com/Danila331/mts-ai/backend/internal/requestid"
 )
 
 func TestStreamParsesEvents(t *testing.T) {
@@ -57,7 +58,9 @@ func TestClientSendsTokenAndTurns(t *testing.T) {
 		Messages []dialog.Turn `json:"messages"`
 		Mode     string        `json:"mode"`
 	}
+	var gotID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID = r.Header.Get(requestid.Header)
 		if r.Header.Get("Authorization") != "Bearer secret" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -76,7 +79,7 @@ func TestClientSendsTokenAndTurns(t *testing.T) {
 
 	c := New(srv.URL+"/", "secret")
 	turns := []dialog.Turn{{Role: dialog.RoleUser, Content: "привет"}}
-	st, err := c.Chat(context.Background(), chat.Request{Turns: turns, Mode: dialog.ModeEval})
+	st, err := c.Chat(requestid.With(context.Background(), "req-7"), chat.Request{Turns: turns, Mode: dialog.ModeEval})
 	require.NoError(t, err)
 	ev, err := st.Next()
 	require.NoError(t, err)
@@ -84,6 +87,7 @@ func TestClientSendsTokenAndTurns(t *testing.T) {
 	require.NoError(t, st.Close())
 	assert.Equal(t, turns, got.Messages)
 	assert.Equal(t, "eval", got.Mode)
+	assert.Equal(t, "req-7", gotID, "ядро получает id обращения")
 
 	_, err = c.Health(context.Background())
 	var coreErr *Error

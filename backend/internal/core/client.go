@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
-	"github.com/Danila331/mts-ai/backend/internal/chat/usecase"
+	"github.com/Danila331/mts-ai/backend/internal/requestid"
 )
 
 // Error — ядро ответило, но отказом.
@@ -80,7 +80,7 @@ func (c *Client) ResetSettings(ctx context.Context) (json.RawMessage, error) {
 }
 
 // Chat открывает поток ответа.
-func (c *Client) Chat(ctx context.Context, req chat.Request) (usecase.Stream, error) {
+func (c *Client) Chat(ctx context.Context, req chat.Request) (chat.Stream, error) {
 	body := map[string]any{"messages": req.Turns}
 	if req.Mode != "" {
 		body["mode"] = req.Mode
@@ -170,6 +170,11 @@ func (c *Client) request(ctx context.Context, method, path string, body io.Reade
 	}
 	if c.token != "" {
 		r.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	// Ядро получает тот же идентификатор обращения: по нему ответ
+	// находится в обоих журналах.
+	if id := requestid.From(ctx); id != "" {
+		r.Header.Set(requestid.Header, id)
 	}
 	return r, nil
 }

@@ -1,0 +1,26 @@
+# Сбор метрик стенда. Адреса целей подставляет entrypoint.sh из окружения:
+# в docker compose это имена служб, на Railway — приватные домены.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  external_labels:
+    stand: ${STAND}
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  # Go-API: запросы, исходы ответов, заявки, пределы, очистка ПДн.
+  - job_name: api
+    static_configs:
+      - targets: ["${API_TARGET}"]
+
+  # Шлюз к моделям: запросы, токены, расход и ошибки по моделям и ключам служб.
+  - job_name: llm-gateway
+    metrics_path: /metrics/
+    static_configs:
+      - targets: ["${GATEWAY_TARGET}"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +27,8 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/health"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	leaduc "github.com/Danila331/mts-ai/backend/internal/lead/usecase"
+	"github.com/Danila331/mts-ai/backend/internal/metrics"
+	"github.com/Danila331/mts-ai/backend/internal/requestid"
 )
 
 // Тесты собирают сервер целиком — настоящие usecase, настоящий клиент
@@ -53,6 +56,17 @@ func (m *memStore) CreateLead(_ context.Context, l *lead.Lead) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.leads = append(m.leads, *l)
+	return nil
+}
+
+func (m *memStore) UpdateLeadSummary(_ context.Context, l *lead.Lead) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.leads {
+		if m.leads[i].Code == l.Code {
+			m.leads[i] = *l
+		}
+	}
 	return nil
 }
 
@@ -121,6 +135,12 @@ const goodStream = "event: stage\ndata: {\"name\": \"retrieval\", \"hits\": []}\
 
 func newServer(t *testing.T, coreURL string, mutate func(*config.Config)) (*Server, *memStore) {
 	t.Helper()
+	s, store, _ := newServerWithMetrics(t, coreURL, mutate)
+	return s, store
+}
+
+func newServerWithMetrics(t *testing.T, coreURL string, mutate func(*config.Config)) (*Server, *memStore, *metrics.Metrics) {
+	t.Helper()
 	cfg := &config.Config{Env: "test"}
 	cfg.Core.URL, cfg.Core.Token = coreURL, "core-token"
 	if mutate != nil {
@@ -128,15 +148,16 @@ func newServer(t *testing.T, coreURL string, mutate func(*config.Config)) (*Serv
 	}
 	store := &memStore{}
 	cc := core.New(cfg.Core.URL, cfg.Core.Token)
-	log := zerolog.Nop()
+	m := metrics.New()
 	return New(cfg, Deps{
-		Chat:     chatuc.New(cc, store, log, time.Minute),
-		Leads:    leaduc.New(store, nil, log),
+		Chat:     chatuc.New(cc, store, time.Minute),
+		Leads:    leaduc.New(store, nil),
 		Feedback: feedbackuc.New(store),
 		Health:   health.New(cc, store),
 		KB:       cc,
 		Settings: cc,
-	}, log), store
+		Metrics:  m,
+	}, zerolog.Nop()), store, m
 }
 
 func do(s *Server, method, path, body string, headers ...string) *httptest.ResponseRecorder {
@@ -319,4 +340,128 @@ func TestTokenAndClientLimit(t *testing.T) {
 	// прокси не упирается в чужой предел.
 	second := append(auth, "X-Client-IP", "2.2.2.2")
 	assert.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/feedback", body, second...).Code)
+}
+
+func TestRequestIDReachesCoreAndJournal(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get(requestid.Header))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, goodStream)
+	}))
+	t.Cleanup(srv.Close)
+	s, store := newServer(t, srv.URL, nil)
+	body := `{"messages": [{"role": "user", "content": "q"}]}`
+
+	rec := do(s, http.MethodPost, "/api/chat", body, requestid.Header, "front-42")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "front-42", rec.Header().Get(requestid.Header), "годный присланный id сохраняется")
+	require.Equal(t, 1, store.answerCount())
+	assert.Equal(t, "front-42", store.answers[0].RequestID)
+
+	rec = do(s, http.MethodPost, "/api/chat", body, requestid.Header, "bad id\nfake log line")
+	got := rec.Header().Get(requestid.Header)
+	assert.True(t, requestid.Valid(got))
+	assert.NotContains(t, got, "fake", "негодный id заменяется своим")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"front-42", got}, seen, "ядро получает тот же id")
+}
+
+func TestChatHeartbeatWhileCoreThinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		f := w.(http.Flusher)
+		_, _ = io.WriteString(w, "event: stage\ndata: {\"name\": \"generation\"}\n\n")
+		f.Flush()
+		time.Sleep(150 * time.Millisecond) // модель думает
+		_, _ = io.WriteString(w, "event: answer\ndata: {\"id\": \"a1\", \"text\": \"Ответ\"}\n\nevent: done\ndata: {}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	s, _ := newServer(t, srv.URL, func(c *config.Config) { c.HTTP.SSEHeartbeat = 20 * time.Millisecond })
+
+	rec := do(s, http.MethodPost, "/api/chat", `{"messages": [{"role": "user", "content": "q"}]}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, ": ping\n\n", "пока ядро думает, поток не молчит")
+	var evs []string
+	for _, e := range readSSE(t, body) {
+		if e.name != "" {
+			evs = append(evs, e.name)
+		}
+	}
+	assert.Equal(t, []string{"stage", "answer", "done"}, evs, "комментарии не ломают события")
+}
+
+func TestMetricsCountOutcomes(t *testing.T) {
+	s, _, m := newServerWithMetrics(t, fakeCore(t, goodStream).URL, nil)
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{"messages": [{"role": "user", "content": "q"}], "mode": "chat"}`).Code)
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/lead", `{"messages": []}`).Code)
+	do(s, http.MethodGet, "/no/such/path", "")
+
+	rec := httptest.NewRecorder()
+	m.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	out := rec.Body.String()
+	assert.Contains(t, out, `eb_chat_answers_total{mode="chat",outcome="answered"} 1`)
+	assert.Contains(t, out, `eb_leads_total{summary_source="digest"} 1`)
+	assert.Contains(t, out, `eb_http_requests_total{method="POST",route="/api/chat",status="200"} 1`)
+	assert.Contains(t, out, `eb_chat_streams_in_flight 0`)
+	assert.NotContains(t, out, `/no/such/path`, "путь из запроса не становится меткой")
+}
+
+// Остановка ждёт поток, который ещё идёт: выкладка не обрывает ответ
+// на середине и не теряет строку журнала.
+func TestShutdownWaitsForStream(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: stage\ndata: {\"name\": \"generation\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = io.WriteString(w, "event: answer\ndata: {\"id\": \"a1\"}\n\nevent: done\ndata: {}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	s, store := newServer(t, srv.URL, nil)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+	go func() { _ = s.Start(addr) }()
+	require.Eventually(t, func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err == nil {
+			_ = c.Close()
+		}
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	resp, err := http.Post("http://"+addr+"/api/chat", "application/json",
+		strings.NewReader(`{"messages": [{"role": "user", "content": "q"}]}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	line, err := br.ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "event: stage\n", line, "поток начался")
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- s.Shutdown(context.Background()) }()
+	select {
+	case <-stopped:
+		t.Fatal("Shutdown вернулся, не дождавшись потока")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+	rest, err := io.ReadAll(br)
+	require.NoError(t, err)
+	assert.Contains(t, string(rest), "event: answer", "ответ дошёл до клиента")
+	require.NoError(t, <-stopped)
+	assert.Equal(t, 1, store.answerCount(), "и лёг в журнал")
 }

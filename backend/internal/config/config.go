@@ -20,12 +20,15 @@ type Config struct {
 	// Env объявляет разработку. Боевым считается всё, что разработкой
 	// не объявлено: обратное правило снимает проверки отсутствием
 	// переменной, и боевой запуск без токена выглядит совершенно обычно.
-	Env    string `yaml:"env" env:"EB_ENV"`
-	HTTP   HTTP   `yaml:"http"`
-	DB     DB     `yaml:"db"`
-	Core   Core   `yaml:"core"`
-	LLM    LLM    `yaml:"llm"`
-	Limits Limits `yaml:"limits"`
+	Env       string    `yaml:"env" env:"EB_ENV"`
+	HTTP      HTTP      `yaml:"http"`
+	DB        DB        `yaml:"db"`
+	Core      Core      `yaml:"core"`
+	LLM       LLM       `yaml:"llm"`
+	Limits    Limits    `yaml:"limits"`
+	Log       Log       `yaml:"log"`
+	Metrics   Metrics   `yaml:"metrics"`
+	Retention Retention `yaml:"retention"`
 }
 
 type HTTP struct {
@@ -38,6 +41,14 @@ type HTTP struct {
 	// то есть тратит деньги, и открытым в интернет ему быть незачем:
 	// единственный законный клиент — сервер фронта.
 	Token string `env:"EB_API_TOKEN"`
+	// ShutdownTimeout — сколько ждать текущие ответы при остановке.
+	// Ноль — потолок ответа ядра плюс запас (ShutdownBudget): меньше —
+	// и выкладка обрывает ответы, которые ядро ещё пишет.
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout" env:"EB_SHUTDOWN_TIMEOUT"`
+	// SSEHeartbeat — как часто слать в поток комментарий, пока ядро
+	// думает. Прокси по дороге (edge хостинга, Vercel) рвут соединение,
+	// в котором долго тихо; ноль выключает.
+	SSEHeartbeat time.Duration `yaml:"sse_heartbeat" env:"EB_SSE_HEARTBEAT" env-default:"15s"`
 }
 
 type DB struct {
@@ -86,6 +97,47 @@ type Limits struct {
 	LeadBurst         int `yaml:"lead_burst" env:"EB_LIMIT_LEAD_BURST" env-default:"3"`
 	FeedbackPerMinute int `yaml:"feedback_per_minute" env:"EB_LIMIT_FEEDBACK_PER_MINUTE" env-default:"30"`
 	FeedbackBurst     int `yaml:"feedback_burst" env:"EB_LIMIT_FEEDBACK_BURST" env-default:"10"`
+	// RedisURL — общее хранилище пределов для нескольких реплик. Пусто —
+	// пределы в памяти процесса: верно ровно для одной реплики, на двух
+	// каждый предел молча удваивается. REDIS_URL — имя, под которым
+	// адрес отдаёт Redis на Railway.
+	RedisURL string `yaml:"redis_url" env:"EB_REDIS_URL,REDIS_URL"`
+}
+
+// Log — журнал службы.
+type Log struct {
+	// Level — trace, debug, info, warn, error.
+	Level string `yaml:"level" env:"EB_LOG_LEVEL" env-default:"info"`
+	// Format — json или console. Пусто — console на машине разработчика,
+	// json в бою: сборщикам журналов нужен JSON, человеку — текст.
+	Format string `yaml:"format" env:"EB_LOG_FORMAT"`
+}
+
+// Retention — сроки хранения персональных данных (152-ФЗ, ст. 5 ч. 7):
+// по достижении цели обработки данные удаляются. Заявка — это звонок
+// менеджера: после него контакты в базе стенда не нужны. Журнал ответов
+// и оценки содержат то, что человек написал в чат сам, — там тоже
+// бывают имена и телефоны.
+//
+// Значения по умолчанию — предложение команды, а не решение юриста:
+// окончательный срок задаёт тот, кто отвечает за обработку данных.
+type Retention struct {
+	LeadsDays    int `yaml:"leads_days" env:"EB_RETENTION_LEADS_DAYS" env-default:"90"`
+	AnswersDays  int `yaml:"answers_days" env:"EB_RETENTION_ANSWERS_DAYS" env-default:"30"`
+	FeedbackDays int `yaml:"feedback_days" env:"EB_RETENTION_FEEDBACK_DAYS" env-default:"90"`
+	// Interval — как часто чистить.
+	Interval time.Duration `yaml:"interval" env:"EB_RETENTION_INTERVAL" env-default:"1h"`
+}
+
+// Days — срок в днях как длительность.
+func Days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
+
+// Metrics — метрики Prometheus.
+type Metrics struct {
+	// Port — отдельный порт для /metrics; ноль выключает. Отдельный, а
+	// не общий с API: публичным на хостинге делается только PORT, и
+	// метрики видны лишь из приватной сети, без ещё одного секрета.
+	Port int `yaml:"port" env:"EB_METRICS_PORT" env-default:"9091"`
 }
 
 // Load читает файл, если он есть, иначе — только окружение.
@@ -121,16 +173,46 @@ var devEnvs = map[string]bool{"development": true, "dev": true, "local": true, "
 // Production отвечает, боевой ли это запуск.
 func (c *Config) Production() bool { return !devEnvs[c.Env] }
 
+// LogFormat — формат журнала с учётом умолчания по окружению.
+func (c *Config) LogFormat() string {
+	if c.Log.Format != "" {
+		return c.Log.Format
+	}
+	if c.Production() {
+		return "json"
+	}
+	return "console"
+}
+
+// ShutdownBudget — сколько ждать текущие ответы при остановке: заданное
+// значение или потолок ответа ядра с запасом на запись в журнал.
+func (c *Config) ShutdownBudget() time.Duration {
+	if c.HTTP.ShutdownTimeout > 0 {
+		return c.HTTP.ShutdownTimeout
+	}
+	return c.Core.Timeout + 15*time.Second
+}
+
 // Verify отказывается запускать бой без того, без чего он не работает
 // или работает открытым для всех.
 //
-// На машине разработчика проверка молчит: там API без токена и с
-// пустыми пределами — нормальное состояние, а не авария.
+// На машине разработчика проверка молчит о токенах и пределах: там API
+// без токена и с пустыми пределами — нормальное состояние, а не авария.
+// Противоречия в самой конфигурации (порты, бюджет остановки) — ошибка
+// при любом окружении.
 func (c *Config) Verify() error {
-	if !c.Production() {
-		return nil
-	}
 	var errs []error
+	// Это ошибки при любом окружении: с ними служба не поднимется или
+	// поднимется не той, какой её задумали.
+	if c.Metrics.Port != 0 && c.Metrics.Port == c.HTTP.Port {
+		errs = append(errs, errors.New("EB_METRICS_PORT совпадает с портом API"))
+	}
+	if c.HTTP.ShutdownTimeout > 0 && c.HTTP.ShutdownTimeout < c.Core.Timeout {
+		errs = append(errs, errors.New("EB_SHUTDOWN_TIMEOUT меньше EB_CORE_TIMEOUT: выкладка будет обрывать ответы"))
+	}
+	if !c.Production() {
+		return errors.Join(errs...)
+	}
 	if c.DB.DSN == "" {
 		errs = append(errs, errors.New("EB_DB_DSN (или DATABASE_URL) не задан"))
 	}
@@ -142,6 +224,10 @@ func (c *Config) Verify() error {
 	}
 	if c.HTTP.Token == "" {
 		errs = append(errs, errors.New("EB_API_TOKEN не задан: API, тратящий деньги на модель, открыт всем"))
+	}
+	r := c.Retention
+	if r.LeadsDays <= 0 || r.AnswersDays <= 0 || r.FeedbackDays <= 0 {
+		errs = append(errs, errors.New("EB_RETENTION_*_DAYS в бою не могут быть нулевыми: бессрочное хранение персональных данных"))
 	}
 	l := c.Limits
 	if l.ChatPerMinute <= 0 || l.ChatBurst <= 0 || l.LeadPerHour <= 0 || l.LeadBurst <= 0 ||
