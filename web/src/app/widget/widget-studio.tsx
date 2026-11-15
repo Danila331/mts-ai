@@ -530,7 +530,7 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
           <header className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-12">
             {/* min-w-0: без него колонка растягивалась по длине тега, и кнопка «Скопировать тег» уезжала под
                 правый блок «Как устроено» (QA). */}
-            <div className="grid min-w-0 gap-5">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5">
             <h1 className="text-[34px] leading-[1.08] font-semibold tracking-[-0.03em] sm:text-[40px]">
               Консультант на любом сайте —
               <br />
