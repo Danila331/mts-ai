@@ -1,13 +1,13 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Onest } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
-// Onest — гротеск, нарисованный в первую очередь под кириллицу; моноширинный — только для кода, id и промпта.
-const sans = Onest({ variable: "--font-onest", subsets: ["latin", "cyrillic"], display: "swap" });
-const mono = JetBrains_Mono({ variable: "--font-jetbrains", subsets: ["latin", "cyrillic"], display: "swap" });
+// Geist — рабочий гротеск интерфейса с кириллицей; Geist Mono — только id, числа в данных, промпт и JSON.
+const sans = Geist({ variable: "--font-geist", subsets: ["latin", "cyrillic"], display: "swap" });
+const mono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin", "cyrillic"], display: "swap" });
 
 export const metadata: Metadata = {
   title: "EnergyTool AI — ИИ-консультант МТС",
@@ -15,8 +15,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  // Пока только светлая тема (см. theme-provider.tsx).
-  themeColor: "#ffffff",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#151618" },
+  ],
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

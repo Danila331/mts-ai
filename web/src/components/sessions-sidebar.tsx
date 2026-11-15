@@ -72,15 +72,20 @@ export function SessionsList({ chat, query = "", onPicked }: { chat: ChatControl
         type="button"
         onClick={() => setFolded((v) => !v)}
         aria-expanded={!folded}
-        className="mx-2 flex h-8 w-fit shrink-0 items-center gap-1 rounded-md px-2.5 text-[13px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="group/fold mx-2 flex h-7 w-fit shrink-0 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         {query ? "Найдено" : "Недавние"}
-        <ChevronDown className={cn("size-3.5 transition-transform duration-200", folded && "-rotate-90")} />
+        <ChevronDown
+          className={cn(
+            "size-3 opacity-0 transition-[transform,opacity] duration-200 group-hover/fold:opacity-100 group-focus-visible/fold:opacity-100",
+            folded && "-rotate-90 opacity-100",
+          )}
+        />
       </button>
       {!folded && (
-        <div className="min-h-0 flex-1 space-y-px overflow-y-auto px-2 pb-3">
+        <div className="min-h-0 flex-1 space-y-px overflow-y-auto px-2 pb-3 [mask-image:linear-gradient(to_bottom,#000_calc(100%-24px),transparent)]">
           {!list.length && (
-            <p className="px-2.5 py-2 text-[13px] leading-relaxed text-muted-foreground">
+            <p className="px-2 py-1.5 text-[12px] leading-relaxed text-muted-foreground">
               {query ? "Ничего не нашлось. Попробуйте другое слово." : "Здесь появятся ваши диалоги."}
             </p>
           )}
@@ -91,7 +96,7 @@ export function SessionsList({ chat, query = "", onPicked }: { chat: ChatControl
               <div
                 key={s.id}
                 className={cn(
-                  "group relative flex h-9 items-center rounded-lg text-[14px] transition-colors hover:bg-sidebar-accent",
+                  "group relative flex h-8 items-center rounded-md text-[13px] transition-colors hover:bg-sidebar-accent",
                   active && "bg-sidebar-accent",
                 )}
               >
@@ -106,7 +111,7 @@ export function SessionsList({ chat, query = "", onPicked }: { chat: ChatControl
                       if (e.key === "Escape") setEditing(null);
                     }}
                     aria-label="Название диалога"
-                    className="mx-1 h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-[14px] outline-none focus:border-ring"
+                    className="mx-0.5 h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-1.5 text-[13px] outline-none focus:border-ring"
                   />
                 ) : (
                   <button
@@ -116,15 +121,15 @@ export function SessionsList({ chat, query = "", onPicked }: { chat: ChatControl
                       onPicked?.();
                     }}
                     aria-current={active ? "true" : undefined}
-                    className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg pr-9 pl-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md pr-8 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                   >
-                    <span className="truncate text-sidebar-foreground">{s.title}</span>
+                    <span className={cn("truncate", active ? "text-sidebar-foreground" : "text-sidebar-foreground/85")}>{s.title}</span>
                     {s.lead && <UserRound className="size-3.5 shrink-0 text-success" aria-label="заявка передана" />}
                   </button>
                 )}
                 {editing !== s.id && pending && (
                   <Loader2
-                    className="pointer-events-none absolute right-2.5 size-3.5 animate-spin text-muted-foreground group-hover:opacity-0"
+                    className="pointer-events-none absolute right-2 size-3.5 animate-spin text-muted-foreground group-hover:opacity-0"
                     aria-label="отвечает"
                   />
                 )}
@@ -135,7 +140,7 @@ export function SessionsList({ chat, query = "", onPicked }: { chat: ChatControl
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          className="absolute right-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-transparent hover:text-foreground focus-visible:opacity-100 aria-expanded:opacity-100"
+                          className="absolute right-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-transparent hover:text-foreground focus-visible:opacity-100 aria-expanded:opacity-100"
                           aria-label="Действия с диалогом"
                         />
                       }

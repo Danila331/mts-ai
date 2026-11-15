@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Download, FileJson, PanelRightClose, PanelRightOpen, Pencil, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Download, FileJson, PanelRight, Pencil, Trash2 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell, PageBar } from "@/components/app-shell";
@@ -19,14 +19,29 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
 import { useKb } from "@/hooks/use-kb";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import type { ChatMode } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const DEBUG_KEY = "eb.debug.open";
+
+const MODES: { value: ChatMode; short: string; label: string; hint: string }[] = [
+  {
+    value: "chat",
+    short: "Чат",
+    label: "Чат с клиентом",
+    hint: "Как на сайте: бот может предложить передать запрос менеджеру.",
+  },
+  {
+    value: "eval",
+    short: "Как на проверке",
+    label: "Как на платформе проверки",
+    hint: "Ответ одной строкой без предложений заявки и контактов — так бота оценивает жюри.",
+  },
+];
 
 export function Playground() {
   const [mode, setMode] = useState<ChatMode>("chat");
@@ -38,7 +53,6 @@ export function Playground() {
   const [leadOpen, setLeadOpen] = useState(false);
   const [debugPref, setDebugPref] = useState(true);
   const [debugSheet, setDebugSheet] = useState(false);
-  const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const params = useSearchParams();
   const router = useRouter();
@@ -49,13 +63,15 @@ export function Playground() {
     setDebugPref(localStorage.getItem(DEBUG_KEY) !== "0");
   }, []);
 
-  // «Новый диалог» со страниц базы и виджета приходит сюда как ?new=1.
+  // «Новый диалог» со страниц базы и виджета приходит сюда как ?new=1, диалог из палитры ⌘K — как ?s=<id>.
   const wantsNew = params.get("new") === "1";
+  const wantsSession = params.get("s");
   useEffect(() => {
-    if (!chat.ready || !wantsNew) return;
-    chat.create();
+    if (!chat.ready || (!wantsNew && !wantsSession)) return;
+    if (wantsNew) chat.create();
+    else if (wantsSession) chat.select(wantsSession);
     router.replace(pathname, { scroll: false });
-  }, [chat, wantsNew, router, pathname]);
+  }, [chat, wantsNew, wantsSession, router, pathname]);
 
   const messages = useMemo(() => chat.active?.messages ?? [], [chat.active]);
   // Отладка показывает выбранный ответ; если он из другого диалога — последний ответ текущего.
@@ -106,7 +122,7 @@ export function Playground() {
             if (e.key === "Escape") setRenaming(null);
           }}
           aria-label="Название диалога"
-          className="h-8 w-[min(28rem,100%)] rounded-lg border border-input bg-background px-2.5 text-[14px] font-medium outline-none focus:border-ring"
+          className="h-8 w-[min(28rem,100%)] rounded-md border border-input bg-background px-2 text-[14px] font-medium outline-none focus:border-ring"
         />
       ) : (
         <DropdownMenu>
@@ -114,7 +130,7 @@ export function Playground() {
             render={
               <button
                 type="button"
-                className="-ml-1 flex h-8 min-w-0 items-center gap-1 rounded-lg px-2 text-[14px] font-medium outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-muted"
+                className="-ml-1 flex h-8 min-w-0 items-center gap-1 rounded-md px-2 text-[14px] font-medium outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-muted"
                 aria-label={`Действия с диалогом «${active.title}»`}
               />
             }
@@ -143,42 +159,48 @@ export function Playground() {
 
   const bar = (
     <PageBar title={title}>
-      <Tooltip>
-        <TooltipTrigger
+      <DropdownMenu>
+        <DropdownMenuTrigger
           render={
-            <label className="mr-1 flex h-8 cursor-pointer items-center gap-2 rounded-lg px-2 text-[13px] text-muted-foreground transition-colors select-none hover:bg-muted hover:text-foreground" />
+            <button
+              type="button"
+              className="flex h-8 items-center gap-1 rounded-md px-2 text-[13px] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-muted aria-expanded:text-foreground"
+              aria-label="Режим ответа"
+            />
           }
         >
-          <Switch
-            checked={mode === "eval"}
-            onCheckedChange={(v) => setMode(v ? "eval" : "chat")}
-            size="sm"
-            aria-label="Режим автопроверки"
-          />
-          <span className="hidden sm:inline">Автопроверка</span>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-xs">
-          Как на платформе жюри: бот не предлагает оставить заявку и не просит контакты. В обычном режиме он может
-          предложить передать запрос менеджеру.
-        </TooltipContent>
-      </Tooltip>
+          {MODES.find((m) => m.value === mode)?.short}
+          <ChevronDown className="size-3.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-72">
+          {MODES.map((m) => (
+            <DropdownMenuItem key={m.value} onClick={() => setMode(m.value)} className="items-start py-2">
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] font-medium">{m.label}</span>
+                <span className="mt-0.5 block text-[12px] leading-snug text-muted-foreground">{m.hint}</span>
+              </span>
+              <Check className={cn("mt-0.5", mode !== m.value && "invisible")} />
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
       {hasMessages && (
         <Tooltip>
           <TooltipTrigger
             render={
               <Button
                 variant="ghost"
-                size="icon"
-                className="text-muted-foreground"
+                size="icon-sm"
+                className={cn("text-muted-foreground", debugOpen && "bg-muted text-foreground")}
                 onClick={() => setDebugOpen(!debugOpen)}
-                aria-label={debugOpen ? "Скрыть отладку" : "Показать отладку"}
+                aria-label={debugOpen ? "Скрыть разбор ответа" : "Показать разбор ответа"}
                 aria-pressed={debugOpen}
               />
             }
           >
-            {debugOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            <PanelRight />
           </TooltipTrigger>
-          <TooltipContent>{debugOpen ? "Скрыть отладку" : "Показать отладку"}</TooltipContent>
+          <TooltipContent>{debugOpen ? "Скрыть разбор ответа" : "Показать разбор ответа"}</TooltipContent>
         </Tooltip>
       )}
     </PageBar>
@@ -208,8 +230,8 @@ export function Playground() {
   return (
     <AppShell
       onNew={() => chat.create()}
-      search={{ value: query, onChange: setQuery }}
-      sidebar={chat.ready ? <SessionsList chat={chat} query={query} /> : null}
+      onSelectSession={(id) => chat.select(id)}
+      sidebar={chat.ready ? <SessionsList chat={chat} /> : null}
     >
       {wide ? (
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
@@ -218,7 +240,7 @@ export function Playground() {
           </ResizablePanel>
           {debugOpen && hasMessages && (
             <>
-              <ResizableHandle />
+              <ResizableHandle className="bg-border" />
               <ResizablePanel defaultSize="40%" minSize="28%">
                 <div className="h-full bg-background">{debug}</div>
               </ResizablePanel>
