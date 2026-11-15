@@ -322,6 +322,33 @@ type FieldView struct {
 	Source Source `json:"source,omitempty"`
 }
 
+// taskProduct — продукт, который однозначно следует из задачи клиента
+// (список задач — из базы). «Снижение платежа» решают несколько продуктов,
+// поэтому её здесь нет.
+var taskProduct = map[string]Group{
+	"автоматизация учёта":         Platform,
+	"поиск потерь":                Losses,
+	"надёжность электроснабжения": Solar,
+}
+
+// primaryProduct — продукт, для которого считается прогресс паспорта: по
+// задаче клиента, если она его однозначно называет, иначе — продукт с
+// наибольшим числом разделов в опоре ответов (первый при равенстве). Опора
+// — эвристика по совпадению слов, и одно упоминание соседнего продукта не
+// должно перебивать то, о чём клиент говорит.
+func (p Passport) primaryProduct() Group {
+	if g, ok := taskProduct[p.Values["task"].Value]; ok {
+		return g
+	}
+	best, most := General, 0
+	for _, c := range p.Candidates {
+		if len(c.Sections) > most {
+			best, most = c.Product, len(c.Sections)
+		}
+	}
+	return best
+}
+
 // Render — представление паспорта.
 func (p Passport) Render() View {
 	v := View{Fields: make([]FieldView, 0, len(Catalog)), Products: p.Candidates, Product: General,
@@ -329,12 +356,10 @@ func (p Passport) Render() View {
 	if v.Products == nil {
 		v.Products = []Candidate{}
 	}
-	if len(p.Candidates) > 0 {
-		v.Product = p.Candidates[0].Product
-		for _, prod := range Products {
-			if prod.Group == v.Product {
-				v.ProductLabel = prod.Label
-			}
+	v.Product = p.primaryProduct()
+	for _, prod := range Products {
+		if prod.Group == v.Product {
+			v.ProductLabel = prod.Label
 		}
 	}
 	for _, f := range Catalog {

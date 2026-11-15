@@ -136,3 +136,19 @@ func TestExtractWithoutModelOrOnFailure(t *testing.T) {
 	_, err = Extract(context.Background(), fakeModel{out: "не знаю"}, turns)
 	assert.ErrorIs(t, err, errNoJSON)
 }
+
+// QA: опора ответа случайно задела документ распознавания по фото, а клиент
+// говорит об автоматизации учёта — прогресс считается для платформы учёта.
+func TestPrimaryProductByTaskThenSections(t *testing.T) {
+	var p Passport
+	p.AddSections([]SectionRef{{ID: "r1", Doc: "20-products/25-meter-reading.md"}, {ID: "r2", Doc: "20-products/25-meter-reading.md"}})
+	assert.Equal(t, Recognition, p.Render().Product, "без задачи — по опоре")
+	p.Set("task", "автоматизация учёта", FromBot, time.Now())
+	assert.Equal(t, Platform, p.Render().Product, "задача клиента главнее случайной опоры")
+	assert.Equal(t, "Платформа учёта", p.Render().ProductLabel)
+
+	var q Passport
+	q.AddSections([]SectionRef{{ID: "s1", Doc: "20-products/23-solar.md"}})
+	q.AddSections([]SectionRef{{ID: "a1", Doc: "20-products/22-askue.md"}, {ID: "a2", Doc: "20-products/22-askue.md"}})
+	assert.Equal(t, Platform, q.Render().Product, "больше разделов — главнее первого упомянутого")
+}

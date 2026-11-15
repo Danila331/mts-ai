@@ -321,6 +321,14 @@ export interface RoleState {
  * найденная догадка тоже держится — метка не прыгает от реплики к реплике. Иначе — по репликам, затем по типу
  * организации из паспорта.
  */
+/**
+ * Только поля роли. resolveRole при уже известной роли возвращает переданное состояние целиком (например, всю
+ * сессию), и развёрнутое поверх свежего паспорта оно затирало бы его старым.
+ */
+export function roleFields(r: RoleState): RoleState {
+  return { role: r.role, roleSource: r.roleSource };
+}
+
 export function resolveRole(state: RoleState, clientTurns: string[], orgType?: string): RoleState {
   if (state.roleSource === "client" || state.role) return state;
   const role = detectRole(clientTurns) ?? roleFromOrgType(orgType);
