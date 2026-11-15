@@ -92,6 +92,27 @@ export interface Confidence {
   explain: string;
 }
 
+/** Раздел базы, на который опирается «честное нет» (T26): ссылка /kb?chunk=<chunk_id>. */
+export interface HonestNoSection {
+  chunk_id: string;
+  doc: string;
+  title: string;
+  path: string;
+}
+
+/**
+ * «Честное нет» (T26): продукт клиенту, скорее всего, не подойдёт по условию из базы.
+ * reason и alternative.text — дословный текст раздела базы; fact — фрагмент реплики клиента, по которому сработало.
+ */
+export interface HonestNo {
+  rule: string;
+  product: string;
+  reason: string;
+  fact: string;
+  section: HonestNoSection | null;
+  alternative: { text: string; section: HonestNoSection | null } | null;
+}
+
 export interface AnswerPayload {
   id: string;
   /** answer — обычный ответ, clarify — уточняющий вопрос ниже порога уверенности (T12). */
@@ -113,6 +134,8 @@ export interface AnswerPayload {
   /** Настройки песочницы, с которыми построен этот ответ; пусто — общие настройки стенда. */
   overrides?: Record<string, SettingValue>;
   confidence?: Confidence;
+  /** «Честные нет» (T26): только режим chat; в eval и copilot — пусто. */
+  honest_no?: HonestNo[];
 }
 
 export interface LlmCall {

@@ -18,7 +18,10 @@
                                 → SSE: stage, answer, done. overrides — настройки RAG только для этого ответа
                                 (песочница стенда), те же ключи и пределы, что у /core/settings.
                                 В answer — confidence (уверенность: поиск + опора, порог) и route:
-                                answer | clarify (уточнение ниже порога, только chat при EB_CONFIDENCE_GATE=1)
+                                answer | clarify (уточнение ниже порога, только chat при EB_CONFIDENCE_GATE=1),
+                                honest_no — «честные нет» (T26, только chat): [{rule, product, reason, fact,
+                                section, alternative}] по правилам из scripts/honest_no.py. Необязательный
+                                "passport": {поле: значение} — паспорт задачи как ещё один источник фактов.
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
     POST /core/settings         {"values": {ключ: значение}} — поменять на лету для всех ответов (до перезапуска)
     POST /core/settings/reset   вернуть значения из окружения
@@ -64,6 +67,7 @@ load_dotenv(ROOT / ".env")
 # Умолчание, а не жёсткая настройка: EB_STYLE из окружения по-прежнему главнее.
 os.environ.setdefault("EB_STYLE", "jury")
 
+import honest_no  # noqa: E402 — scripts/honest_no.py: «честные нет» (T26), только режим chat
 import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с этим файлом
 
 from energybot.dialog import search_queries  # noqa: E402
@@ -740,6 +744,10 @@ class App:
         self.threshold = env_num("EB_CONFIDENCE_THRESHOLD", CONFIDENCE_THRESHOLD, 0.0, 1.0, float)
         self.settings = Settings(self.bot, self.api)
         self.kb_path = kb_path
+        # «Честные нет» (T26): правила привязываются к разделам базы один раз; правило без опоры выключается.
+        self.honest = honest_no.Detector(self.bot.kb)
+        if self.honest.disabled:
+            log("warn", "правила «честных нет» без опоры в базе выключены", rules=",".join(self.honest.disabled))
         if self.wants_dense() and not self.bot.dense:
             threading.Thread(target=self.retry_dense, name="dense-retry", daemon=True).start()
 
@@ -818,11 +826,11 @@ class App:
         applied, values = self.settings.overrides(body.get("overrides"))
         # Весь ответ — и поиск, и представление для отладки — с настройками этого запроса.
         with overridden(values):
-            payload = self._chat(turns, mode, emit)
+            payload = self._chat(turns, mode, emit, body.get("passport"))
         payload["overrides"] = applied
         return payload
 
-    def _chat(self, turns: list, mode: str, emit) -> dict:
+    def _chat(self, turns: list, mode: str, emit, passport=None) -> dict:
         TRACE.reset(emit)
         t0 = time.perf_counter()
         # Порог решается по поиску до генерации и только в чате: в eval и copilot путь ответа прежний.
@@ -882,6 +890,8 @@ class App:
         support = None if gated or payload["fallback"] else support_confidence(payload["citations"])
         retrieval = TRACE.confidence or self.bot.retrieval_confidence(turns)
         payload["confidence"] = answer_confidence(retrieval, support, self.threshold, gate, gated)
+        # «Честные нет» (T26): детерминированно по репликам клиента, только чат; автопроверка и копилот — пусто.
+        payload["honest_no"] = self.honest.detect(turns, passport) if mode == "chat" else []
         return payload
 
 

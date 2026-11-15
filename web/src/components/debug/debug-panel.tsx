@@ -21,7 +21,7 @@ import { toast } from "sonner";
 import { citationOrder, SourceNumber } from "@/components/chat/answer-text";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { KbIndex } from "@/hooks/use-kb";
-import type { AnswerPayload, Citation, Confidence, Hit, Message, Retrieval } from "@/lib/types";
+import type { AnswerPayload, Citation, Confidence, HonestNo, Hit, Message, Retrieval } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const STAGES: Record<string, { label: string; color: string }> = {
@@ -227,6 +227,30 @@ function ConfidenceBlock({ c }: { c: Confidence }) {
   );
 }
 
+/** «Честные нет» (T26): какие правила сработали, по какому фрагменту реплики клиента и на какой раздел базы. */
+function HonestNoBlock({ items, kb, onOpen }: { items: HonestNo[]; kb: KbIndex | null; onOpen: (id: string) => void }) {
+  return (
+    <section className="space-y-2.5 rounded-xl bg-surface px-3.5 py-3">
+      <div className="flex items-baseline gap-2">
+        <span className="text-[13px] font-medium text-muted-foreground">Честные нет</span>
+        <span className="tnum text-[18px] leading-none font-semibold tracking-tight">{items.length}</span>
+        <span className="ml-auto text-xs text-muted-foreground">правила базы, только чат</span>
+      </div>
+      <ul className="space-y-2.5">
+        {items.map((h) => (
+          <li key={h.rule} className="space-y-1">
+            <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+              <span className="font-mono text-[11.5px] text-foreground/80">{h.rule}</span>
+              {h.fact && <span>по фразе «{h.fact}»</span>}
+            </div>
+            {h.section && <ChunkRow id={h.section.chunk_id} kb={kb} onOpen={onOpen} title={h.section.title} path={h.section.path} />}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 // ---------- Опора ----------
 type Verdict = "strong" | "weak" | "none" | "numbers" | "question";
 
@@ -260,6 +284,7 @@ function SupportTab({ a, kb, onOpen }: { a: AnswerPayload; kb: KbIndex | null; o
   return (
     <div className="space-y-5 p-5">
       {a.confidence && <ConfidenceBlock c={a.confidence} />}
+      {a.honest_no && a.honest_no.length > 0 && <HonestNoBlock items={a.honest_no} kb={kb} onOpen={onOpen} />}
       <div className="space-y-2.5">
         <div className="flex items-baseline gap-2">
           <span className="tnum text-[22px] leading-none font-semibold tracking-tight">
