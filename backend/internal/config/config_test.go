@@ -17,7 +17,8 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{"EB_ENV", "EB_DB_DSN", "DATABASE_URL", "EB_API_TOKEN", "EB_CORE_TOKEN",
 		"EB_CORE_URL", "PORT", "LLM_BASE_URL", "LLM_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY",
 		"EB_DISABLE_THINKING", "EB_LIMIT_CHAT_PER_MINUTE", "EB_SHUTDOWN_TIMEOUT", "EB_METRICS_PORT",
-		"EB_LOG_FORMAT", "EB_LOG_LEVEL", "EB_REDIS_URL", "REDIS_URL", "EB_SSE_HEARTBEAT"} {
+		"EB_LOG_FORMAT", "EB_LOG_LEVEL", "EB_REDIS_URL", "REDIS_URL", "EB_SSE_HEARTBEAT", "EB_ADMIN_TOKEN",
+		"EB_LIMIT_SETTINGS_PER_MINUTE", "EB_LIMIT_SETTINGS_BURST"} {
 		t.Setenv(k, "")
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -39,6 +40,8 @@ func TestLoadFromEnvOnly(t *testing.T) {
 	assert.True(t, cfg.DB.Migrate)
 	assert.Equal(t, 3*time.Minute, cfg.Core.Timeout)
 	assert.Equal(t, 20, cfg.Limits.ChatPerMinute)
+	assert.Equal(t, 10, cfg.Limits.SettingsPerMinute)
+	assert.Empty(t, cfg.HTTP.AdminToken, "без токена глобальные настройки закрыты")
 	assert.Equal(t, 3*time.Minute+15*time.Second, cfg.ShutdownBudget(), "остановка ждёт не меньше ответа ядра")
 	assert.Equal(t, 15*time.Second, cfg.HTTP.SSEHeartbeat)
 	assert.Equal(t, 9091, cfg.Metrics.Port)

@@ -30,7 +30,7 @@ const DEBUG_KEY = "eb.debug.open";
 
 export function Playground() {
   const [mode, setMode] = useState<ChatMode>("chat");
-  const chat = useChat("eb.playground.sessions.v1", mode);
+  const chat = useChat("eb.playground.sessions.v1", mode, { sandbox: true });
   const { kb } = useKb();
   const wide = useMediaQuery("(min-width: 1024px)", true);
   const [picked, setPicked] = useState<string>("");

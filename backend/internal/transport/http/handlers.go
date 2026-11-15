@@ -87,6 +87,11 @@ func (s *Server) saveSettings(c echo.Context) error {
 	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
 }
 
+// adminLogin — токен администратора верен (его проверил requireAdmin).
+func (s *Server) adminLogin(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]bool{"ok": true})
+}
+
 // resetSettings возвращает настройки из окружения ядра.
 func (s *Server) resetSettings(c echo.Context) error {
 	raw, err := s.deps.Settings.ResetSettings(c.Request().Context())
@@ -97,8 +102,29 @@ func (s *Server) resetSettings(c echo.Context) error {
 }
 
 type chatRequest struct {
-	Messages json.RawMessage `json:"messages"`
-	Mode     string          `json:"mode"`
+	Messages  json.RawMessage `json:"messages"`
+	Mode      string          `json:"mode"`
+	Overrides json.RawMessage `json:"overrides"`
+}
+
+// maxOverrides — предел поля overrides. Настроек полтора десятка, и их
+// объект — сотни байт; всё, что больше, — не настройки.
+const maxOverrides = 4 << 10
+
+// overrides — настройки песочницы как есть: шлюз проверяет только форму,
+// ключи и пределы проверяет ядро (отказ — 400 с его текстом).
+func overrides(raw json.RawMessage) (json.RawMessage, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) || bytes.Equal(raw, []byte("{}")) {
+		return nil, nil
+	}
+	if raw[0] != '{' {
+		return nil, apperr.Invalidf("overrides: ожидается объект {ключ: значение}")
+	}
+	if len(raw) > maxOverrides {
+		return nil, apperr.Invalidf("overrides: слишком много настроек")
+	}
+	return raw, nil
 }
 
 // chat отвечает на вопрос потоком server-sent events.
@@ -116,8 +142,13 @@ func (s *Server) chat(c echo.Context) error {
 		return s.mapErr(c, err)
 	}
 
+	sandbox, err := overrides(body.Overrides)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+
 	mode := dialog.ParseMode(body.Mode)
-	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{Turns: turns, Mode: mode})
+	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{Turns: turns, Mode: mode, Overrides: sandbox})
 	if err != nil {
 		return s.coreFail(c, err)
 	}

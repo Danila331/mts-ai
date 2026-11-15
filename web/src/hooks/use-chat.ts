@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { streamChat } from "@/lib/api";
+import { readSandbox } from "@/lib/sandbox";
 import type { ChatMode, Message, Session, Turn } from "@/lib/types";
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -25,8 +26,10 @@ export function toTurns(messages: Message[]): Turn[] {
 
 /**
  * Сессии чата в localStorage + отправка сообщений. Один хук на стенд и на виджет — у них разные ключи хранилища.
+ * sandbox — отправлять ли с вопросом настройки песочницы (/settings). Только стенд: виджет на сайте
+ * всегда отвечает с общими настройками.
  */
-export function useChat(storageKey: string, mode: ChatMode = "chat") {
+export function useChat(storageKey: string, mode: ChatMode = "chat", { sandbox = false }: { sandbox?: boolean } = {}) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [ready, setReady] = useState(false);
@@ -92,6 +95,8 @@ export function useChat(storageKey: string, mode: ChatMode = "chat") {
               }),
           },
           controller.signal,
+          // Читаются в момент вопроса: правка на /settings в соседней вкладке действует со следующего ответа.
+          sandbox ? readSandbox() : undefined,
         );
       } catch (err) {
         const aborted = controller.signal.aborted;
@@ -103,7 +108,7 @@ export function useChat(storageKey: string, mode: ChatMode = "chat") {
         controllers.current.delete(sessionId);
       }
     },
-    [mode, patchMessage],
+    [mode, sandbox, patchMessage],
   );
 
   const send = useCallback(

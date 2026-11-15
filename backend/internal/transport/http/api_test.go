@@ -272,28 +272,176 @@ func TestHealthAndKB(t *testing.T) {
 }
 
 func TestSettings(t *testing.T) {
-	s, _ := newServer(t, fakeCore(t, goodStream).URL, nil)
+	s, _ := newServer(t, fakeCore(t, goodStream).URL, func(c *config.Config) { c.HTTP.AdminToken = "admin-token" })
+	admin := []string{AdminHeader, "admin-token"}
 
 	rec := do(s, http.MethodGet, "/api/settings", "")
-	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code, "читать настройки может каждый")
 	assert.JSONEq(t, `{"values": {"top_k": 8}, "changed": []}`, rec.Body.String(), "ответ ядра как есть")
 
-	rec = do(s, http.MethodPost, "/api/settings", `{"values": {"top_k": 5}}`)
+	rec = do(s, http.MethodPost, "/api/settings", `{"values": {"top_k": 5}}`, admin...)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"values": {"top_k": 5}, "changed": ["top_k"]}`, rec.Body.String())
 
-	rec = do(s, http.MethodPost, "/api/settings", `{"values": {"nope": 1}}`)
+	rec = do(s, http.MethodPost, "/api/settings", `{"values": {"nope": 1}}`, admin...)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "отказ ядра уходит клиенту с его текстом")
 	assert.JSONEq(t, `{"error": "неизвестные настройки: nope"}`, rec.Body.String())
 
 	for _, body := range []string{`{}`, `{"values": [1]}`, `{"values": "top_k=5"}`} {
-		rec = do(s, http.MethodPost, "/api/settings", body)
+		rec = do(s, http.MethodPost, "/api/settings", body, admin...)
 		assert.Equal(t, http.StatusBadRequest, rec.Code, body)
 	}
 
-	rec = do(s, http.MethodPost, "/api/settings/reset", "")
+	rec = do(s, http.MethodPost, "/api/settings/reset", "", admin...)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"values": {"top_k": 8}, "changed": []}`, rec.Body.String())
+
+	rec = do(s, http.MethodPost, "/api/settings/login", "", admin...)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"ok": true}`, rec.Body.String())
+}
+
+func TestGlobalSettingsNeedAdmin(t *testing.T) {
+	s, _ := newServer(t, fakeCore(t, goodStream).URL, func(c *config.Config) {
+		c.HTTP.Token = "front-token"
+		c.HTTP.AdminToken = "admin-token"
+	})
+	front := []string{"Authorization", "Bearer front-token"}
+
+	for _, path := range []string{"/api/settings", "/api/settings/reset", "/api/settings/login"} {
+		rec := do(s, http.MethodPost, path, `{"values": {"top_k": 5}}`, front...)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "анонимный %s: токена прокси мало", path)
+		assert.Contains(t, rec.Body.String(), "только администратор")
+
+		rec = do(s, http.MethodPost, path, `{"values": {"top_k": 5}}`, append(front, AdminHeader, "wrong")...)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "%s с чужим токеном", path)
+	}
+	assert.Equal(t, http.StatusOK, do(s, http.MethodGet, "/api/settings", "", front...).Code)
+	// Без токена прокси до проверки администратора дело не доходит.
+	assert.Equal(t, http.StatusUnauthorized,
+		do(s, http.MethodPost, "/api/settings", `{"values": {"top_k": 5}}`, AdminHeader, "admin-token").Code)
+	assert.Equal(t, http.StatusOK,
+		do(s, http.MethodPost, "/api/settings", `{"values": {"top_k": 5}}`, append(front, AdminHeader, "admin-token")...).Code)
+}
+
+func TestGlobalSettingsClosedWithoutAdminToken(t *testing.T) {
+	s, _ := newServer(t, fakeCore(t, goodStream).URL, nil)
+	for _, token := range []string{"", "anything"} {
+		rec := do(s, http.MethodPost, "/api/settings", `{"values": {"top_k": 5}}`, AdminHeader, token)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "EB_ADMIN_TOKEN не задан — менять для всех нельзя никому")
+	}
+}
+
+func TestSettingsLimit(t *testing.T) {
+	s, _ := newServer(t, fakeCore(t, goodStream).URL, func(c *config.Config) {
+		c.Limits.SettingsPerMinute, c.Limits.SettingsBurst = 1, 2
+	})
+	// Перебор токена упирается в предел настроек.
+	assert.Equal(t, http.StatusUnauthorized, do(s, http.MethodPost, "/api/settings/login", "", AdminHeader, "a").Code)
+	assert.Equal(t, http.StatusUnauthorized, do(s, http.MethodPost, "/api/settings/login", "", AdminHeader, "b").Code)
+	assert.Equal(t, http.StatusTooManyRequests, do(s, http.MethodPost, "/api/settings/login", "", AdminHeader, "c").Code)
+	assert.Equal(t, http.StatusTooManyRequests, do(s, http.MethodGet, "/api/settings", "").Code)
+	// Вопросы того же адреса предел настроек не задевает.
+	assert.Equal(t, http.StatusOK,
+		do(s, http.MethodPost, "/api/chat", `{"messages": [{"role": "user", "content": "q"}]}`).Code)
+}
+
+// recordingCore — ядро, которое запоминает тела запросов /core/chat и
+// отказывает в настройках вне пределов, как scripts/core_api.py.
+func recordingCore(t *testing.T) (*httptest.Server, func() []map[string]json.RawMessage) {
+	t.Helper()
+	var mu sync.Mutex
+	var bodies []map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+		var asked struct {
+			TopK int `json:"top_k"`
+		}
+		_ = json.Unmarshal(body["overrides"], &asked)
+		if asked.TopK > 30 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error": "top_k: от 0 до 30"}`)
+			return
+		}
+		applied := body["overrides"]
+		if applied == nil {
+			applied = json.RawMessage(`{}`)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: answer\ndata: {\"id\": \"a\", \"text\": \"t\", \"overrides\": "+string(applied)+"}\n\nevent: done\ndata: {}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []map[string]json.RawMessage {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]map[string]json.RawMessage(nil), bodies...)
+	}
+}
+
+func answerOverrides(t *testing.T, data string) string {
+	t.Helper()
+	var answer struct {
+		Overrides json.RawMessage `json:"overrides"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(data), &answer))
+	return string(answer.Overrides)
+}
+
+func TestChatOverridesStayInOwnRequest(t *testing.T) {
+	core, bodies := recordingCore(t)
+	s, _ := newServer(t, core.URL, nil)
+
+	// Сессия жюри с песочницей и соседняя сессия без неё.
+	rec := do(s, http.MethodPost, "/api/chat",
+		`{"messages": [{"role": "user", "content": "q"}], "overrides": {"top_k": 3, "style": "full"}}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	evs := readSSE(t, rec.Body.String())
+	require.Equal(t, []string{"answer", "done"}, names(evs))
+	assert.JSONEq(t, `{"top_k": 3, "style": "full"}`, answerOverrides(t, evs[0].data), "фронт видит, что ответ — с его настройками")
+
+	rec = do(s, http.MethodPost, "/api/chat", `{"messages": [{"role": "user", "content": "q"}]}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{}`, answerOverrides(t, readSSE(t, rec.Body.String())[0].data))
+
+	got := bodies()
+	require.Len(t, got, 2)
+	assert.JSONEq(t, `{"top_k": 3, "style": "full"}`, string(got[0]["overrides"]), "ядро получило настройки песочницы")
+	_, leaked := got[1]["overrides"]
+	assert.False(t, leaked, "другая сессия отвечает с общими настройками")
+}
+
+func TestChatOverridesValidation(t *testing.T) {
+	core, bodies := recordingCore(t)
+	s, _ := newServer(t, core.URL, nil)
+	q := `"messages": [{"role": "user", "content": "q"}]`
+
+	for _, bad := range []string{`[1]`, `"top_k=3"`, `5`} {
+		rec := do(s, http.MethodPost, "/api/chat", `{`+q+`, "overrides": `+bad+`}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, bad)
+		assert.JSONEq(t, `{"error": "overrides: ожидается объект {ключ: значение}"}`, rec.Body.String(), bad)
+	}
+	huge := `{"style": "` + strings.Repeat("x", maxOverrides) + `"}`
+	assert.Equal(t, http.StatusBadRequest, do(s, http.MethodPost, "/api/chat", `{`+q+`, "overrides": `+huge+`}`).Code)
+	assert.Empty(t, bodies(), "плохая форма не доходит до ядра")
+
+	// Пределы проверяет ядро: его отказ — 400 с текстом до начала потока.
+	rec := do(s, http.MethodPost, "/api/chat", `{`+q+`, "overrides": {"top_k": 500}}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error": "top_k: от 0 до 30"}`, rec.Body.String())
+
+	// Пустой объект и null — общие настройки.
+	for _, empty := range []string{`{}`, `null`} {
+		rec = do(s, http.MethodPost, "/api/chat", `{`+q+`, "overrides": `+empty+`}`)
+		assert.Equal(t, http.StatusOK, rec.Code, empty)
+	}
+	for _, b := range bodies()[1:] {
+		_, sent := b["overrides"]
+		assert.False(t, sent)
+	}
 }
 
 func TestLeadAndFeedback(t *testing.T) {

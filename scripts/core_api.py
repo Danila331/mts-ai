@@ -14,7 +14,9 @@
     GET  /healthz               жива ли служба (без токена: это проба хостинга)
     GET  /core/health           схема ответа, есть ли модель, эмбеддинги, размер базы
     GET  /core/kb               база знаний разделами (те же фрагменты, что видит модель)
-    POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"} → SSE: stage, answer, done
+    POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval", "overrides": {ключ: значение}}
+                                → SSE: stage, answer, done. overrides — настройки RAG только для этого ответа
+                                (песочница стенда), те же ключи и пределы, что у /core/settings
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
     POST /core/settings         {"values": {ключ: значение}} — поменять на лету для всех ответов (до перезапуска)
     POST /core/settings/reset   вернуть значения из окружения
@@ -32,6 +34,7 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -166,12 +169,78 @@ class Trace(threading.local):
 TRACE = Trace()
 
 
+# ---------- переопределения настроек на один ответ (песочница стенда) ----------
+# Consultant и Api — общие для всех потоков сервера, а настройки — их атрибуты. Песочница не может менять
+# их на время ответа: соседний поток ответил бы с чужими настройками. Поэтому настраиваемые атрибуты —
+# дескрипторы: в потоке, где действует overridden(), они отдают значения запроса, во всех остальных —
+# общие. Внутри одного ответа ядро потоков не запускает, так что переопределение видно всему ответу.
+OVERRIDES = threading.local()
+
+
+class Overridable:
+    """Атрибут экземпляра, который можно переопределить только для текущего потока."""
+
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self
+        values = getattr(OVERRIDES, "values", None)
+        if values:
+            key = (id(obj), self.name)
+            if key in values:
+                return values[key]
+        try:
+            return obj.__dict__[self.name]
+        except KeyError:
+            raise AttributeError(self.name) from None
+
+    def __set__(self, obj, value):
+        # Запись — всегда общее значение: глобальные настройки и сам код ядра пишут сюда, а не в запрос.
+        obj.__dict__[self.name] = value
+
+
+@contextmanager
+def overridden(values: dict):
+    """Внутри блока атрибуты из values ({(id(объекта), имя): значение}) переопределены для этого потока."""
+    OVERRIDES.values = values
+    try:
+        yield
+    finally:
+        OVERRIDES.values = None
+
+
+class WebApi(Api):
+    """Api стенда: параметры генерации и реранкер переопределяются на один ответ."""
+
+    max_tokens = Overridable()
+    temperature = Overridable()
+    can_rerank = Overridable()
+
+
 class WebConsultant(Consultant):
     """Тот же Consultant, что у solution.py, плюс запись выдачи поиска, контекста и вызовов модели.
 
     Перехват не зависит от версии ядра: выдача — из Retriever.search, промпт — из Api.chat, контекст — из
     результата retrieve (в одних версиях это (выдача, контекст), в других — (выдача, документы, фрагменты)).
     """
+
+    # Всё, что меняет страница настроек: глобально — через Settings, на один ответ — через overridden().
+    top_k = Overridable()
+    n_candidates = Overridable()
+    full_docs = Overridable()
+    context_chars = Overridable()
+    dense = Overridable()
+    reference_text = Overridable()
+    search = Overridable()
+    style = Overridable()
+    use_examples = Overridable()
+    near = Overridable()
+    think = Overridable()
+    refine = Overridable()
+    check_kb = Overridable()
+
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -311,15 +380,33 @@ def attribute(answer: str, chunks: list) -> list:
 
 
 # ---------- настройки RAG на лету ----------
-# Глобальные: «Сохранить» на странице настроек стенда меняет поведение консультанта для всех, кто с ним говорит,
-# до перезапуска ядра (стенд смотрит жюри — так задумано). Значения из окружения запоминаются при старте,
-# «Сбросить к окружению» возвращает их. Все поля читаются консультантом в момент ответа, поэтому
+# Глобальные: «Сохранить» на странице настроек стенда (только с админ-токеном, его проверяет Go-API) меняет
+# поведение консультанта для всех, кто с ним говорит, до перезапуска ядра. Значения из окружения запоминаются
+# при старте, «Сбросить к окружению» возвращает их. Все поля читаются консультантом в момент ответа, поэтому
 # смена действует со следующего вопроса; идущий ответ досчитывается со старыми значениями там, где он их уже прочёл.
+#
+# Песочница: те же ключи с теми же пределами приходят полем overrides запроса /core/chat и действуют только
+# на этот ответ (overridden() выше). Так жюри может пробовать настройки, не меняя бота другим посетителям.
 class Field:
-    def __init__(self, key, group, kind, env_name, get, set_, lo=None, hi=None, options=None, available=None):
+    def __init__(self, key, group, kind, env_name, obj, name, lo=None, hi=None, options=None, available=None,
+                 to_attr=None, from_attr=None):
         self.key, self.group, self.kind, self.env = key, group, kind, env_name
-        self.get, self.set, self.lo, self.hi, self.options = get, set_, lo, hi, options
+        self.obj, self.name, self.lo, self.hi, self.options = obj, name, lo, hi, options
         self.available = available or (lambda: True)
+        # Значение настройки и значение атрибута не всегда совпадают: справочник включается его текстом,
+        # эмбеддинги — только при построенных векторах.
+        self.to_attr = to_attr or (lambda v: v)
+        self.from_attr = from_attr or (lambda v: v)
+
+    def get(self):
+        return self.from_attr(getattr(self.obj, self.name))
+
+    def set(self, value) -> None:
+        setattr(self.obj, self.name, self.to_attr(value))
+
+    def override(self, value) -> tuple:
+        """Ключ и значение для overridden(): атрибут этого поля только в текущем ответе."""
+        return (id(self.obj), self.name), self.to_attr(value)
 
     def coerce(self, value):
         if self.kind == "bool":
@@ -355,35 +442,29 @@ class Settings:
         def has_vectors() -> bool:
             return bot.retriever.vectors is not None
 
-        def attr(obj, name):
-            return (lambda: getattr(obj, name)), (lambda v: setattr(obj, name, v))
-
-        def field(key, group, kind, env_name, obj, name, **kw):
-            get, set_ = attr(obj, name)
-            return Field(key, group, kind, env_name, get, set_, **kw)
-
         self.fields = [
-            field("top_k", "search", "int", "EB_TOP_K", bot, "top_k", lo=0, hi=30),
-            field("n_candidates", "search", "int", "EB_N_CANDIDATES", bot, "n_candidates", lo=5, hi=80),
-            field("full_docs", "search", "int", "EB_FULL_DOCS", bot, "full_docs", lo=0, hi=6),
-            field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=200000),
-            Field("use_dense", "search", "bool", "EB_USE_EMBEDDINGS", lambda: bot.dense,
-                  lambda v: setattr(bot, "dense", bool(v) and has_vectors()), available=has_vectors),
-            field("use_reranker", "search", "bool", "EB_USE_RERANKER", api, "can_rerank",
+            Field("top_k", "search", "int", "EB_TOP_K", bot, "top_k", lo=0, hi=30),
+            Field("n_candidates", "search", "int", "EB_N_CANDIDATES", bot, "n_candidates", lo=5, hi=80),
+            Field("full_docs", "search", "int", "EB_FULL_DOCS", bot, "full_docs", lo=0, hi=6),
+            Field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=200000),
+            Field("use_dense", "search", "bool", "EB_USE_EMBEDDINGS", bot, "dense",
+                  to_attr=lambda v: bool(v) and has_vectors(), available=has_vectors),
+            Field("use_reranker", "search", "bool", "EB_USE_RERANKER", api, "can_rerank",
                   available=lambda: api.configured),
-            Field("use_reference", "search", "bool", "EB_REFERENCE", lambda: bool(bot.reference_text),
-                  lambda v: setattr(bot, "reference_text", reference if v else ""), available=lambda: bool(reference)),
-            field("search", "search", "enum", "EB_SEARCH", bot, "search", options=list(dict.fromkeys(["v3", "ve", bot.search]))),
+            Field("use_reference", "search", "bool", "EB_REFERENCE", bot, "reference_text",
+                  to_attr=lambda v: reference if v else "", from_attr=bool, available=lambda: bool(reference)),
+            Field("search", "search", "enum", "EB_SEARCH", bot, "search",
+                  options=list(dict.fromkeys(["v3", "ve", bot.search]))),
             # Стили правил из energybot/prompts.py; значение из окружения добавляется, даже если оно своё.
-            field("style", "generation", "enum", "EB_STYLE", bot, "style",
+            Field("style", "generation", "enum", "EB_STYLE", bot, "style",
                   options=list(dict.fromkeys(["tight", "full", "recipe", "jury", "jury2", bot.style]))),
-            field("use_examples", "generation", "bool", "EB_EXAMPLES", bot, "use_examples"),
-            field("near", "generation", "int", "EB_NEAR", bot, "near", lo=0, hi=8),
-            field("temperature", "generation", "float", "EB_TEMPERATURE", api, "temperature", lo=0.0, hi=2.0),
-            field("max_tokens", "generation", "int", "EB_MAX_TOKENS", api, "max_tokens", lo=128, hi=8192),
-            field("think", "generation", "bool", "EB_THINK", bot, "think"),
-            field("refine", "generation", "bool", "EB_REFINE", bot, "refine"),
-            field("check_kb", "generation", "enum", "EB_CHECK", bot, "check_kb", options=[0, 1, 2]),
+            Field("use_examples", "generation", "bool", "EB_EXAMPLES", bot, "use_examples"),
+            Field("near", "generation", "int", "EB_NEAR", bot, "near", lo=0, hi=8),
+            Field("temperature", "generation", "float", "EB_TEMPERATURE", api, "temperature", lo=0.0, hi=2.0),
+            Field("max_tokens", "generation", "int", "EB_MAX_TOKENS", api, "max_tokens", lo=128, hi=8192),
+            Field("think", "generation", "bool", "EB_THINK", bot, "think"),
+            Field("refine", "generation", "bool", "EB_REFINE", bot, "refine"),
+            Field("check_kb", "generation", "enum", "EB_CHECK", bot, "check_kb", options=[0, 1, 2]),
         ]
         self.by_key = {f.key: f for f in self.fields}
         self.defaults = self.values()
@@ -404,18 +485,29 @@ class Settings:
             "updated_at": self.updated_at,
         }
 
-    def update(self, values) -> None:
+    def validate(self, values, name: str = "values") -> dict:
+        """Ключи и пределы — одни для глобальных настроек и для песочницы. Ошибка — ValueError с текстом для человека."""
         if not isinstance(values, dict):
-            raise ValueError("values: ожидается объект {ключ: значение}")
+            raise ValueError(f"{name}: ожидается объект {{ключ: значение}}")
         unknown = sorted(set(values) - set(self.by_key))
         if unknown:
             raise ValueError(f"неизвестные настройки: {', '.join(unknown)}")
-        clean = {k: self.by_key[k].coerce(v) for k, v in values.items()}  # сначала проверить всё, потом менять
+        return {k: self.by_key[k].coerce(v) for k, v in values.items()}
+
+    def update(self, values) -> None:
+        clean = self.validate(values)  # сначала проверить всё, потом менять
         with self.lock:
             for k, v in clean.items():
                 self.by_key[k].set(v)
             self.updated_at = time.time()
         print(f"[core] настройки: {clean}", file=sys.stderr)
+
+    def overrides(self, values) -> tuple:
+        """Переопределения песочницы: (проверенные значения, аргумент для overridden()). Пусто — ({}, {})."""
+        if values is None:
+            return {}, {}
+        clean = self.validate(values, "overrides")
+        return clean, dict(self.by_key[k].override(v) for k, v in clean.items())
 
     def reset(self) -> None:
         # Значения из окружения ставятся как есть, без проверки пределов: их уже приняло ядро при старте.
@@ -430,7 +522,7 @@ class Settings:
 class App:
     def __init__(self):
         kb_path = Path(env("EB_KB_PATH", str(ROOT / "knowledge-base")))
-        self.api = Api()
+        self.api = WebApi()
         t0 = time.perf_counter()
         index_dir, from_cache = self.index_dir(kb_path)
         self.bot = WebConsultant(kb_path, index_dir=index_dir, api=self.api)
@@ -514,6 +606,14 @@ class App:
     def chat(self, body: dict, emit) -> dict:
         turns = clean_turns(body.get("messages"))
         mode = body.get("mode") if body.get("mode") in ("chat", "eval") else self.mode
+        applied, values = self.settings.overrides(body.get("overrides"))
+        # Весь ответ — и поиск, и представление для отладки — с настройками этого запроса.
+        with overridden(values):
+            payload = self._chat(turns, mode, emit)
+        payload["overrides"] = applied
+        return payload
+
+    def _chat(self, turns: list, mode: str, emit) -> dict:
         TRACE.reset(emit)
         t0 = time.perf_counter()
         answer = self.bot.answer(turns, mode=mode)
@@ -657,7 +757,9 @@ def make_handler(app: App):
                 return self.json(500, {"error": f"{type(exc).__name__}"})
 
         def stream_chat(self, body: dict):
-            clean_turns(body.get("messages"))  # ошибки формата — до начала потока, обычным 400
+            # Ошибки формата и пределы настроек песочницы — до начала потока, обычным 400.
+            clean_turns(body.get("messages"))
+            app.settings.overrides(body.get("overrides"))
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")

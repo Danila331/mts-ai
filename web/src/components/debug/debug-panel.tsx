@@ -783,9 +783,19 @@ export function DebugPanel({
           {a && (
             <li className="flex items-center gap-3">
               <Timer className="size-4 shrink-0 text-muted-foreground" aria-label="Время и режим" />
-              <span className="tnum">{meta[2]}</span>
-              <span className="text-muted-foreground">· {meta[1]}</span>
-              <span className="ml-auto flex shrink-0 gap-1.5">
+              <span className="tnum shrink-0 whitespace-nowrap">{meta[2]}</span>
+              <span className="shrink-0 whitespace-nowrap text-muted-foreground">· {meta[1]}</span>
+              <span className="ml-auto flex min-w-0 flex-wrap justify-end gap-1.5">
+                {a.overrides && Object.keys(a.overrides).length > 0 && (
+                  <span
+                    className="inline-flex h-5 items-center rounded-md bg-brand-soft px-1.5 text-[11px] font-medium whitespace-nowrap text-brand-text"
+                    title={Object.entries(a.overrides)
+                      .map(([k, v]) => `${k}: ${String(v)}`)
+                      .join("\n")}
+                  >
+                    ответ с вашими настройками
+                  </span>
+                )}
                 {a.fallback && (
                   <span className="inline-flex h-5 items-center rounded-md bg-warning-soft px-1.5 text-[11px] font-medium text-warning">
                     запасной ответ

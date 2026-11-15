@@ -1,32 +1,30 @@
 // Прокси на Go-API (backend/). Фронт и виджет ходят на свой origin, поэтому CORS не нужен,
-// а адрес бэкенда и его токен знает только сервер Next. SSE пробрасывается потоком, без буферизации.
-//
-// На Vercel: EB_API_URL — публичный адрес службы api на Railway, EB_API_TOKEN — тот же секрет, что у api
-// (docs/deploy.md). Локально оба можно не задавать: API на :8787 без токена.
+// а адрес бэкенда и его токен знает только сервер Next (src/lib/backend.ts). SSE пробрасывается потоком,
+// без буферизации.
 
-const BACKEND = (process.env.EB_API_URL ?? "http://127.0.0.1:8787").replace(/\/+$/, "");
-const TOKEN = process.env.EB_API_TOKEN ?? "";
-// settings — глобальные настройки RAG (стенд для жюри: «Сохранить» меняет бота для всех).
+import { BACKEND, adminHeaders, backendHeaders, isAdmin } from "@/lib/backend";
+
 const ALLOWED = new Set(["health", "kb", "chat", "lead", "feedback", "settings", "settings/reset"]);
+// Менять настройки RAG для всех может только администратор, вошедший на /settings. Остальные получают
+// песочницу: свои настройки уходят полем overrides в /api/chat и действуют только на их ответы.
+const ADMIN_ONLY = new Set(["POST settings", "POST settings/reset"]);
 
 // Ответ модели с перезапросами проверки занимает до пары минут, а функция Vercel живёт, пока идёт поток.
 // Умолчания платформы на это не рассчитаны: без запаса длинный ответ обрывался бы на середине.
 export const maxDuration = 300;
 
-/** Адрес посетителя: API считает по нему пределы частоты. Без него все посетители — один адрес Vercel. */
-function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip") || "";
-}
-
 async function proxy(request: Request, params: Promise<{ path: string[] }>) {
   const { path } = await params;
   const name = path.join("/");
   if (!ALLOWED.has(name)) return Response.json({ error: "not found" }, { status: 404 });
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
-  const ip = clientIp(request);
-  if (ip) headers["X-Client-IP"] = ip;
+  const headers = backendHeaders(request);
+  if (ADMIN_ONLY.has(`${request.method} ${name}`)) {
+    // Проверка здесь — чтобы не нести запрос дальше; Go-API проверяет токен ещё раз сам.
+    if (!isAdmin(request)) {
+      return Response.json({ error: "Глобальные настройки меняет только администратор стенда" }, { status: 401 });
+    }
+    Object.assign(headers, adminHeaders());
+  }
   const init: RequestInit = { method: request.method, headers, signal: request.signal, cache: "no-store" };
   if (request.method === "POST") init.body = await request.text();
   let upstream: Response;
