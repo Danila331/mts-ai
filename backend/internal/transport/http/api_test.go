@@ -1085,3 +1085,25 @@ func TestChatRoleHint(t *testing.T) {
 	assert.Len(t, bodies(), before)
 	assert.NotContains(t, store.sessions, "role-sess-2")
 }
+
+func TestChatSendsPassportToCoreForHonestNo(t *testing.T) {
+	core, bodies := recordingCore(t)
+	s, _ := rebuild(t, &memStore{}, core.URL)
+	q := `"messages": [{"role": "user", "content": "Хотим на оптовый рынок"}], "session_id": "sess-honest-1"`
+
+	// Первый вопрос: паспорта ещё нет — ядро получает только реплики.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", `{`+q+`, "mode": "chat"}`).Code)
+	// Клиент указал мощность в карточке паспорта, в чат её не писал.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPatch, "/api/sessions/sess-honest-1/passport",
+		`{"values": {"connected_power": "300 кВт"}}`).Code)
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", `{`+q+`, "mode": "chat"}`).Code)
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", `{`+q+`, "mode": "eval"}`).Code)
+
+	got := bodies()
+	require.Len(t, got, 3)
+	_, first := got[0]["passport"]
+	assert.False(t, first, "пустой паспорт ядру не нужен")
+	assert.Contains(t, string(got[1]["passport"]), "300 кВт", "правила «Честные нет» видят паспорт")
+	_, inEval := got[2]["passport"]
+	assert.False(t, inEval, "в автопроверке паспорта нет")
+}
