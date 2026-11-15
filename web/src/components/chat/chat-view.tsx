@@ -1,5 +1,6 @@
 "use client";
 
+import type { OpenChunk } from "./answer-text";
 import { CheckCircle2, ChevronRight, FileText, Headset } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -154,7 +155,7 @@ export function ChatView({
 }: {
   chat: ChatController;
   kb: KbIndex | null;
-  onOpenChunk: (chunkId: string) => void;
+  onOpenChunk: OpenChunk;
   selectedId?: string;
   /** explicit — пользователь сам попросил показать отладку этого ответа. */
   onSelect?: (messageId: string, explicit?: boolean) => void;

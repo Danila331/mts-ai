@@ -38,6 +38,11 @@ export function Copilot() {
   const chat = useChat("eb.copilot.sessions.v1", "copilot");
   const { kb } = useKb();
   const [chunk, setChunk] = useState<string | null>(null);
+  const [line, setLine] = useState<number | undefined>();
+  const openChunk = (id: string, hl?: number) => {
+    setChunk(id);
+    setLine(hl);
+  };
 
   return (
     <AppShell onNew={() => chat.create()} sidebar={chat.ready ? <SessionsList chat={chat} query="" /> : null}>
@@ -49,14 +54,14 @@ export function Copilot() {
           <ChatView
             chat={chat}
             kb={kb}
-            onOpenChunk={setChunk}
+            onOpenChunk={openChunk}
             heading="Что подготовить к клиенту?"
             greeting="Для менеджеров МТС: сравнение продуктов, черновик письма, ответ на возражение — только по базе знаний EnergyTool, с источниками."
             starters={SCENARIOS}
           />
         )}
       </div>
-      <ChunkSheet kb={kb} chunkId={chunk} onClose={() => setChunk(null)} />
+      <ChunkSheet kb={kb} chunkId={chunk} line={line} onClose={() => setChunk(null)} />
     </AppShell>
   );
 }

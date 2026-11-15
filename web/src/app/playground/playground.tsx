@@ -38,6 +38,11 @@ export function Playground() {
   const wide = useMediaQuery("(min-width: 1024px)", true);
   const [picked, setPicked] = useState<string>("");
   const [chunk, setChunk] = useState<string | null>(null);
+  const [line, setLine] = useState<number | undefined>();
+  const openChunk = (id: string, hl?: number) => {
+    setChunk(id);
+    setLine(hl);
+  };
   const [leadOpen, setLeadOpen] = useState(false);
   // «Новый диалог» (T31): начатая, но не отправленная заявка — сначала подтверждение.
   const [confirmNew, setConfirmNew] = useState(false);
@@ -87,7 +92,7 @@ export function Playground() {
       message={selected}
       question={question}
       kb={kb}
-      onOpenChunk={setChunk}
+      onOpenChunk={openChunk}
       onClose={() => setDebugOpen(false)}
     />
   );
@@ -197,7 +202,7 @@ export function Playground() {
           <ChatView
             chat={chat}
             kb={kb}
-            onOpenChunk={setChunk}
+            onOpenChunk={openChunk}
             selectedId={wide && debugOpen ? selected?.id : undefined}
             onSelect={(id, explicit) => {
               setPicked(id);
@@ -257,7 +262,7 @@ export function Playground() {
           chat.create();
         }}
       />
-      <ChunkSheet kb={kb} chunkId={chunk} onClose={() => setChunk(null)} marked={marked} />
+      <ChunkSheet kb={kb} chunkId={chunk} line={line} onClose={() => setChunk(null)} marked={marked} />
       {chat.active && (
         <LeadDialog
           session={chat.active}

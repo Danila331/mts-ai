@@ -220,7 +220,7 @@ export function EmbedChat({ allowedOrigins = NO_ORIGINS }: { allowedOrigins?: st
               compact
               greeting={greeting}
               starters={topic?.starters}
-              onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
+              onOpenChunk={(id, hl) => window.open(kbHref(id, hl), "_blank", "noopener")}
               onLead={() => setLeadOpen(true)}
               summary
               wizards={FLOWS}

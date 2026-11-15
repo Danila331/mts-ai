@@ -9,7 +9,7 @@ import { LEVELS, type LevelId, otherLevels } from "@/lib/level";
 import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand";
-import { AnswerText, SourcesRow } from "./answer-text";
+import { AnswerText, type OpenChunk, SourcesRow } from "./answer-text";
 import { DegradedSections } from "./degraded-sections";
 import { HonestNoNotice } from "./honest-no";
 import { ThinkingLine } from "./thinking-line";
@@ -113,7 +113,7 @@ export function MessageItem({
 }: {
   message: Message;
   kb: KbIndex | null;
-  onOpenChunk: (chunkId: string) => void;
+  onOpenChunk: OpenChunk;
   onRegenerate?: () => void;
   onRate?: (rating: 1 | -1) => void;
   onDebug?: () => void;
