@@ -215,6 +215,28 @@ def role_hint(mode: str, role: str) -> str:
     return ROLE_HINT.format(who=who, focus=focus)
 
 
+# Уровень объяснения (T16, веб-чат): «проще» или «технически». Как и роль — одна строка в конце системного промпта и
+# только в режиме chat: автопроверка и копилот получают промпт байт в байт как без уровня (tests/test_level.py).
+# Уровень меняет форму объяснения, а не содержание: те же факты, числа, продукты и ограничения из базы.
+LEVEL_HINT = (
+    "\n\nУровень объяснения: {style}. Это только форма: факты, числа, названия продуктов и ограничения те же, "
+    "что и при любом другом уровне. Уровень не добавляет фактов и не снимает оговорок: отвечай только по базе."
+)
+# id уровня → как объяснять. Тот же список — в backend/internal/session/level.go и web/src/lib/level.ts.
+LEVELS = {
+    "simple": "проще. Говори обычными словами, без терминов; если термин необходим, сразу поясни его словами из базы",
+    "technical": ("технически. Используй точные термины и пороги так, как они названы в базе, и называй реквизиты "
+                  "нормативных документов, если они есть в материалах"),
+}
+
+
+def level_hint(mode: str, level: str) -> str:
+    """Строка об уровне объяснения для системного промпта: только режим chat и только известный уровень."""
+    if mode != "chat" or level not in LEVELS:
+        return ""
+    return LEVEL_HINT.format(style=LEVELS[level])
+
+
 FINAL_REMINDER = (
     "Ответь на последнюю реплику клиента так, как ответил бы эксперт из ПРИМЕРОВ: прямой ответ, главное "
     "подтверждение из базы, одна важная оговорка и — только если он уместен по правилам — один уточняющий вопрос. "
@@ -296,12 +318,12 @@ def build_draft_messages(materials: str, turns: list) -> list:
 
 
 def build_write_messages(materials: str, turns: list, draft: str, mode: str = "eval", examples: bool = True,
-                         exclude_example: str = "", role: str = "") -> list:
+                         exclude_example: str = "", role: str = "", level: str = "") -> list:
     system = RULES_FULL + (CHAT_MODE if mode == "chat" else "") + (COPILOT_MODE if mode == "copilot" else "")
     if examples and mode != "copilot":
         system += "\n\nПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ (образец вывода, отбора фактов и формы; факты бери из базы)\n"
         system += render_examples(exclude_example)
-    system += role_hint(mode, role)
+    system += role_hint(mode, role) + level_hint(mode, level)
     user = f"МАТЕРИАЛЫ ПО ВОПРОСУ\n{materials}\n\n{render_dialog(turns)}\n\n{WRITE_TAIL.format(draft=draft)}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -524,7 +546,7 @@ def render_dialog(turns: list) -> str:
 def build_messages(reference: str, materials: str, turns: list, mode: str = "eval",
                    examples: bool = True, exclude_example: str = "", full_kb: bool = False,
                    plan: int = 0, style: str = "tight", near: int = 0, note: str = "",
-                   brief_think: bool = False, task: str = "", role: str = "") -> list:
+                   brief_think: bool = False, task: str = "", role: str = "", level: str = "") -> list:
     """reference — неизменная часть базы (справочник или вся база при full_kb), materials — найденное по вопросу.
     plan: 0 — сразу ответ, 1 — короткий разбор, 2 — разбор с цитатами; style: tight | full."""
     rules = {"full": RULES_FULL, "recipe": RULES_RECIPE, "jury": RULES_JURY, "jury2": RULES_JURY2}.get(style, RULES)
@@ -537,7 +559,7 @@ def build_messages(reference: str, materials: str, turns: list, mode: str = "eva
     if examples:
         system += "\n\nПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ (образец вывода, отбора фактов и длины; факты бери из базы)\n"
         system += render_examples(exclude_example)
-    system += role_hint(mode, role)  # в конце: общий префикс (правила, справочник, примеры) кэшируется как прежде
+    system += role_hint(mode, role) + level_hint(mode, level)  # в конце: общий префикс (правила, справочник, примеры) кэшируется как прежде
     title = "РАЗДЕЛЫ БАЗЫ, БЛИЖАЙШИЕ К ВОПРОСУ (подсказка поиска; остальная база выше)" if full_kb \
         else "МАТЕРИАЛЫ ПО ВОПРОСУ"
     tail = PLAN_QUOTES if plan == 2 else PLAN_REMINDER if plan else \

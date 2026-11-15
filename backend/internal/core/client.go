@@ -94,6 +94,10 @@ func (c *Client) Chat(ctx context.Context, req chat.Request) (chat.Stream, error
 	if req.Mode == dialog.ModeChat && req.Role.Known() {
 		body["role"] = req.Role.Role
 	}
+	// Уровень объяснения (T16) — так же: только чат, ядро проверит ещё раз.
+	if req.Mode == dialog.ModeChat && req.Level.Level.Known() {
+		body["level"] = req.Level.Level
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

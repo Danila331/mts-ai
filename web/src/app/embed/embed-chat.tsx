@@ -201,6 +201,7 @@ export function EmbedChat() {
               summary
               wizards={FLOWS}
               showRoles
+              showLevel
             />
           </div>
         )}
