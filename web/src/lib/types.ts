@@ -149,3 +149,31 @@ export interface Session {
   messages: Message[];
   lead?: { id: string; summary: string };
 }
+
+// ---------- настройки RAG (GET/POST /api/settings) ----------
+
+export type SettingValue = number | boolean | string;
+
+export interface SettingField {
+  key: string;
+  group: "search" | "generation";
+  kind: "int" | "float" | "bool" | "enum";
+  /** Переменная окружения ядра, из которой взято значение по умолчанию. */
+  env: string;
+  /** false — включить нельзя: нет индекса эмбеддингов, не настроена модель и т. п. */
+  available: boolean;
+  min?: number;
+  max?: number;
+  options?: (string | number)[];
+}
+
+export interface RagSettings {
+  fields: SettingField[];
+  values: Record<string, SettingValue>;
+  /** Значения из окружения ядра — к ним ведёт «Сбросить к окружению». */
+  defaults: Record<string, SettingValue>;
+  changed: string[];
+  model: string;
+  /** Unix-время последнего сохранения; null — действуют значения из окружения. */
+  updated_at: number | null;
+}

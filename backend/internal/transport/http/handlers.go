@@ -48,6 +48,51 @@ func (s *Server) kb(c echo.Context) error {
 	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
 }
 
+// settings — настройки RAG ядра как есть.
+func (s *Server) settings(c echo.Context) error {
+	raw, err := s.deps.Settings.Settings(c.Request().Context())
+	if err != nil {
+		return s.coreFail(c, err)
+	}
+	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
+}
+
+type settingsRequest struct {
+	Values json.RawMessage `json:"values"`
+}
+
+// saveSettings меняет настройки ядра. Шлюз проверяет только форму
+// ({"values": {...}}); имена, типы и пределы проверяет ядро — отказ
+// приходит 400 с его текстом.
+func (s *Server) saveSettings(c echo.Context) error {
+	var body settingsRequest
+	if err := decode(c, &body); err != nil {
+		return s.mapErr(c, err)
+	}
+	values := bytes.TrimSpace(body.Values)
+	if len(values) == 0 || values[0] != '{' {
+		return fail(c, http.StatusBadRequest, "values: ожидается объект {ключ: значение}")
+	}
+	payload, err := json.Marshal(map[string]json.RawMessage{"values": values})
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	raw, err := s.deps.Settings.SaveSettings(c.Request().Context(), payload)
+	if err != nil {
+		return s.coreFail(c, err)
+	}
+	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
+}
+
+// resetSettings возвращает настройки из окружения ядра.
+func (s *Server) resetSettings(c echo.Context) error {
+	raw, err := s.deps.Settings.ResetSettings(c.Request().Context())
+	if err != nil {
+		return s.coreFail(c, err)
+	}
+	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
+}
+
 type chatRequest struct {
 	Messages json.RawMessage `json:"messages"`
 	Mode     string          `json:"mode"`

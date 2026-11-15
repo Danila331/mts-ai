@@ -62,6 +62,23 @@ func (c *Client) KB(ctx context.Context) (json.RawMessage, error) {
 	return c.getJSON(ctx, "/core/kb")
 }
 
+// Settings — настройки RAG ядра: текущие значения, значения из
+// окружения и пределы. Набор полей принадлежит ядру и фронту.
+func (c *Client) Settings(ctx context.Context) (json.RawMessage, error) {
+	return c.getJSON(ctx, "/core/settings")
+}
+
+// SaveSettings меняет настройки ядра для всех ответов; тело —
+// {"values": {...}} как есть, проверяет его ядро.
+func (c *Client) SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error) {
+	return c.postJSON(ctx, "/core/settings", body)
+}
+
+// ResetSettings возвращает настройки из окружения ядра.
+func (c *Client) ResetSettings(ctx context.Context) (json.RawMessage, error) {
+	return c.postJSON(ctx, "/core/settings/reset", json.RawMessage(`{}`))
+}
+
 // Chat открывает поток ответа.
 func (c *Client) Chat(ctx context.Context, req chat.Request) (usecase.Stream, error) {
 	body := map[string]any{"messages": req.Turns}
@@ -110,6 +127,33 @@ func (c *Client) getJSON(ctx context.Context, path string) (json.RawMessage, err
 		return nil, readError(resp)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !json.Valid(raw) {
+		return nil, &Error{Status: resp.StatusCode, Msg: "ответ не JSON"}
+	}
+	return raw, nil
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, body json.RawMessage) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	r, err := c.request(ctx, http.MethodPost, path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	r.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(r)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}

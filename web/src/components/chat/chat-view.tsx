@@ -9,6 +9,7 @@ import { sendFeedback } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Composer } from "./composer";
 import { BotAvatar, MessageItem } from "./message-item";
+import { BrandGlyph } from "@/components/brand";
 import { Starters } from "./starters";
 
 const GREETING =
@@ -129,23 +130,22 @@ export function ChatView({
     />
   );
 
-  // Пустой стенд: приветствие и поле ввода по центру, как в ChatGPT.
+  // Пустой стенд — как в Claude: знак и вопрос одной строкой, поле ввода, тихие подсказки под ним.
   if (!messages.length && !compact) {
     return (
       <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col justify-center px-5 pt-6 pb-[12vh] sm:px-6">
-          <div className="flex flex-col items-center text-center">
-            <BotAvatar className="size-12 shadow-[0_6px_20px_-6px_rgb(255_0_50/0.55)]" />
-            <h1 className="mt-5 text-[28px] leading-[1.15] font-semibold tracking-[-0.025em] sm:text-[32px]">
+        <div className="mx-auto flex min-h-full w-full max-w-[680px] flex-col justify-center px-5 pt-6 pb-[14vh] sm:px-6">
+          <div className="msg-in flex flex-col items-center text-center">
+            <h1 className="flex items-center gap-3 text-[26px] leading-tight font-medium tracking-[-0.02em] sm:text-[30px]">
+              <BrandGlyph className="size-8 sm:size-9" />
               Чем помочь с электроэнергией?
             </h1>
-            <p className="mt-3 max-w-[30rem] text-[15px] leading-relaxed text-pretty text-muted-foreground">
-              {greeting ??
-                "Отвечаю только по базе знаний МТС EnergyTool и показываю, из какого раздела взят каждый факт."}
+            <p className="mt-2.5 max-w-[36rem] text-[14px] leading-relaxed text-pretty text-muted-foreground">
+              {greeting ?? "Отвечаю только по базе знаний МТС EnergyTool и показываю источник каждого факта."}
             </p>
           </div>
-          <div className="mt-8">{composer}</div>
-          <div className="mt-5">
+          <div className="mt-7">{composer}</div>
+          <div className="mt-4">
             <Starters onPick={send} />
           </div>
         </div>

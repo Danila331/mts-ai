@@ -14,6 +14,9 @@
 | `POST /api/chat` `{messages, mode}` | SSE ядра насквозь: `stage` → `stage` → `answer` → `done`; ответ ложится в `answers` |
 | `POST /api/lead` | заявка с резюме модели (без модели — список вопросов) → `leads`; ответ `{id, summary}` |
 | `POST /api/feedback` | 👍/👎 → `feedback` |
+| `GET /api/settings` | настройки RAG ядра: текущие, из окружения, пределы |
+| `POST /api/settings` | `{"values": {...}}` — глобально, до перезапуска ядра; проверяет ядро |
+| `POST /api/settings/reset` | вернуть значения из окружения |
 
 Ошибки — `{"error": "…"}`: так их читает фронт.
 

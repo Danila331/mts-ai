@@ -6,16 +6,23 @@ import { ThemeProvider as NextThemes, useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
-/** Светлая/тёмная/как в системе. Чат в виджете всегда светлый: он живёт на чужом (светлом) сайте. */
+/**
+ * Пока стенд только в светлой теме: тёмная не доведена (решение владельца, ноябрь 2026).
+ * Токены `.dark` в globals.css остаются — чтобы вернуть тему, поставьте LIGHT_ONLY = false
+ * и верните <ThemeToggle /> в подвал сайдбара. Чат в виджете светлый всегда: он живёт на чужом сайте.
+ */
+const LIGHT_ONLY = true;
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const forceLight = LIGHT_ONLY || pathname?.startsWith("/embed");
   return (
     <NextThemes
       attribute="class"
-      defaultTheme="system"
-      enableSystem
+      defaultTheme={LIGHT_ONLY ? "light" : "system"}
+      enableSystem={!LIGHT_ONLY}
       disableTransitionOnChange
-      forcedTheme={pathname?.startsWith("/embed") ? "light" : undefined}
+      forcedTheme={forceLight ? "light" : undefined}
       storageKey="eb.theme"
     >
       {children}

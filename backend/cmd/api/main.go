@@ -88,6 +88,7 @@ func main() {
 		Feedback: feedbackuc.New(store),
 		Health:   health.New(coreClient, store),
 		KB:       coreClient,
+		Settings: coreClient,
 	}, log)
 
 	addr := fmt.Sprintf(":%d", cfg.HTTP.Port)

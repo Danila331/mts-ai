@@ -50,6 +50,11 @@ type (
 	KB interface {
 		KB(ctx context.Context) (json.RawMessage, error)
 	}
+	Settings interface {
+		Settings(ctx context.Context) (json.RawMessage, error)
+		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
+		ResetSettings(ctx context.Context) (json.RawMessage, error)
+	}
 )
 
 // Deps — всё, из чего собирается сервер.
@@ -59,6 +64,7 @@ type Deps struct {
 	Feedback Feedback
 	Health   Health
 	KB       KB
+	Settings Settings
 }
 
 type Server struct {
@@ -163,6 +169,10 @@ func (s *Server) routes() {
 	api.POST("/chat", s.chat, chatLimit)
 	api.POST("/lead", s.lead, leadLimit)
 	api.POST("/feedback", s.feedback, feedbackLimit)
+	// Настройки RAG глобальные: стенд для жюри, «Сохранить» меняет бота для всех.
+	api.GET("/settings", s.settings)
+	api.POST("/settings", s.saveSettings)
+	api.POST("/settings/reset", s.resetSettings)
 }
 
 // Start слушает адрес. Таймаута на запись нет намеренно: ответ идёт
