@@ -187,12 +187,39 @@ scripts/simulate_budget.py  бюджет времени: расчётная та
 
 - `ci.yml` — на каждый PR: `ruff`, тесты, сверка ZIP с регламентом, `actionlint`; TypeScript — когда появится `web/`.
 - `backend.yml` — Go-тесты на Postgres и сборка всех образов из `compose.yaml` (включая `web`) со сквозным `smoke.sh`.
+- `security.yml` — на каждый PR и раз в неделю: уязвимости зависимостей и образов, SBOM (раздел «Зависимости и их проверка»).
 - `release-gate.yml` — на PR `dev → main`: сверка ZIP с регламентом и ревью Codex на соответствие регламенту.
   Прогон бота на выборке и слепой судья в CI не запускаются — оценка качества локально (`eval/lab.py`).
 - Vercel — каждое слияние в `main` само выкатывает фронт `web/` на https://energytool-ai.vercel.app.
 
 Слепой судья Codex локально — `python eval/codex_judge.py --set demo --packets 3`.
 Секреты, вход Codex по подписке ChatGPT, запуск судьи другим разработчиком и настройка защиты `main` — в [`docs/ci.md`](docs/ci.md).
+
+## Зависимости и их проверка
+
+- **Версии зафиксированы:** Go — `backend/go.mod` и `go.sum` (директива `go` — точный патч, от него зависят
+  уязвимости stdlib); npm — `web/package-lock.json`; Python — `solution-requirements.txt` и `requirements-dev.txt`
+  с `==`; базовые образы в Dockerfile и `compose.yaml` — тег и `@sha256` digest; GitHub Actions — по SHA коммита
+  с версией в комментарии.
+- **Проверки (`security.yml`):** `govulncheck` (падает только на достижимых из нашего кода уязвимостях,
+  `.github/scripts/govulncheck_gate.py`), `npm audit --audit-level=high`, `pip-audit` по обоим файлам требований,
+  `trivy fs` (уязвимости и секреты в репозитории) и `trivy image` по образам `api`, `core`, `web`. Падают HIGH и
+  CRITICAL, у которых есть исправление.
+- **SBOM:** `trivy fs --format cyclonedx` — артефакт `sbom-cyclonedx` каждого прогона.
+- **Обновления:** Dependabot (`.github/dependabot.yml`) раз в неделю присылает PR в `dev` по gomod, npm, pip,
+  Docker, compose и Actions; обновления безопасности — сразу.
+- **Исключения — только с причиной:** `backend/.govulncheck-ignore` и `.trivyignore`. Сейчас там две уязвимости
+  echo v4, исправленные только в echo v5 (обход предела частоты через `X-Forwarded-For`, проброс `X-Real-IP`
+  прокси-middleware): у нас адрес для пределов берётся из `X-Client-IP` прокси Next при заданном `EB_API_TOKEN`,
+  а прокси-middleware echo не используется. Переход на v5 и проверка доверенного источника адреса — T35.
+
+Локально:
+
+```bash
+(cd backend && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...)
+(cd web && npm audit --audit-level=high)
+uvx --from pip-audit==2.10.1 pip-audit -r solution-requirements.txt
+```
 
 ## Быстрый старт
 

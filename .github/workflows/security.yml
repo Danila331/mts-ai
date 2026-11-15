@@ -1,0 +1,136 @@
+name: Security
+
+# Цепочка поставок: известные уязвимости в зависимостях Go, npm и Python, в исходниках и в
+# образах трёх своих служб (api, core, web), плюс SBOM. Красное здесь — повод обновить
+# зависимость или осознанно внести исключение с причиной (backend/.govulncheck-ignore,
+# .trivyignore), а не выключить проверку.
+#
+# Раз в неделю — тоже: уязвимости публикуют и в зависимостях, которые мы не трогали.
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIVY_VERSION: v0.76.2
+
+jobs:
+  go:
+    name: Go — govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          # Версия Go из go.mod — та же, что у образа: уязвимости stdlib зависят от патча.
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" -format json ./... > govulncheck.json
+          python3 ../.github/scripts/govulncheck_gate.py .govulncheck-ignore < govulncheck.json
+
+  npm:
+    name: npm — audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      # По lock-файлу, без установки: high и critical — красное, moderate — в журнале.
+      - name: npm audit
+        run: npm audit --audit-level=high
+
+  pip:
+    name: Python — pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - name: pip-audit
+        run: |
+          pip install pip-audit==2.10.1
+          # Сабмит и образ ядра ставят ровно solution-requirements.txt; dev — линтер и тесты CI.
+          pip-audit -r solution-requirements.txt
+          pip-audit -r requirements-dev.txt
+
+  fs:
+    name: Исходники — trivy fs и SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Уязвимости и секреты в репозитории
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: "1"
+      - name: SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          format: cyclonedx
+          output: sbom.cdx.json
+          skip-setup-trivy: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 30
+
+  images:
+    name: Образ ${{ matrix.name }} — trivy image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: api, context: backend, dockerfile: backend/Dockerfile }
+          - { name: core, context: ., dockerfile: core/Dockerfile }
+          - { name: web, context: web, dockerfile: web/Dockerfile }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Сборка
+        run: docker build -t "energytool-${{ matrix.name }}:ci" -f "${{ matrix.dockerfile }}" "${{ matrix.context }}"
+      - name: Уязвимости образа
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: energytool-${{ matrix.name }}:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: "1"
