@@ -477,7 +477,7 @@ function SearchTab({ r, kb, onOpen }: { r: Retrieval; kb: KbIndex | null; onOpen
                   path={h.path}
                   dim={!h.in_context}
                   aside={<Score hit={h} max={max} />}
-                  sub={<span className="mt-1 line-clamp-1 text-xs text-muted-foreground/80">{h.preview}</span>}
+                  sub={<span className="mt-1 line-clamp-1 text-xs text-muted-foreground">{h.preview}</span>}
                 />
               </li>
             ))}

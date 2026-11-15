@@ -74,7 +74,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   const cfg: Config = {
     title: d.title || "Консультант EnergyTool",
     subtitle: d.subtitle || "Отвечает по базе знаний МТС",
-    color: d.color && hex.test(d.color) ? d.color : "#FF0032",
+    color: d.color && hex.test(d.color) ? d.color : "#E60030",
     position: d.position === "left" ? "left" : "right",
     greeting: d.greeting ?? "Здравствуйте! Подберу решение по энергоучёту, потерям и солнечной генерации.",
     greetingDelay: Number(d.greetingDelay ?? 6),
@@ -142,7 +142,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   .bubble .quick button:hover { background: var(--c); color: #fff; }
   .bubble .quick button:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 45%, white); outline-offset: 1px; }
   .bubble .x { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border: 0; padding: 0; background: none;
-    color: #969FA8; cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
+    color: #626C77; cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
   .bubble .x svg { width: 14px; height: 14px; }
   .bubble .x:hover { background: #F2F3F7; color: #1D2023; }
   .panel {
@@ -158,10 +158,14 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
   .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #626C77; font: 13px ${font}; }
   @media (max-width: 640px) {
+    /* T43: цели касания ≥ 44 px */
+    .bubble .x { width: 44px; height: 44px; top: 0; right: 0; }
+    .bubble .x svg { width: 18px; height: 18px; }
+    .bubble .quick button { min-height: 44px; display: flex; align-items: center; }
     .panel { inset: 0; width: 100%; height: 100%; border-radius: 0; bottom: 0; ${side}: 0; }
     .open .launcher { display: none; }
   }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 <div class="wrap">
   <div class="panel" role="dialog" aria-label="${escapeHtml(cfg.title)}" aria-modal="false">

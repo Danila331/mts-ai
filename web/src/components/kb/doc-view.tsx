@@ -208,7 +208,7 @@ export function DocView({
                       {parts.map((p, i) => (
                         <span key={i} className={i < parts.length - 1 ? "font-normal text-muted-foreground" : undefined}>
                           {p}
-                          {i < parts.length - 1 && <span className="mx-1.5 text-muted-foreground/50">/</span>}
+                          {i < parts.length - 1 && <span className="mx-1.5 text-muted-foreground">/</span>}
                         </span>
                       ))}
                     </h2>
@@ -259,7 +259,7 @@ export function DocView({
                         : "border-transparent text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    <span className="tnum w-[34px] shrink-0 pt-px font-mono text-[11px] text-muted-foreground/70">{sectionNo.get(c.id)}</span>
+                    <span className="tnum w-[34px] shrink-0 pt-px font-mono text-[11px] text-muted-foreground">{sectionNo.get(c.id)}</span>
                     <span className="min-w-0">{sectionParts(c.path, doc.title).pop()}</span>
                   </button>
                 </li>

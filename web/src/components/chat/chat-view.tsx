@@ -154,7 +154,8 @@ export function ChatView({
   const last = messages[messages.length - 1];
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    bottom.current?.scrollIntoView({ block: "end", behavior: calm ? "auto" : "smooth" });
   }, [messages.length, last?.pending, last?.stage]);
 
   // Печатающийся ответ (T13) тянет ленту за собой, только пока человек внизу: отмотал вверх читать — не дёргаем.
@@ -326,6 +327,15 @@ export function ChatView({
               compact={compact}
             />
           )}
+          {/* Лента (T43): читалка озвучивает готовый ответ целиком — пока идёт генерация, aria-busy держит озвучку. */}
+          <div
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+            aria-busy={chat.busy}
+            aria-label="Диалог с консультантом"
+            className={cn("flex flex-col", compact ? "gap-5" : "gap-7")}
+          >
           {messages.map((m) => (
             <MessageItem
               key={m.id}
@@ -346,6 +356,7 @@ export function ChatView({
               onRate={m.role === "assistant" && m.answer ? (r) => rate(m.id, r) : undefined}
             />
           ))}
+          </div>
           {showInlineLead && session && <InlineLead key={session.id} session={session} onDone={leadDone} compact={compact} />}
           <div ref={bottom} />
         </div>

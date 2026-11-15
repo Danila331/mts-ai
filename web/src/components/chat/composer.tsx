@@ -152,7 +152,7 @@ export function Composer({
       type="button"
       onClick={onStop}
       aria-label="Остановить ответ"
-      className="flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-85 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      className="flex size-9 max-sm:size-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-85 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
     >
       <Square className="size-3 fill-current" />
     </button>
@@ -163,7 +163,7 @@ export function Composer({
       disabled={!ready}
       aria-label="Отправить"
       className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-brand/30 focus-visible:outline-none",
+        "flex size-9 max-sm:size-11 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-brand/30 focus-visible:outline-none",
         ready ? "bg-brand text-white hover:bg-primary" : "cursor-default bg-muted text-muted-foreground/70 dark:bg-accent",
       )}
     >
@@ -189,7 +189,7 @@ export function Composer({
           : OCR_OFF_HINT
       }
       className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50",
+        "flex size-9 max-sm:size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50",
         ocr.enabled ? "hover:bg-muted hover:text-foreground" : "cursor-help opacity-45",
       )}
     >
@@ -264,7 +264,7 @@ export function Composer({
       aria-label={dictation.listening ? "Остановить диктовку" : "Надиктовать сообщение"}
       title={dictation.listening ? "Слушаю — нажмите, чтобы закончить" : "Надиктовать: текст появится в поле, отправите сами"}
       className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50",
+        "flex size-9 max-sm:size-11 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50",
         dictation.listening
           ? "bg-brand-soft text-brand-text motion-safe:animate-pulse"
           : "text-muted-foreground hover:bg-muted hover:text-foreground",

@@ -171,7 +171,7 @@ function Checklist({ analysis, file }: { analysis: Analysis; file: Loaded }) {
                   {optional && <span className="text-[12px] font-normal text-muted-foreground">желательно</span>}
                 </p>
                 <p className="mt-0.5 text-[13px] leading-snug text-muted-foreground">{detail(req, analysis, file)}</p>
-                <p className="mt-1 text-[12px] leading-snug text-muted-foreground/80">
+                <p className="mt-1 text-[12px] leading-snug text-muted-foreground">
                   В базе: «{REQUIREMENT_QUOTES[req]}»
                 </p>
               </div>

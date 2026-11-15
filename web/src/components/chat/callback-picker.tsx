@@ -29,7 +29,7 @@ export function CallbackPicker({
   return (
     <fieldset className={cn("grid gap-2", className)} aria-describedby={`${id}-hint`}>
       <legend className="mb-1.5 text-[12.5px] text-muted-foreground">
-        {CALLBACK_QUESTION} <span className="text-muted-foreground/80">· необязательно</span>
+        {CALLBACK_QUESTION} <span className="text-muted-foreground">· необязательно</span>
       </legend>
       <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={CALLBACK_QUESTION}>
         {CALLBACK_TIMES.map((t) => {

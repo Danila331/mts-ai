@@ -43,3 +43,7 @@ next-env.d.ts
 # локальные заявки и оценки веб-чата, собранный виджет
 /.data/
 /public/widget.js
+
+# playwright
+/test-results/
+/playwright-report/

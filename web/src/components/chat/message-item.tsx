@@ -37,7 +37,7 @@ function IconAction({
             aria-label={label}
             aria-pressed={active}
             className={cn(
-              "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-4",
+              "flex size-8 max-sm:size-11 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-4",
               active && "text-foreground",
             )}
           />

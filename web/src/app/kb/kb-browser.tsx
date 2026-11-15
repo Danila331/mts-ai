@@ -72,7 +72,7 @@ export function KbBrowser() {
               <X className="size-3.5" />
             </button>
           ) : (
-            kb && <span className="tnum font-mono text-[11px] text-muted-foreground/70">{kb.byId.size}</span>
+            kb && <span className="tnum font-mono text-[11px] text-muted-foreground">{kb.byId.size}</span>
           )}
         </label>
       </div>
@@ -112,7 +112,7 @@ export function KbBrowser() {
             <section key={group} aria-label={GROUPS[group] ?? group} className="mt-3 first:mt-1">
               <div className="flex items-baseline justify-between px-2.5 pt-2 pb-1.5">
                 <span className="text-xs font-medium text-muted-foreground">{GROUPS[group] ?? group}</span>
-                <span className="tnum font-mono text-[11px] text-muted-foreground/70">{docs.length}</span>
+                <span className="tnum font-mono text-[11px] text-muted-foreground">{docs.length}</span>
               </div>
               {docs.map((d) => {
                 const active = d.doc === doc?.doc;
@@ -136,7 +136,7 @@ export function KbBrowser() {
                         <span
                           className={cn(
                             "tnum w-5 shrink-0 font-mono text-[11px]",
-                            active ? "font-medium text-brand-text" : "text-muted-foreground/80",
+                            active ? "font-medium text-brand-text" : "text-muted-foreground",
                           )}
                         >
                           {docNumber(d.doc)}
@@ -197,7 +197,7 @@ export function KbBrowser() {
         )}
       </div>
       {kb && (
-        <p className="tnum shrink-0 truncate px-4.5 pt-1 pb-2 text-[11.5px] text-muted-foreground/80">
+        <p className="tnum shrink-0 truncate px-4.5 pt-1 pb-2 text-[11.5px] text-muted-foreground">
           {kb.data.docs.length} док. · {kb.byId.size} разд. · версия{" "}
           <span className="font-mono">{kb.data.fingerprint.slice(0, 8)}</span>
         </p>
@@ -213,7 +213,7 @@ export function KbBrowser() {
           doc ? (
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="shrink-0 font-medium text-muted-foreground">{GROUPS[doc.group] ?? doc.group}</span>
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70" />
+              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="truncate">{doc.title}</span>
             </span>
           ) : (

@@ -115,7 +115,7 @@ export function EmbedChat() {
     : undefined;
 
   const headerButton =
-    "flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-[18px]";
+    "flex size-8 max-sm:size-11 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-[18px]";
 
   return (
     <div className="flex h-dvh flex-col bg-background" style={style}>

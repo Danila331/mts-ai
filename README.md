@@ -249,7 +249,7 @@ env -i PATH="$PATH" LLM_BASE_URL=http://127.0.0.1:8790/v1 LLM_API_KEY=test-key E
 
 ## CI
 
-- `ci.yml` — на каждый PR: `ruff`, тесты, сверка ZIP с регламентом, `actionlint`; TypeScript; размер `widget.js` ≤ 8 КБ gzip (T32).
+- `ci.yml` — на каждый PR: `ruff`, тесты, сверка ZIP с регламентом, `actionlint`; TypeScript; размер `widget.js` ≤ 8 КБ gzip (T32); доступность — Playwright + axe на `/playground`, `/embed`, `/kb` (T43, `cd web && npm run test:a11y`).
 - `backend.yml` — Go-тесты на Postgres и сборка всех образов из `compose.yaml` (включая `web`) со сквозным `smoke.sh`.
 - `security.yml` — на каждый PR и раз в неделю: уязвимости зависимостей и образов, SBOM (раздел «Зависимости и их проверка»).
 - `release-gate.yml` — на PR `dev → main`: сверка ZIP с регламентом и ревью Codex на соответствие регламенту.
