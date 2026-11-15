@@ -1,0 +1,12 @@
+# Дашборды лежат в репозитории (monitoring/grafana/dashboards) и
+# подхватываются при старте; правка в интерфейсе не сохраняется.
+apiVersion: 1
+providers:
+  - name: energytool
+    orgId: 1
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
