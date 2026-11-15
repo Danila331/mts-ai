@@ -12,6 +12,10 @@
  * других параметров адреса и referrer — и тему страницы по data-topics (префикс пути → тема). Тема ещё и в адресе
  * iframe (?topic=), чтобы приветствие было верным с первого кадра; путь и метки в адрес iframe не попадают.
  *
+ * Фасад (T32): до первого взаимодействия на сайт попадает только этот файл (несколько КБ, без зависимостей).
+ * Наведение, фокус или касание кнопки (и показ подсказки) — preconnect к хосту чата; iframe с бандлом чата создаётся
+ * по клику, при ask() и при восстановленном открытом состоянии. Сообщения до eb:ready встают в очередь.
+ *
  * Потоковая выдача (T13): по умолчанию ответ печатается по мере генерации; data-stream="0" — ответ появляется
  * целиком, когда его проверили. Флаг — так же, как тема: в адресе iframe (?stream=0) и в сообщении eb:page.
  */
@@ -70,7 +74,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   const cfg: Config = {
     title: d.title || "Консультант EnergyTool",
     subtitle: d.subtitle || "Отвечает по базе знаний МТС",
-    color: d.color && hex.test(d.color) ? d.color : "#FF0032",
+    color: d.color && hex.test(d.color) ? d.color : "#E60030",
     position: d.position === "left" ? "left" : "right",
     greeting: d.greeting ?? "Здравствуйте! Подберу решение по энергоучёту, потерям и солнечной генерации.",
     greetingDelay: Number(d.greetingDelay ?? 6),
@@ -138,7 +142,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   .bubble .quick button:hover { background: var(--c); color: #fff; }
   .bubble .quick button:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 45%, white); outline-offset: 1px; }
   .bubble .x { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border: 0; padding: 0; background: none;
-    color: #969FA8; cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
+    color: #626C77; cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
   .bubble .x svg { width: 14px; height: 14px; }
   .bubble .x:hover { background: #F2F3F7; color: #1D2023; }
   .panel {
@@ -154,10 +158,14 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
   .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #626C77; font: 13px ${font}; }
   @media (max-width: 640px) {
+    /* T43: цели касания ≥ 44 px */
+    .bubble .x { width: 44px; height: 44px; top: 0; right: 0; }
+    .bubble .x svg { width: 18px; height: 18px; }
+    .bubble .quick button { min-height: 44px; display: flex; align-items: center; }
     .panel { inset: 0; width: 100%; height: 100%; border-radius: 0; bottom: 0; ${side}: 0; }
     .open .launcher { display: none; }
   }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 <div class="wrap">
   <div class="panel" role="dialog" aria-label="${escapeHtml(cfg.title)}" aria-modal="false">
@@ -224,6 +232,17 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   function post(msg: unknown) {
     if (ready && iframe?.contentWindow) iframe.contentWindow.postMessage(msg, origin);
     else queue.push(msg);
+  }
+
+  /** Соединение с хостом чата заранее: к клику TCP и TLS уже готовы, а сам бандл ещё не скачан. */
+  let preconnected = false;
+  function preconnect() {
+    if (preconnected || iframe) return;
+    preconnected = true;
+    const link = document.createElement("link");
+    link.rel = "preconnect";
+    link.href = origin;
+    document.head.appendChild(link);
   }
 
   function hideBubble() {
@@ -303,12 +322,15 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     document.body.appendChild(host);
     if (cfg.open || sessionStorage.getItem(STORAGE_OPEN)) open();
     else if (cfg.greeting && !sessionStorage.getItem(STORAGE_GREETED) && cfg.greetingDelay >= 0) {
-      setTimeout(() => !isOpen && bubble.classList.add("show"), cfg.greetingDelay * 1000);
+      setTimeout(() => {
+        if (isOpen) return;
+        preconnect();
+        bubble.classList.add("show");
+      }, cfg.greetingDelay * 1000);
     }
-    // Чат подгружаем заранее, когда браузер свободен: открытие будет мгновенным.
-    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
-    if (idle) idle(ensureFrame);
-    else setTimeout(ensureFrame, 2500);
+    // Фасад: iframe не грузим, пока посетитель не проявил интерес (наведение, фокус, касание, клик).
+    for (const ev of ["pointerenter", "focus", "touchstart"]) launcher.addEventListener(ev, preconnect, { once: true, passive: true });
+    bubble.addEventListener("pointerenter", preconnect, { once: true });
   };
   if (document.body) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });

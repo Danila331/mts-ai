@@ -211,7 +211,9 @@ export function ChatView({
     const answerTop = answer ? answer.getBoundingClientRect().top - box.top + el.scrollTop : undefined;
     const sticky = el.querySelector<HTMLElement>("[data-sticky]")?.offsetHeight ?? 0;
     const target = followTarget(el, answerTop, following.current, 12 + sticky);
-    if (target !== null) el.scrollTo({ top: target, behavior: typedLength ? "auto" : "smooth" });
+    // prefers-reduced-motion (T43): без плавной прокрутки.
+    const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (target !== null) el.scrollTo({ top: target, behavior: typedLength || calm ? "auto" : "smooth" });
   }, [messages.length, last?.id, last?.role, last?.pending, last?.stage, typedLength]);
 
   const send = (text: string) => {
@@ -384,6 +386,15 @@ export function ChatView({
               compact={compact}
             />
           )}
+          {/* Лента (T43): читалка озвучивает готовый ответ целиком — пока идёт генерация, aria-busy держит озвучку. */}
+          <div
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+            aria-busy={chat.busy}
+            aria-label="Диалог с консультантом"
+            className={cn("flex flex-col", compact ? "gap-5" : "gap-7")}
+          >
           {messages.map((m) => (
             <div key={m.id} data-message-id={m.id} className="min-w-0">
             <MessageItem
@@ -406,6 +417,7 @@ export function ChatView({
             />
             </div>
           ))}
+          </div>
           <QuickReplies items={suggestions} onPick={send} compact={compact} />
           {showInlineLead && session && <InlineLead key={session.id} session={session} onDone={leadDone} compact={compact} />}
         </div>

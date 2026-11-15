@@ -107,7 +107,7 @@ function Row({
           className="group/value flex min-w-0 items-start gap-1.5 text-left text-[13px] leading-snug"
           aria-label={`${field.label}: ${field.value || "не указано"}. Изменить`}
         >
-          <span className={cn("min-w-0 break-words", !field.value && "text-muted-foreground/70")}>
+          <span className={cn("min-w-0 break-words", !field.value && "text-muted-foreground")}>
             {field.value || "—"}
           </span>
           <Pencil className="mt-0.5 size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100" />

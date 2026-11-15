@@ -108,7 +108,7 @@ function ReportView({ report }: { report: PersonasReport }) {
       )}
 
       <section>
-        <p className="font-mono text-[11.5px] text-muted-foreground/80">
+        <p className="font-mono text-[11.5px] text-muted-foreground">
           {date} · {report.model || "модель не указана"} · схема {report.config.arch}, стиль {report.config.style} ·
           режим {report.config.mode}
           {report.commit && ` · коммит ${report.commit}`}

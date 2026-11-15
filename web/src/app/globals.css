@@ -83,7 +83,7 @@
   --popover-foreground: #1d2023;
 
   /* Мягкий красный: приглушённый кирпично-коралловый вместо кислотного #ff0032 (решение владельца, ноябрь 2026). */
-  --brand: #d9474d;
+  --brand: #d0424a;
   --brand-foreground: #ffffff;
   --brand-soft: #fbeeee;
   --brand-text: #c23a41;
@@ -103,10 +103,10 @@
   --info: #0063cc;
 
   /* Сплошные мягкие подложки вместо полупрозрачных: метки, статусы, подсветки. */
-  --success-soft: #e4f3ea;
+  --success-soft: #e9f5ee;
   --warning-soft: #fbefdf;
   --info-soft: #e4eefb;
-  --destructive-soft: #fde7eb;
+  --destructive-soft: #fdecef;
   --mark: #f6d4d5;
   --field: #ffffff;
   /* Приглушённые точки, дорожки индикаторов, неактивные сегменты. */
@@ -152,7 +152,7 @@
   --popover: #26292d;
   --popover-foreground: #eceef1;
 
-  --brand: #ff0032;
+  --brand: #e60030;
   --brand-foreground: #ffffff;
   --brand-soft: #3a1a21;
   --brand-text: #ff5c76;
@@ -372,6 +372,18 @@
 }
 .msg-in {
   animation: msg-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* T43: при prefers-reduced-motion гасим любые анимации и переходы, включая утилиты Tailwind (animate-ping и др.). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

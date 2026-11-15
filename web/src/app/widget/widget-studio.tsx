@@ -772,7 +772,7 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                       {host}
                       {path !== "/" && <span className="text-muted-foreground">{path}</span>}
                     </span>
-                    {mts && <span className="shrink-0 text-muted-foreground/70">· копия для стенда</span>}
+                    {mts && <span className="shrink-0 text-muted-foreground">· копия для стенда</span>}
                   </div>
                   <Tooltip>
                     <TooltipTrigger

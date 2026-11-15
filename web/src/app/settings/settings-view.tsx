@@ -167,7 +167,7 @@ function Row({
         <p className="mt-0.5 text-[13px] leading-snug text-muted-foreground">
           {field.available ? copy.hint : (copy.off ?? copy.hint)}
         </p>
-        <p className="mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[11.5px] text-muted-foreground/80">
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[11.5px] text-muted-foreground">
           <span>{field.env}</span>
           {offEnv && (
             <>
@@ -474,7 +474,7 @@ export function SettingsView() {
                     <div>
                       <p className="text-[14px] font-medium">Генерация</p>
                       <p className="mt-0.5 text-[13px] text-muted-foreground">Задаётся окружением ядра, здесь не меняется.</p>
-                      <p className="mt-1 font-mono text-[11.5px] text-muted-foreground/80">LLM_MODEL</p>
+                      <p className="mt-1 font-mono text-[11.5px] text-muted-foreground">LLM_MODEL</p>
                     </div>
                     <span className="font-mono text-[12.5px]">{data.model || "не настроена"}</span>
                   </li>
