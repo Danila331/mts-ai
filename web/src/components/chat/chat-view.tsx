@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ChevronRight, FileText, Headset } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, FileText, Headset } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ChatController } from "@/hooks/use-chat";
@@ -32,7 +32,7 @@ import { LevelSwitch } from "./level-switch";
 import { RoleBadge, RolePicker, roleStarters } from "./role-picker";
 import { type Starter, Starters } from "./starters";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ROLES } from "@/lib/roles";
+import { ROLES, type RoleId } from "@/lib/roles";
 
 /** Метка «ИИ-ассистент» (T31): человек сразу видит, что отвечает не менеджер. */
 function AiTag({ className }: { className?: string }) {
@@ -134,6 +134,58 @@ function SummaryButton({ onClick, compact }: { onClick: () => void; compact?: bo
   );
 }
 
+/**
+ * Пустой виджет: приветствие и первые вопросы не должны уезжать за экран. Роли («Кто вы?») и остальные мастера —
+ * за двумя тихими ссылками под карточкой; выбранная роль держит список открытым.
+ */
+function EmptyExtras({
+  wizards,
+  onStart,
+  roles,
+  role,
+  onRole,
+}: {
+  wizards?: readonly WizardFlow[];
+  onStart: (flow: WizardFlow) => void;
+  roles?: boolean;
+  role?: RoleId | "";
+  onRole: (role: RoleId | "") => void;
+}) {
+  const [rolesOpen, setRolesOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const link =
+    "inline-flex items-center gap-1 rounded text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none";
+  const chevron = (open: boolean) => (
+    <ChevronDown className={cn("size-3 transition-transform", open && "rotate-180")} aria-hidden />
+  );
+  const hasMore = !!wizards?.length;
+  if (!roles && !hasMore) return null;
+  return (
+    <div className="space-y-2 pl-8.5">
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {roles && (
+          <button type="button" aria-expanded={rolesOpen || !!role} onClick={() => setRolesOpen((v) => !v)} className={link}>
+            {role ? ROLES[role].label : "Кто вы?"} {chevron(rolesOpen || !!role)}
+          </button>
+        )}
+        {hasMore && (
+          <button type="button" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)} className={link}>
+            Ещё помощники {chevron(moreOpen)}
+          </button>
+        )}
+      </div>
+      {roles && (rolesOpen || !!role) && <RolePicker value={role} onPick={onRole} compact caption={false} />}
+      {moreOpen && (
+        <div className="space-y-1.5">
+          {wizards?.map((flow) => (
+            <WizardEntry key={flow.id} flow={flow} onStart={() => onStart(flow)} compact />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatView({
   chat,
   kb,
@@ -143,6 +195,7 @@ export function ChatView({
   onLead,
   compact,
   greeting,
+  placeholder,
   heading = "Чем помочь с электроэнергией?",
   starters,
   prefill,
@@ -161,6 +214,8 @@ export function ChatView({
   onLead?: () => void;
   compact?: boolean;
   greeting?: string;
+  /** Подсказка в поле ввода; по умолчанию — клиентская (в виджете короче). У копилота менеджера своя. */
+  placeholder?: string;
   /** Заголовок пустого экрана и подсказки первого вопроса — свои у копилота менеджера. */
   heading?: string;
   starters?: Starter[];
@@ -280,7 +335,7 @@ export function ChatView({
       onStop={chat.stop}
       busy={chat.busy}
       compact={compact}
-      placeholder={compact ? "Опишите вашу задачу" : undefined}
+      placeholder={placeholder ?? (compact ? "Опишите вашу задачу" : undefined)}
       disabled={disabled}
       value={prefill}
       autoFocus={!compact}
@@ -367,14 +422,17 @@ export function ChatView({
                   {intro ?? GREETING}
                 </p>
               </div>
-              {showRoles && <RolePicker value={session?.role} onPick={chat.setRole} compact className="pl-8.5" />}
-              {showLevel && <LevelSwitch value={session?.level} onPick={chat.setLevel} compact className="pl-8.5" />}
               <div className="space-y-1.5 pl-8.5">
-                {wizards?.map((flow) => (
-                  <WizardEntry key={flow.id} flow={flow} onStart={() => startWizard(flow)} compact />
-                ))}
-                <Starters onPick={send} compact items={quick} />
+                <Starters onPick={send} compact items={quick} limit={3} />
+                {wizards?.[0] && <WizardEntry flow={wizards[0]} onStart={() => startWizard(wizards[0])} compact />}
               </div>
+              <EmptyExtras
+                wizards={wizards?.slice(1)}
+                onStart={startWizard}
+                roles={showRoles}
+                role={session?.role}
+                onRole={chat.setRole}
+              />
             </div>
           )}
           {hasPassport && passport && (
