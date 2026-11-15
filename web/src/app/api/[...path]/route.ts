@@ -13,6 +13,10 @@ const ALLOWED = new Set(["health", "kb", "chat", "lead", "feedback", "settings",
 // Умолчания платформы на это не рассчитаны: без запаса длинный ответ обрывался бы на середине.
 export const maxDuration = 300;
 
+// Регион функции — fra1 (Франкфурт) в web/vercel.json: рядом с API на Railway (EU West, Амстердам). В iad1 (США),
+// умолчании Vercel, каждый запрос четыре раза пересекал Атлантику: `/api/health` отвечал ~500 мс при 145 мс у
+// страницы.
+
 /** Адрес посетителя: API считает по нему пределы частоты. Без него все посетители — один адрес Vercel. */
 function clientIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
