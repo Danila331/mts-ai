@@ -1,7 +1,7 @@
 "use client";
 
-import { CheckCircle2, ChevronRight } from "lucide-react";
-import { useMemo } from "react";
+import { CheckCircle2, ChevronDown, ChevronRight } from "lucide-react";
+import { useId, useMemo, useState } from "react";
 import type { KbIndex } from "@/hooks/use-kb";
 import { LEAD_CHECKLIST_TITLE, LEAD_CONTINUES, LEAD_SERVICE_NOTE, leadAcceptedTitle, leadChecklists } from "@/lib/answer-ux";
 import type { Session } from "@/lib/types";
@@ -52,9 +52,16 @@ export function PostLeadCard({
   compact?: boolean;
 }) {
   const lead = session.lead;
+  const [open, setOpen] = useState(!!defaultOpen);
+  const panelId = useId();
   if (!lead) return null;
   return (
-    <div className={cn("rounded-[18px] border bg-surface px-3 py-2.5", compact ? "text-left" : "w-full max-w-[560px] text-left")}>
+    <div
+      className={cn(
+        "rounded-2xl border bg-background p-4 shadow-[var(--shadow-float)]",
+        compact ? "text-left" : "w-full max-w-[560px] text-left",
+      )}
+    >
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-tone-success text-white">
           <CheckCircle2 className="size-4" aria-hidden />
@@ -76,10 +83,32 @@ export function PostLeadCard({
           </button>
         )}
       </div>
-      <details open={defaultOpen} className="group mt-2 pl-11">
-        <summary className="cursor-pointer text-[12.5px] text-brand-text select-none">{LEAD_CHECKLIST_TITLE}</summary>
-        <LeadChecklist session={session} kb={kb} className="mt-2" />
-      </details>
+      <div className="mt-3 border-t pt-2 pl-11">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen((v) => !v)}
+          className="-ml-1 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[12.5px] text-brand-text focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          {LEAD_CHECKLIST_TITLE}
+          <ChevronDown
+            aria-hidden
+            className={cn("size-3.5 transition-transform duration-200 motion-reduce:transition-none", open && "rotate-180")}
+          />
+        </button>
+        <div
+          id={panelId}
+          className={cn(
+            "grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+            open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+          )}
+        >
+          <div className="min-h-0 overflow-hidden" inert={!open}>
+            <LeadChecklist session={session} kb={kb} className="pt-2" />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -9,8 +9,11 @@ import {
   CALLBACK_QUESTION,
   CALLBACK_TIMES,
   LEAD_SAVED,
+  RU_TIMEZONES,
   guessTime,
+  humanizeCallbackLabel,
   leadSavedText,
+  timezoneLabel,
   timezoneOptions,
   utcOffset,
 } from "./callback.ts";
@@ -108,5 +111,24 @@ describe("подсказки выбора", () => {
     assert.equal(abroad[0].value, "America/Argentina/Buenos_Aires");
     assert.match(abroad[0].label, /^America\/Argentina\/Buenos Aires \(UTC/);
     assert.equal(utcOffset("Not/AZone", at), "");
+  });
+});
+
+describe("подпись пояса для менеджера", () => {
+  test("Москва (UTC+3) вместо IANA-имени", () => {
+    assert.equal(timezoneLabel("Europe/Moscow"), "Москва (UTC+3)");
+    assert.equal(humanizeCallbackLabel("утро, часовой пояс Europe/Moscow"), "утро, Москва (UTC+3)");
+    assert.equal(humanizeCallbackLabel("любое время"), "любое время");
+    assert.equal(
+      humanizeCallbackLabel("Удобное время для звонка: вечер, часовой пояс Asia/Yekaterinburg\nДалее"),
+      "Удобное время для звонка: вечер, Екатеринбург (UTC+5)\nДалее",
+    );
+  });
+  test("сдвиги таблицы совпадают с Intl и со списком в Go", () => {
+    const go = read("../../../backend/internal/lead/callback.go");
+    for (const z of RU_TIMEZONES) {
+      assert.equal(utcOffset(z.zone), `UTC+${z.utc}`, z.zone);
+      assert.ok(go.includes(`{"${z.zone}", "${z.city}", ${z.utc}}`), `${z.zone} нет в Go`);
+    }
   });
 });

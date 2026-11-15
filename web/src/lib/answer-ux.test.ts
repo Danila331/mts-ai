@@ -111,6 +111,14 @@ describe("быстрые ответы", () => {
     assert.ok(got.includes("Не знаю"));
   });
 
+  test("после отправленной заявки «передайте менеджеру» не предлагаем", () => {
+    const sug = ["Да, передайте менеджеру", "Оставить заявку", "Свяжитесь со мной", "Пока продолжим здесь", "Расскажите подробнее"];
+    assert.deepEqual(visibleSuggestions(answer({ suggestions: sug }), undefined, true), ["Пока продолжим здесь", "Расскажите подробнее"]);
+    assert.deepEqual(visibleSuggestions(answer({ suggestions: ["Да, передайте менеджеру", "Пока продолжим здесь"] }), undefined, true), []);
+    assert.equal(visibleSuggestions(answer({ suggestions: sug })).length, 4, "без заявки кнопки остаются");
+    assert.deepEqual(suggestionsFor([bot(answer({ suggestions: ["Да, передайте менеджеру", "Пока продолжим здесь"] }))], undefined, true), []);
+  });
+
   test("кнопки задач совпадают с ядром и закрытым списком паспорта", () => {
     const py = text("../../../scripts/quick_replies.py");
     for (const [task, label] of Object.entries(TASK_BUTTONS)) assert.ok(py.includes(`"${task}":`) && py.includes(`"${label}"`), task);

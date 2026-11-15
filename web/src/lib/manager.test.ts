@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { STATUS_LABEL, ago, leadTitle, newCodes, newestFirst, waiting } from "./manager.ts";
+import { STATUS_LABEL, ago, formatPhone, leadTitle, newCodes, newestFirst, waiting } from "./manager.ts";
 
 describe("T5: список заявок менеджера", () => {
   test("первая загрузка ничего не подсвечивает, дальше — только новые номера", () => {
@@ -47,5 +47,17 @@ describe("T5: список заявок менеджера", () => {
       m[2],
     ]);
     assert.deepEqual(server, Object.entries(STATUS_LABEL));
+  });
+});
+
+describe("телефон и время в карточке менеджера", () => {
+  test("российский номер — в виде +7 900 000-00-00", () => {
+    assert.equal(formatPhone("+79000000000"), "+7 900 000-00-00");
+    assert.equal(formatPhone("8 (900) 123-45-67"), "+7 900 123-45-67");
+    assert.equal(formatPhone("9001234567"), "+7 900 123-45-67");
+  });
+  test("чужой формат и пустое значение не портим", () => {
+    assert.equal(formatPhone("+375291234567"), "+375291234567");
+    assert.equal(formatPhone(""), "");
   });
 });

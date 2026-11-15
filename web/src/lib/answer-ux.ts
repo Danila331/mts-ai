@@ -28,6 +28,9 @@ export const TASK_BUTTONS: Readonly<Record<string, string>> = {
   "надёжность электроснабжения": "Повысить надёжность электроснабжения",
 };
 
+/** Варианты «передать менеджеру / оставить заявку / свяжитесь со мной»: после отправленной заявки не нужны. */
+export const HANDOFF_BUTTON = /передайт|передат|менеджер|заявк|свяж|перезвон/i;
+
 /**
  * Кнопки под последним ответом бота. Ядро присылает 2–4 варианта на уточняющий вопрос; здесь остаются
  * чистые строки без повторов и без задач, которые клиент уже назвал в паспорте. Кнопки показываются, только
@@ -36,6 +39,7 @@ export const TASK_BUTTONS: Readonly<Record<string, string>> = {
 export function visibleSuggestions(
   answer: Pick<AnswerPayload, "suggestions" | "fallback" | "error"> | undefined,
   passport?: Pick<Passport, "fields">,
+  hasLead = false,
 ): string[] {
   if (!answer || answer.fallback || answer.error || !Array.isArray(answer.suggestions)) return [];
   const taken = (passport?.fields.find((f) => f.key === "task")?.value ?? "").toLowerCase();
@@ -45,6 +49,7 @@ export function visibleSuggestions(
   for (const raw of answer.suggestions) {
     const text = typeof raw === "string" ? raw.replace(/\s+/g, " ").trim() : "";
     if (!text || text.length > MAX_SUGGESTION_CHARS || seen.has(text.toLowerCase())) continue;
+    if (hasLead && HANDOFF_BUTTON.test(text)) continue; // заявка уже отправлена — менеджеру второй раз не передаём
     if (named.has(text)) continue; // задачу клиент уже назвал — кнопка «Найти потери» после «поиск потерь» лишняя
     seen.add(text.toLowerCase());
     out.push(text);
@@ -54,10 +59,14 @@ export function visibleSuggestions(
 }
 
 /** Кнопки относятся к последнему сообщению ленты — ответу бота. */
-export function suggestionsFor(messages: readonly Message[], passport?: Pick<Passport, "fields">): string[] {
+export function suggestionsFor(
+  messages: readonly Message[],
+  passport?: Pick<Passport, "fields">,
+  hasLead = false,
+): string[] {
   const last = messages[messages.length - 1];
   if (!last || last.role !== "assistant" || last.pending || last.error) return [];
-  return visibleSuggestions(last.answer, passport);
+  return visibleSuggestions(last.answer, passport, hasLead);
 }
 
 // ---------- первый полезный ответ ----------

@@ -176,9 +176,9 @@ func TestCreateKeepsCallbackPreference(t *testing.T) {
 	}, json.RawMessage(dialogJSON), "sess-1")
 	require.NoError(t, err)
 	assert.Equal(t, lead.Callback{Time: "evening", Timezone: "Asia/Yekaterinburg"}, r.saved[0].Callback)
-	assert.True(t, strings.HasSuffix(l.Summary, "\nУдобное время для звонка: вечер, часовой пояс Asia/Yekaterinburg"), l.Summary)
+	assert.True(t, strings.HasSuffix(l.Summary, "\nУдобное время для звонка: вечер, Екатеринбург (UTC+5)"), l.Summary)
 	v := pp.p.Values["callback_preference"]
-	assert.Equal(t, "вечер, часовой пояс Asia/Yekaterinburg", v.Value, "предпочтение видно в паспорте")
+	assert.Equal(t, "вечер, Екатеринбург (UTC+5)", v.Value, "предпочтение видно в паспорте")
 	assert.Equal(t, passport.FromClient, v.Source, "его выбрал клиент")
 
 	// С моделью строка про время остаётся: её выбрал клиент, а не пересказала модель.

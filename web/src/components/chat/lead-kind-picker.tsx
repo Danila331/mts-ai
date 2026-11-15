@@ -26,19 +26,28 @@ export function LeadKindPicker({
       <div role="radiogroup" aria-label="Тип заявки" className="grid gap-1.5">
         {kinds.map((k) => {
           const checked = k.kind === value;
+          const inputId = `${id}-${k.kind}`;
           return (
-            <button
+            // Нативные радио: имя, описание и стрелки клавиатуры работают без самодельного ARIA.
+            <label
               key={k.kind}
-              id={`${id}-${k.kind}`}
-              type="button"
-              role="radio"
-              aria-checked={checked}
-              onClick={() => onChange(k.kind)}
+              htmlFor={inputId}
               className={cn(
-                "flex items-start gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors",
+                "flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50",
                 checked ? "border-primary bg-surface ring-1 ring-primary" : "bg-background hover:bg-muted",
               )}
             >
+              <input
+                id={inputId}
+                type="radio"
+                name={`${id}-kind`}
+                value={k.kind}
+                checked={checked}
+                onChange={() => onChange(k.kind)}
+                aria-labelledby={`${inputId}-label`}
+                aria-describedby={`${inputId}-hint`}
+                className="sr-only"
+              />
               <span
                 aria-hidden
                 className={cn(
@@ -47,10 +56,14 @@ export function LeadKindPicker({
                 )}
               />
               <span className="min-w-0">
-                <span className="block text-[13.5px] leading-snug font-medium">{k.label}</span>
-                <span className="block text-[12px] leading-snug text-muted-foreground">{k.hint}</span>
+                <span id={`${inputId}-label`} className="block text-[13.5px] leading-snug font-medium">
+                  {k.label}
+                </span>
+                <span id={`${inputId}-hint`} className="block text-[12px] leading-snug text-muted-foreground">
+                  {k.hint}
+                </span>
               </span>
-            </button>
+            </label>
           );
         })}
       </div>

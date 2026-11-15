@@ -20,8 +20,8 @@ export function useAntibot() {
   }, []);
 
   const field = (
-    <div aria-hidden="true" style={HONEYPOT_STYLE}>
-      <label htmlFor={`hp-${HONEYPOT_FIELD}`}>Сайт компании (оставьте пустым)</label>
+    <div aria-hidden="true" inert style={HONEYPOT_STYLE}>
+      <label htmlFor={`hp-${HONEYPOT_FIELD}`} aria-hidden="true">Сайт компании (оставьте пустым)</label>
       <input
         id={`hp-${HONEYPOT_FIELD}`}
         name={HONEYPOT_FIELD}
@@ -32,6 +32,7 @@ export function useAntibot() {
           setTrap(e.target.value);
         }}
         tabIndex={-1}
+        aria-hidden="true"
         autoComplete="off"
         data-lpignore="true"
         data-1p-ignore="true"

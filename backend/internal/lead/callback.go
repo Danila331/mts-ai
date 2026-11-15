@@ -1,6 +1,7 @@
 package lead
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -27,6 +28,37 @@ var CallbackTimes = []struct{ Value, Label string }{
 	{"day", "день"},
 	{"evening", "вечер"},
 	{"any", "любое время"},
+}
+
+// RUTimezones — пояса России с городом и сдвигом от UTC для подписи менеджеру
+// («Москва (UTC+3)»). Тот же список, что RU_TIMEZONES в web/src/lib/callback.ts;
+// соответствие проверяют тесты с обеих сторон.
+var RUTimezones = []struct {
+	Zone, City string
+	UTC        int
+}{
+	{"Europe/Kaliningrad", "Калининград", 2},
+	{"Europe/Moscow", "Москва", 3},
+	{"Europe/Samara", "Самара", 4},
+	{"Asia/Yekaterinburg", "Екатеринбург", 5},
+	{"Asia/Omsk", "Омск", 6},
+	{"Asia/Krasnoyarsk", "Красноярск", 7},
+	{"Asia/Irkutsk", "Иркутск", 8},
+	{"Asia/Yakutsk", "Якутск", 9},
+	{"Asia/Vladivostok", "Владивосток", 10},
+	{"Asia/Magadan", "Магадан", 11},
+	{"Asia/Kamchatka", "Камчатка", 12},
+}
+
+// TimezoneLabel — человекочитаемая подпись пояса: «Москва (UTC+3)». Пояс вне
+// списка России остаётся именем IANA с пробелами вместо «_».
+func TimezoneLabel(zone string) string {
+	for _, z := range RUTimezones {
+		if z.Zone == zone {
+			return fmt.Sprintf("%s (UTC+%d)", z.City, z.UTC)
+		}
+	}
+	return strings.ReplaceAll(zone, "_", " ")
 }
 
 // tzName — имя часового пояса IANA: «Europe/Moscow», «Asia/Yekaterinburg»,
@@ -66,14 +98,14 @@ func (c Callback) TimeLabel() string {
 func (c Callback) Empty() bool { return c.Time == "" }
 
 // Label — предпочтение одной строкой для паспорта и резюме: «утро,
-// часовой пояс Europe/Moscow». Пусто — клиент не выбрал часть дня.
+// Москва (UTC+3)». Пусто — клиент не выбрал часть дня.
 func (c Callback) Label() string {
 	label := c.TimeLabel()
 	if label == "" {
 		return ""
 	}
 	if c.Timezone != "" {
-		label += ", часовой пояс " + c.Timezone
+		label += ", " + TimezoneLabel(c.Timezone)
 	}
 	return label
 }

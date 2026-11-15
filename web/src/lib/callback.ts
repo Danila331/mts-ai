@@ -36,19 +36,36 @@ export const leadSavedText = (c: CallbackPreference, note = "") =>
   `${LEAD_SAVED_TITLE}. ${note ? `${note} ` : ""}${callbackNote(c)}`;
 
 /** Часовые пояса России с городом для подписи. Сдвиг от UTC не хранится, а считается браузером (Intl). */
-export const RU_TIMEZONES: { zone: string; city: string }[] = [
-  { zone: "Europe/Kaliningrad", city: "Калининград" },
-  { zone: "Europe/Moscow", city: "Москва" },
-  { zone: "Europe/Samara", city: "Самара" },
-  { zone: "Asia/Yekaterinburg", city: "Екатеринбург" },
-  { zone: "Asia/Omsk", city: "Омск" },
-  { zone: "Asia/Krasnoyarsk", city: "Красноярск" },
-  { zone: "Asia/Irkutsk", city: "Иркутск" },
-  { zone: "Asia/Yakutsk", city: "Якутск" },
-  { zone: "Asia/Vladivostok", city: "Владивосток" },
-  { zone: "Asia/Magadan", city: "Магадан" },
-  { zone: "Asia/Kamchatka", city: "Камчатка" },
+export const RU_TIMEZONES: { zone: string; city: string; utc: number }[] = [
+  { zone: "Europe/Kaliningrad", city: "Калининград", utc: 2 },
+  { zone: "Europe/Moscow", city: "Москва", utc: 3 },
+  { zone: "Europe/Samara", city: "Самара", utc: 4 },
+  { zone: "Asia/Yekaterinburg", city: "Екатеринбург", utc: 5 },
+  { zone: "Asia/Omsk", city: "Омск", utc: 6 },
+  { zone: "Asia/Krasnoyarsk", city: "Красноярск", utc: 7 },
+  { zone: "Asia/Irkutsk", city: "Иркутск", utc: 8 },
+  { zone: "Asia/Yakutsk", city: "Якутск", utc: 9 },
+  { zone: "Asia/Vladivostok", city: "Владивосток", utc: 10 },
+  { zone: "Asia/Magadan", city: "Магадан", utc: 11 },
+  { zone: "Asia/Kamchatka", city: "Камчатка", utc: 12 },
 ];
+
+/**
+ * Подпись пояса для менеджера: «Москва (UTC+3)». Пояса России — из таблицы (там же, что в Go:
+ * backend/internal/lead/callback.go, сверяет callback.test.ts), прочие — имя IANA и сдвиг от браузера.
+ */
+export function timezoneLabel(zone: string): string {
+  const ru = RU_TIMEZONES.find((z) => z.zone === zone);
+  if (ru) return `${ru.city} (UTC+${ru.utc})`;
+  return label(zone.replace(/_/g, " "), utcOffset(zone));
+}
+
+/** Строка от сервера «утро, часовой пояс Europe/Moscow» → «утро, Москва (UTC+3)» (старые заявки хранят IANA). */
+export function humanizeCallbackLabel(text: string): string {
+  return text.replace(/часовой пояс ([A-Za-z][A-Za-z0-9_+\-]*(?:\/[A-Za-z0-9_+\-]+){0,2})/g, (_m, zone: string) =>
+    timezoneLabel(zone),
+  );
+}
 
 /** Часовой пояс браузера; если браузер его не назвал — Москва. */
 export function browserTimezone(): string {
