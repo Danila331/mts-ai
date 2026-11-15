@@ -2,6 +2,7 @@
 
 import {
   BookOpen,
+  ChartNoAxesCombined,
   ChevronDown,
   Code2,
   FileCheck2,
@@ -36,6 +37,7 @@ const NAV = [
   { href: "/check-data", label: "Проверить выгрузку", icon: FileCheck2 },
   { href: "/manager", label: "Менеджер", icon: Users },
   { href: "/lab", label: "Стресс-тест", icon: FlaskConical },
+  { href: "/business", label: "Бизнес-кейс", icon: ChartNoAxesCombined },
   { href: "/settings", label: "Настройки RAG", icon: SlidersHorizontal },
 ];
 
