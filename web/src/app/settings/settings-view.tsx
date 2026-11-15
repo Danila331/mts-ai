@@ -258,14 +258,17 @@ export function SettingsView() {
   return (
     <AppShell>
       <PageBar icon={SlidersHorizontal} title="Настройки RAG" subtitle="поиск и генерация ответа">
+        {/* На узком экране — только значок: подпись съедала место заголовка страницы. */}
         <Button
           variant="ghost"
-          className="text-muted-foreground"
+          className="text-muted-foreground max-sm:size-9 max-sm:px-0"
           onClick={reset}
           disabled={!data || !!busy || !offEnv}
+          aria-label="Сбросить к окружению"
+          title="Сбросить к окружению"
         >
           {busy === "reset" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-          Сбросить к окружению
+          <span className="max-sm:hidden">Сбросить к окружению</span>
         </Button>
         <Button onClick={save} disabled={!dirty || !!parsed.invalid || !!busy}>
           {busy === "save" && <Loader2 className="animate-spin" />}
