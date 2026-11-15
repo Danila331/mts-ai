@@ -12,7 +12,9 @@
     "start": "next start",
     "stand": "node scripts/stand.mjs",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/lib/*.test.ts",
+    "fixtures:readiness": "node scripts/readiness-fixtures.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
