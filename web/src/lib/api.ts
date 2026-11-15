@@ -1,4 +1,5 @@
 import type { PageInfo } from "./page-context";
+import type { RoleId, RoleSource } from "./roles";
 import type { AnswerPayload, ChatMode, Health, KbData, Passport, RagSettings, Retrieval, SettingValue, Turn } from "./types";
 
 // Все запросы идут на тот же origin (/api/* проксируется в Python-API), поэтому работает и внутри iframe виджета.
@@ -45,6 +46,12 @@ export interface ChatOptions {
   channel?: Channel;
   /** Страница сайта, где открыт виджет (путь, заголовок, UTM): пишется в сессию для аналитики, в промпт не идёт. */
   page?: PageInfo;
+  /**
+   * Роль-подсказка (T15) и откуда она: client — выбрал кнопкой (пустая роль — снял), auto — определил фронт.
+   * Без источника не отправляется: сервер определит роль сам. В промпт попадает только в режиме chat.
+   */
+  role?: RoleId | "";
+  roleSource?: RoleSource;
 }
 
 /** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → delta… → answer → passport → done. */
@@ -52,10 +59,11 @@ export async function streamChat(
   messages: Turn[],
   mode: ChatMode,
   handlers: StreamHandlers,
-  { signal, overrides, sessionId, channel, page }: ChatOptions = {},
+  { signal, overrides, sessionId, channel, page, role, roleSource }: ChatOptions = {},
 ): Promise<void> {
   const body: Record<string, unknown> = { messages, mode };
   if (overrides && Object.keys(overrides).length) body.overrides = overrides;
+  if (mode === "chat" && roleSource) Object.assign(body, { role: role ?? "", role_source: roleSource });
   if (sessionId) {
     Object.assign(body, { session_id: sessionId, channel: channel ?? "playground" });
     if (page && Object.keys(page).length) body.page = page;

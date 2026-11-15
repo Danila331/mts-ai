@@ -1,6 +1,7 @@
 import type { WizardRecord } from "@/lib/wizards/engine";
 
 // Контракт API (Go-служба backend/, ответ строит ядро scripts/core_api.py). Поля — как в JSON сервера.
+import type { RoleId, RoleSource } from "./roles";
 
 export type Role = "user" | "assistant";
 
@@ -121,6 +122,8 @@ export interface AnswerPayload {
   fallback: boolean;
   error: string;
   mode: ChatMode;
+  /** Роль-подсказка, с которой ядро собрало промпт (T15); пусто — без неё. */
+  role?: string;
   timings: Record<string, number>;
   guard: Guard;
   trace: string;
@@ -244,6 +247,12 @@ export interface Session {
   passport?: Passport;
   /** Пройденный мастер (T7): итог пересчитывается по ответам, паспорт получает их после первого ответа бота. */
   wizard?: WizardRecord;
+  /**
+   * Роль-подсказка (T15): кто, вероятно, пишет. Пусто при roleSource "client" — клиент сам снял подсказку,
+   * автоопределение её не вернёт. Уходит на сервер с каждым вопросом режима chat.
+   */
+  role?: RoleId | "";
+  roleSource?: RoleSource;
 }
 
 // ---------- настройки RAG (GET/POST /api/settings) ----------

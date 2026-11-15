@@ -1,0 +1,4 @@
+ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_role_source_known;
+ALTER TABLE sessions DROP COLUMN IF EXISTS level;
+ALTER TABLE sessions DROP COLUMN IF EXISTS role_source;
+ALTER TABLE sessions DROP COLUMN IF EXISTS role;

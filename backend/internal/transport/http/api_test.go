@@ -74,7 +74,7 @@ func (m *memStore) SavePassport(_ context.Context, id string, p passport.Passpor
 	return nil
 }
 
-func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title string) error {
+func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title string, role session.RoleHint) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sessions == nil {
@@ -87,6 +87,10 @@ func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title 
 	// Как UpsertSession: страница пишется, только если пришла непустая.
 	if len(ref.Page) > 0 {
 		s.Page = ref.Page
+	}
+	// Как UpsertSession: роль меняется, только если у вопроса есть источник.
+	if role.Source != "" {
+		s.Role, s.RoleSource = string(role.Role), string(role.Source)
 	}
 	s.Mode, s.UpdatedAt = mode, time.Now()
 	m.sessions[ref.ID] = s
@@ -998,4 +1002,67 @@ func TestChatPageValidation(t *testing.T) {
 	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
 		`{"messages": [{"role": "user", "content": "q"}], "session_id": "good-sess-2", "page": null}`).Code)
 	assert.JSONEq(t, `{}`, string(store.sessions["good-sess-2"].Page))
+}
+
+func TestChatRoleHint(t *testing.T) {
+	core, bodies := recordingCore(t)
+	s, store := newServer(t, core.URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	grid := `"messages": [{"role": "user", "content": "Мы электросетевая компания, хотим находить потери"}]`
+	plain := `"messages": [{"role": "user", "content": "Что нужно для подключения платформы учёта?"}]`
+	roleOf := func(b map[string]json.RawMessage) string {
+		var r string
+		if raw, ok := b["role"]; ok {
+			require.NoError(t, json.Unmarshal(raw, &r))
+		}
+		return r
+	}
+
+	// Без клика: роль определена по реплике, ушла ядру и легла в сессию.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{`+grid+`, "mode": "chat", "session_id": "role-sess-1", "channel": "embed"}`).Code)
+	assert.Equal(t, "grid", roleOf(bodies()[0]))
+	assert.Equal(t, "grid", store.sessions["role-sess-1"].Role)
+	assert.Equal(t, "auto", store.sessions["role-sess-1"].RoleSource)
+
+	// Клиент сменил роль кнопкой — его выбор главнее реплик.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{`+grid+`, "mode": "chat", "session_id": "role-sess-1", "role": "engineer", "role_source": "client"}`).Code)
+	assert.Equal(t, "engineer", roleOf(bodies()[1]))
+	assert.Equal(t, "engineer", store.sessions["role-sess-1"].Role)
+	assert.Equal(t, "client", store.sessions["role-sess-1"].RoleSource)
+
+	// Вопрос без роли и без примет роли сессию не перезаписывает.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{`+plain+`, "mode": "chat", "session_id": "role-sess-1"}`).Code)
+	assert.Empty(t, roleOf(bodies()[2]))
+	assert.Equal(t, "engineer", store.sessions["role-sess-1"].Role)
+
+	rec := do(s, http.MethodGet, "/api/sessions/role-sess-1", "", ManagerHeader, "manager-token")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var h session.History
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &h))
+	assert.Equal(t, "engineer", h.Session.Role, "менеджер видит роль")
+
+	// Автопроверка и копилот роль ядру не передают — промпт как без неё.
+	for _, mode := range []string{"eval", "copilot"} {
+		require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+			`{`+grid+`, "mode": "`+mode+`", "role": "grid"}`).Code)
+	}
+	for _, b := range bodies()[3:] {
+		_, sent := b["role"]
+		assert.False(t, sent)
+	}
+
+	// Неизвестная роль и источник — 400 до ядра и до сессии.
+	before := len(bodies())
+	for body, want := range map[string]string{
+		`{` + grid + `, "session_id": "role-sess-2", "role": "admin"}`:                        "role: одна из business, engineer, housing, grid, mts_manager, industry, supplier, utility, landlord, retail, warehouse",
+		`{` + grid + `, "session_id": "role-sess-2", "role": "grid", "role_source": "model"}`: "role_source: client или auto",
+	} {
+		rec := do(s, http.MethodPost, "/api/chat", body)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, body)
+		assert.JSONEq(t, `{"error": "`+want+`"}`, rec.Body.String(), body)
+	}
+	assert.Len(t, bodies(), before)
+	assert.NotContains(t, store.sessions, "role-sess-2")
 }

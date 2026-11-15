@@ -16,8 +16,10 @@ import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
 import { InlineLead } from "./inline-lead";
 import { PassportCard } from "./passport-card";
+import { RoleBadge, RolePicker, roleStarters } from "./role-picker";
 import { type Starter, Starters } from "./starters";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ROLES } from "@/lib/roles";
 
 const GREETING =
   "Подберу решение по базе знаний МТС EnergyTool: учёт электроэнергии, поиск потерь, солнечная генерация, оптовый рынок и тарифы. Опишите задачу своими словами.";
@@ -120,6 +122,7 @@ export function ChatView({
   disabled,
   summary,
   wizards,
+  showRoles,
 }: {
   chat: ChatController;
   kb: KbIndex | null;
@@ -139,6 +142,11 @@ export function ChatView({
   summary?: boolean;
   /** Мастера (T7), которые предлагаются в пустом чате. Только клиентский режим chat: им нужен паспорт. */
   wizards?: readonly WizardFlow[];
+  /**
+   * Роль-подсказка (T15): необязательные кнопки на пустом экране и метка «Похоже, вы — …» над полем ввода.
+   * Только чат с клиентом (режим chat): у копилота и в режиме автопроверки ролей нет.
+   */
+  showRoles?: boolean;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const [summaryFor, setSummaryFor] = useState<string | null>(null);
@@ -192,6 +200,10 @@ export function ChatView({
     send(chatReplica(flow, answers, intent));
   };
 
+  // Роль меняет приветствие и быстрые вопросы; без роли — тема страницы виджета или общие.
+  const role = showRoles && session?.role ? session.role : undefined;
+  const intro = role ? ROLES[role].greeting : greeting;
+  const quick = role ? roleStarters(role) : starters;
   const passport = session?.passport;
   // Паспорт показываем, когда в нём что-то есть; карточку заявки — когда есть контакты или согласие
   // и заявка ещё не отправлена, и только после ответа (не посреди генерации).
@@ -242,12 +254,13 @@ export function ChatView({
               {heading}
             </h1>
             <p className="mt-2.5 max-w-[36rem] text-[14px] leading-relaxed text-pretty text-muted-foreground">
-              {greeting ?? "Отвечаю только по базе знаний МТС EnergyTool и показываю источник каждого факта."}
+              {intro ?? "Отвечаю только по базе знаний МТС EnergyTool и показываю источник каждого факта."}
             </p>
           </div>
           <div className="mt-7">{composer}</div>
+          {showRoles && <RolePicker value={session?.role} onPick={chat.setRole} className="mt-4" />}
           <div className="mt-4">
-            <Starters onPick={send} items={starters} />
+            <Starters onPick={send} items={quick} />
           </div>
           {!!wizards?.length && (
             <div className="mt-6 flex flex-wrap justify-center gap-2">
@@ -286,14 +299,15 @@ export function ChatView({
               <div className="flex items-start gap-2.5">
                 <BotAvatar className="mt-0.5 size-6" />
                 <p className="rounded-2xl rounded-tl-md bg-muted px-3.5 py-2.5 text-[14px] leading-relaxed">
-                  {greeting ?? GREETING}
+                  {intro ?? GREETING}
                 </p>
               </div>
+              {showRoles && <RolePicker value={session?.role} onPick={chat.setRole} compact className="pl-8.5" />}
               <div className="space-y-1.5 pl-8.5">
                 {wizards?.map((flow) => (
                   <WizardEntry key={flow.id} flow={flow} onStart={() => startWizard(flow)} compact />
                 ))}
-                <Starters onPick={send} compact items={starters} />
+                <Starters onPick={send} compact items={quick} />
               </div>
             </div>
           )}
@@ -337,6 +351,9 @@ export function ChatView({
         </div>
       </div>
       <div className={cn("shrink-0", compact ? "px-3 pt-1 pb-2" : "mx-auto w-full max-w-[720px] px-4 pb-3 sm:px-6")}>
+        {role && messages.length > 0 && (
+          <RoleBadge key={session?.id} role={role} source={session?.roleSource} onPick={chat.setRole} compact={compact} />
+        )}
         {((onLead && hasAnswers) || showSummary) && (
           <div className={cn("flex gap-2", compact ? "mb-2 items-stretch" : "mb-2.5 flex-wrap justify-center")}>
             {onLead && hasAnswers && (

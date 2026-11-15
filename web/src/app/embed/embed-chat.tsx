@@ -200,6 +200,7 @@ export function EmbedChat() {
               onLead={() => setLeadOpen(true)}
               summary
               wizards={FLOWS}
+              showRoles
             />
           </div>
         )}

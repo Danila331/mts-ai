@@ -202,6 +202,7 @@ export function Playground() {
             onLead={() => setLeadOpen(true)}
             summary
             wizards={mode === "chat" ? FLOWS : undefined}
+            showRoles={mode === "chat"}
           />
         )}
       </div>

@@ -170,6 +170,42 @@ COPILOT_TAIL = (
 )
 COPILOT_MAX_WORDS = 190  # до 150 слов по правилам, запас — на перечисление разделов в «Источниках»
 
+# Роль-подсказка (T15, веб-чат): кто, вероятно, пишет — выбрал клиент кнопкой или определил словарь по репликам
+# (backend/internal/session/role.go). Одна строка в конце системного промпта и только в режиме chat: автопроверка
+# и копилот её не видят — это проверяет тест. Роль не приносит фактов: она лишь подсказывает, какие стороны базы
+# важнее для этой аудитории (формулировки — из «Навигации по типу компании» в 20-products/20-portfolio.md).
+ROLE_HINT = (
+    "\n\nСобеседник, вероятно: {who}. Это подсказка, а не факт о клиенте: если его реплики говорят другое, верь "
+    "репликам. Она помогает выбрать, какие факты базы назвать первыми (для такой аудитории обычно важнее: {focus}), "
+    "но новых фактов не добавляет: отвечай только по базе и не говори, что продукт подходит клиенту, если база "
+    "этого не говорит."
+)
+# id роли → (кто собеседник, что для него обычно важнее). Тот же список ролей — в session.Roles и web/src/lib/roles.ts.
+ROLES = {
+    "business": ("представитель малого или среднего бизнеса", "что решение даёт его объекту и с чего начать"),
+    "engineer": ("энергетик или главный инженер предприятия", "технические условия, требования к учёту и точные термины"),
+    "housing": ("СНТ, управляющая компания, ТСЖ или товарищество",
+                "учёт по абонентам и местам общего пользования, приём показаний от жителей"),
+    "grid": ("электросетевая компания", "поиск коммерческих потерь, данные учёта и парк приборов"),
+    "mts_manager": ("региональный менеджер МТС, который консультирует своего клиента",
+                    "условия и ограничения, которые важно не упустить в разговоре с клиентом"),
+    "industry": ("промышленное предприятие", "присоединённая мощность и данные учёта"),
+    "supplier": ("энергосбытовая компания", "сбор и обработка показаний приборов"),
+    "utility": ("ресурсоснабжающая организация", "сбор показаний с приборов абонентов"),
+    "landlord": ("торговый или бизнес-центр, арендодатель", "учёт по арендаторам"),
+    "retail": ("ретейл, общепит или сетевой бизнес", "сравнение однотипных точек и аномальный расход"),
+    "warehouse": ("склад или складской комплекс", "кровля, дневной режим работы и учёт"),
+}
+
+
+def role_hint(mode: str, role: str) -> str:
+    """Строка о собеседнике для системного промпта: только режим chat и только известная роль, иначе пусто."""
+    if mode != "chat" or role not in ROLES:
+        return ""
+    who, focus = ROLES[role]
+    return ROLE_HINT.format(who=who, focus=focus)
+
+
 FINAL_REMINDER = (
     "Ответь на последнюю реплику клиента так, как ответил бы эксперт из ПРИМЕРОВ: прямой ответ, главное "
     "подтверждение из базы, одна важная оговорка и — только если он уместен по правилам — один уточняющий вопрос. "
@@ -251,11 +287,12 @@ def build_draft_messages(materials: str, turns: list) -> list:
 
 
 def build_write_messages(materials: str, turns: list, draft: str, mode: str = "eval", examples: bool = True,
-                         exclude_example: str = "") -> list:
+                         exclude_example: str = "", role: str = "") -> list:
     system = RULES_FULL + (CHAT_MODE if mode == "chat" else "") + (COPILOT_MODE if mode == "copilot" else "")
     if examples and mode != "copilot":
         system += "\n\nПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ (образец вывода, отбора фактов и формы; факты бери из базы)\n"
         system += render_examples(exclude_example)
+    system += role_hint(mode, role)
     user = f"МАТЕРИАЛЫ ПО ВОПРОСУ\n{materials}\n\n{render_dialog(turns)}\n\n{WRITE_TAIL.format(draft=draft)}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -478,7 +515,7 @@ def render_dialog(turns: list) -> str:
 def build_messages(reference: str, materials: str, turns: list, mode: str = "eval",
                    examples: bool = True, exclude_example: str = "", full_kb: bool = False,
                    plan: int = 0, style: str = "tight", near: int = 0, note: str = "",
-                   brief_think: bool = False, task: str = "") -> list:
+                   brief_think: bool = False, task: str = "", role: str = "") -> list:
     """reference — неизменная часть базы (справочник или вся база при full_kb), materials — найденное по вопросу.
     plan: 0 — сразу ответ, 1 — короткий разбор, 2 — разбор с цитатами; style: tight | full."""
     rules = {"full": RULES_FULL, "recipe": RULES_RECIPE, "jury": RULES_JURY, "jury2": RULES_JURY2}.get(style, RULES)
@@ -491,6 +528,7 @@ def build_messages(reference: str, materials: str, turns: list, mode: str = "eva
     if examples:
         system += "\n\nПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ (образец вывода, отбора фактов и длины; факты бери из базы)\n"
         system += render_examples(exclude_example)
+    system += role_hint(mode, role)  # в конце: общий префикс (правила, справочник, примеры) кэшируется как прежде
     title = "РАЗДЕЛЫ БАЗЫ, БЛИЖАЙШИЕ К ВОПРОСУ (подсказка поиска; остальная база выше)" if full_kb \
         else "МАТЕРИАЛЫ ПО ВОПРОСУ"
     tail = PLAN_QUOTES if plan == 2 else PLAN_REMINDER if plan else \

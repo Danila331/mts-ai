@@ -138,14 +138,19 @@ func Title(question string) string {
 
 // Session — разговор, как его видит менеджер.
 type Session struct {
-	ID        string          `json:"id"`
-	Channel   string          `json:"channel"`
-	Mode      string          `json:"mode"`
-	Title     string          `json:"title"`
-	Page      json.RawMessage `json:"page"`
-	Passport  *passport.View  `json:"passport,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID       string          `json:"id"`
+	Channel  string          `json:"channel"`
+	Mode     string          `json:"mode"`
+	Title    string          `json:"title"`
+	Page     json.RawMessage `json:"page"`
+	Passport *passport.View  `json:"passport,omitempty"`
+	// Role и RoleSource — роль-подсказка собеседника (T15); пусто — роль
+	// неизвестна. Level — уровень объяснения (T16).
+	Role       string    `json:"role"`
+	RoleSource string    `json:"role_source"`
+	Level      string    `json:"level"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Turn — реплика разговора по порядку. Ответ консультанта знает свой id
