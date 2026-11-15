@@ -131,7 +131,8 @@ export function PassportCard({
   onEdit: (values: Record<string, string | null>) => Promise<unknown>;
   compact?: boolean;
 }) {
-  const [open, setOpen] = useState(!compact);
+  // Свёрнута по умолчанию: карточка липнет к верху ленты, и раскрытая целиком закрывала бы ответ (QA).
+  const [open, setOpen] = useState(false);
   const [flash, setFlash] = useState<Set<string>>(new Set());
   const seen = useRef<Record<string, string> | null>(null);
 
@@ -185,7 +186,7 @@ export function PassportCard({
         <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
       {open && (
-        <div className="border-t px-1.5 pt-1.5 pb-2.5">
+        <div className="max-h-[45vh] overflow-y-auto border-t px-1.5 pt-1.5 pb-2.5">
           <ul className="grid gap-0.5">
             {shown.task.map((f) => (
               <Row key={f.key} field={f} flash={flash.has(f.key)} onSave={async (v) => void (await onEdit({ [f.key]: v }))} />

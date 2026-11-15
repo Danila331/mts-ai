@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Channel, patchPassport, streamChat } from "@/lib/api";
 import type { PageInfo } from "@/lib/page-context";
 import type { LevelId } from "@/lib/level";
-import { type RoleId, type RoleState, resolveRole } from "@/lib/roles";
+import { type RoleId, type RoleState, resolveRole, roleFields } from "@/lib/roles";
 import { readSandbox } from "@/lib/sandbox";
 import { appendDelta, isRevised } from "@/lib/stream-text";
 import type { ChatMode, Message, Passport, Session, Turn } from "@/lib/types";
@@ -152,7 +152,7 @@ export function useChat(
               update(sessionId, (s) => ({
                 ...s,
                 passport,
-                ...(mode === "chat" ? resolveRole(s, clientTexts(s.messages), orgType(passport)) : {}),
+                ...(mode === "chat" ? roleFields(resolveRole(s, clientTexts(s.messages), orgType(passport))) : {}),
               })),
             // Финальный ответ главнее напечатанного: проверка могла переписать или вырезать предложение.
             onAnswer: (answer) => {
@@ -211,7 +211,7 @@ export function useChat(
       const assistant: Message = { id: uid(), role: "assistant", content: "", createdAt: now, pending: true };
       const history = [...active.messages.filter((m) => !m.error), user];
       const profile: Profile =
-        mode === "chat" ? { ...resolveRole(active, clientTexts(history), orgType(active.passport)), level: active.level } : {};
+        mode === "chat" ? { ...roleFields(resolveRole(active, clientTexts(history), orgType(active.passport))), level: active.level } : {};
       update(active.id, (s) => ({
         ...s,
         ...profile,
@@ -247,7 +247,7 @@ export function useChat(
       }));
       const profile: Profile =
         mode === "chat"
-          ? { ...resolveRole(active, clientTexts(history), orgType(active.passport)), level: level ?? active.level }
+          ? { ...roleFields(resolveRole(active, clientTexts(history), orgType(active.passport))), level: level ?? active.level }
           : {};
       void run(active.id, history, assistant.id, profile);
       return assistant.id;

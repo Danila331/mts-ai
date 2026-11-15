@@ -9,6 +9,7 @@ import {
   detectRole,
   isRole,
   resolveRole,
+  roleFields,
   roleFromOrgType,
   roleLabel,
   roleWords,
@@ -101,4 +102,12 @@ test("каталог: пять аудиторий кейса на виду, се
   assert.ok(!isRole(undefined));
   assert.equal(roleLabel("grid", "auto"), "Похоже, вы — сетевая компания");
   assert.equal(roleLabel("grid", "client"), "Вы — сетевая компания");
+});
+
+test("из resolveRole в сессию идут только поля роли — паспорт не затирается (QA)", () => {
+  const session = { role: "warehouse", roleSource: "auto", passport: { fields: [{ key: "phone", value: "старый" }] } };
+  const fresh = { fields: [{ key: "phone", value: "+79000000000" }] };
+  const merged = { ...session, passport: fresh, ...roleFields(resolveRole(session as never, ["склад"])) };
+  assert.equal(merged.passport, fresh);
+  assert.deepEqual(roleFields(resolveRole(session as never, [])), { role: "warehouse", roleSource: "auto" });
 });
