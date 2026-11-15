@@ -11,11 +11,21 @@ export const STARTERS = [
 ];
 
 /** Подсказки первого вопроса: короткие пилюли под полем ввода (полный вопрос — в подсказке и уходит при клике). */
-export function Starters({ onPick, compact }: { onPick: (text: string) => void; compact?: boolean }) {
+export type Starter = { icon: typeof Sun; label: string; text: string };
+
+export function Starters({
+  onPick,
+  compact,
+  items = STARTERS,
+}: {
+  onPick: (text: string) => void;
+  compact?: boolean;
+  items?: Starter[];
+}) {
   if (compact) {
     return (
       <ul className="grid gap-1.5" aria-label="Примеры вопросов">
-        {STARTERS.slice(0, 4).map(({ label, text }) => (
+        {items.slice(0, 4).map(({ label, text }) => (
           <li key={label}>
             <button
               type="button"
@@ -31,7 +41,7 @@ export function Starters({ onPick, compact }: { onPick: (text: string) => void; 
   }
   return (
     <ul className="flex flex-wrap justify-center gap-1.5" aria-label="Примеры вопросов">
-      {STARTERS.map(({ icon: Icon, label, text }) => (
+      {items.map(({ icon: Icon, label, text }) => (
         <li key={label}>
           <button
             type="button"

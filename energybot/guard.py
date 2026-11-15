@@ -44,7 +44,7 @@ def strip_sentences(answer: str, bad: list) -> str:
     return " ".join(keep).strip()
 
 
-def repair_instruction(bad: list, too_long: bool) -> str:
+def repair_instruction(bad: list, too_long: bool, length: str = "2–4 предложений, примерно 40–60 слов") -> str:
     parts = ["[Служебная проверка ответа.]"]
     if bad:
         parts.append(
@@ -53,6 +53,6 @@ def repair_instruction(bad: list, too_long: bool) -> str:
             "скажи, что её покажет расчёт или уточнит специалист."
         )
     if too_long:
-        parts.append("Ответ слишком длинный: сократи до 2–4 предложений, примерно 40–60 слов, сохранив главное.")
+        parts.append(f"Ответ слишком длинный: сократи до {length}, сохранив главное.")
     parts.append("Сохрани стиль и смысл ответа. Выведи только исправленный ответ клиенту, без пояснений.")
     return " ".join(parts)
