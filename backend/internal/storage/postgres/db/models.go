@@ -39,19 +39,21 @@ type Feedback struct {
 }
 
 type Lead struct {
-	ID            uuid.UUID
-	Code          string
-	Name          string
-	Phone         string
-	Company       string
-	Comment       string
-	Summary       string
-	Messages      []byte
-	CreatedAt     time.Time
-	RequestID     string
-	SummarySource string
-	SessionID     *string
-	Passport      []byte
+	ID                 uuid.UUID
+	Code               string
+	Name               string
+	Phone              string
+	Company            string
+	Comment            string
+	Summary            string
+	Messages           []byte
+	CreatedAt          time.Time
+	RequestID          string
+	SummarySource      string
+	SessionID          *string
+	Passport           []byte
+	Score              []byte
+	CallbackPreference []byte
 }
 
 type Session struct {

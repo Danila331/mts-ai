@@ -92,6 +92,14 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 	if l.Messages == nil {
 		messages = []byte("[]")
 	}
+	// Заявка без оценки (старые вызовы) — пустой объект, а не оценка с
+	// пустыми полями.
+	scored := []byte("{}")
+	if l.Score.Grade != "" {
+		if scored, err = json.Marshal(l.Score); err != nil {
+			return err
+		}
+	}
 	row, err := s.Queries.CreateLead(ctx, db.CreateLeadParams{
 		Code:          l.Code,
 		Name:          l.Name,
@@ -104,6 +112,7 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 		RequestID:     l.RequestID,
 		SessionID:     optional(l.SessionID),
 		Passport:      object(l.Passport),
+		Score:         scored,
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == "leads_code_uq" {

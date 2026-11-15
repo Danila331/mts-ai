@@ -6,11 +6,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/lead/score"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 )
 
 type repo struct {
@@ -61,6 +64,13 @@ func (m *model) Complete(_ context.Context, system, user string, _ int) (string,
 
 const dialogJSON = `[{"role":"user","content":"Нужен АСКУЭ"},{"role":"assistant","content":"Подскажу"}]`
 
+// generalMissing — заявка без паспорта: спросить всё из «Для первичного
+// понимания задачи».
+const generalMissing = "тип организации, тип объекта, регион, задача, присоединённая мощность, месячное потребление, " +
+	"приборы учёта и сбор показаний"
+
+const digest = "Вопросы клиента: Нужен АСКУЭ\nЧто уточнить менеджеру: " + generalMissing
+
 func TestCreateWithModelSummary(t *testing.T) {
 	r, m := &repo{taken: 1}, &model{text: "Задача клиента: АСКУЭ"}
 	l, err := New(r, m).Create(context.Background(),
@@ -76,7 +86,9 @@ func TestCreateWithModelSummary(t *testing.T) {
 	assert.Equal(t, "Задача клиента: АСКУЭ", r.saved[0].Summary, "резюме моделью дописано в сохранённую заявку")
 	assert.Equal(t, lead.SummaryLLM, r.saved[0].SummarySource)
 	assert.Equal(t, lead.SummarySystem, m.system)
-	assert.Equal(t, "ДИАЛОГ\nКлиент: Нужен АСКУЭ\nКонсультант: Подскажу", m.user)
+	assert.Equal(t, "ДИАЛОГ\nНЕ ЗАПОЛНЕНО (спросить на звонке): "+generalMissing+"\n\nКлиент: Нужен АСКУЭ\nКонсультант: Подскажу", m.user)
+	assert.Equal(t, score.Cold, l.Score.Grade, "продукт не определён, паспорта нет")
+	assert.Equal(t, l.Score, r.saved[0].Score, "оценка записана вместе с заявкой")
 }
 
 func TestCreateSavesBeforeModel(t *testing.T) {
@@ -92,9 +104,9 @@ func TestCreateKeepsDigestWhenUpdateFails(t *testing.T) {
 	l, err := New(r, &model{text: "резюме моделью"}).Create(context.Background(),
 		lead.Contacts{}, json.RawMessage(dialogJSON))
 	require.NoError(t, err, "заявка уже в базе — клиенту успех")
-	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", l.Summary, "клиент видит то же, что менеджер")
+	assert.Equal(t, digest, l.Summary, "клиент видит то же, что менеджер")
 	assert.Equal(t, lead.SummaryDigest, l.SummarySource)
-	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", r.saved[0].Summary)
+	assert.Equal(t, digest, r.saved[0].Summary)
 }
 
 func TestCreateFallsBackWithoutModel(t *testing.T) {
@@ -102,16 +114,52 @@ func TestCreateFallsBackWithoutModel(t *testing.T) {
 	l, err := New(r, &model{err: errors.New("down")}).Create(context.Background(),
 		lead.Contacts{}, json.RawMessage(dialogJSON))
 	require.NoError(t, err)
-	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", l.Summary)
+	assert.Equal(t, digest, l.Summary, "без модели «что уточнить» всё равно в резюме")
 	assert.Equal(t, lead.SummaryDigest, l.SummarySource)
 	assert.Equal(t, lead.SummaryDigest, r.saved[0].SummarySource, "заявка записана со списком вопросов")
 
 	l, err = New(r, nil).Create(context.Background(), lead.Contacts{}, json.RawMessage(`[]`))
 	require.NoError(t, err)
-	assert.Equal(t, "Диалога не было.", l.Summary)
+	assert.Equal(t, "Диалога не было.\nЧто уточнить менеджеру: "+generalMissing, l.Summary)
 }
 
 func TestCreateRejectsBadMessages(t *testing.T) {
 	_, err := New(&repo{}, nil).Create(context.Background(), lead.Contacts{}, nil)
 	require.Error(t, err)
+}
+
+// passports — паспорт сессии в памяти.
+type passports struct{ p passport.Passport }
+
+func (f *passports) LoadPassport(context.Context, string) (passport.Passport, error) { return f.p, nil }
+func (f *passports) SavePassport(_ context.Context, _ string, p passport.Passport) error {
+	f.p = p
+	return nil
+}
+
+func TestCreateScoresFromSessionPassport(t *testing.T) {
+	p := passport.Parse(nil)
+	p.AddSections([]passport.SectionRef{{ID: "askue-1", Doc: "20-products/22-askue.md"}})
+	now := time.Now()
+	for k, v := range map[string]string{"org_type": "склад", "meters": "около 40 счётчиков", "metering_goal": "по объектам"} {
+		p.Set(k, v, passport.FromBot, now)
+	}
+	r, m := &repo{}, &model{text: "Задача клиента: учёт"}
+	svc := New(r, m).WithPassports(&passports{p: p})
+	l, err := svc.CreateForSession(context.Background(), lead.Contacts{Name: "Тестов Тест", Phone: "+7 900 000-00-00",
+		Company: "ООО Учебный склад"}, json.RawMessage(`[{"role":"user","content":"Сколько стоит учёт на трёх складах?"}]`), "sess-1")
+	require.NoError(t, err)
+
+	require.Len(t, r.saved, 1)
+	sc := r.saved[0].Score
+	// 30 (подходит) + 30 (3 из 4) + 10 (стоимость) + 10 (отправил заявку) + 10 (назвал объём).
+	assert.Equal(t, score.Hot, sc.Grade)
+	assert.Equal(t, 90, sc.Points)
+	assert.Contains(t, sc.Reasons, "Подходит: Платформа учёта")
+	assert.Contains(t, sc.Reasons, "Заполнено 3 из 4 полей для «Платформа учёта»")
+	assert.Equal(t, []string{"схема сбора данных"}, sc.Missing)
+	assert.Equal(t, sc, l.Score)
+	assert.Contains(t, m.user, "НЕ ЗАПОЛНЕНО (спросить на звонке): схема сбора данных", "модель резюме знает, что уточнить")
+	assert.Contains(t, m.user, "Количество и тип приборов: около 40 счётчиков", "и известные параметры паспорта")
+	assert.Contains(t, lead.SummarySystem, "Известные параметры:")
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/lead/score"
 	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
 )
@@ -66,16 +67,18 @@ func (s *Service) WithPassports(p Passports) *Service {
 
 // attachPassport копирует паспорт сессии в заявку и записывает в паспорт
 // контакты, которые клиент подтвердил в карточке. Сессии нет или база не
-// ответила — заявка уходит без паспорта: она важнее.
-func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) *passport.View {
+// ответила — заявка уходит без паспорта (view == nil): она важнее.
+// Паспорт возвращается и в этом случае — пустой, для скоринга.
+func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) (passport.Passport, *passport.View) {
+	empty := passport.Parse(nil)
 	if s.passports == nil || l.SessionID == "" {
-		return nil
+		return empty, nil
 	}
 	log := zerolog.Ctx(ctx)
 	p, err := s.passports.LoadPassport(ctx, l.SessionID)
 	if err != nil {
 		log.Warn().Err(err).Str("session_id", l.SessionID).Msg("заявка без паспорта")
-		return nil
+		return empty, nil
 	}
 	now := time.Now()
 	for key, v := range map[string]string{"name": l.Name, "phone": l.Phone, "company": l.Company} {
@@ -90,7 +93,15 @@ func (s *Service) attachPassport(ctx context.Context, l *lead.Lead) *passport.Vi
 	if raw, err := json.Marshal(view); err == nil {
 		l.Passport = raw
 	}
-	return &view
+	return p, &view
+}
+
+// missingLine — строка резюме «что уточнить» из скоринга; пусто — нечего.
+func missingLine(sc score.Score) string {
+	if len(sc.Missing) == 0 {
+		return ""
+	}
+	return "Что уточнить менеджеру: " + strings.Join(sc.Missing, ", ")
 }
 
 // passportText — заполненные поля паспорта строками «Поле: значение».
@@ -145,7 +156,13 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 		RequestID:     requestid.From(ctx),
 		SessionID:     sessionID,
 	}
-	view := s.attachPassport(ctx, &l)
+	p, view := s.attachPassport(ctx, &l)
+	// Скоринг — правилами, до записи: заявка сохраняется сразу с оценкой.
+	// Клиент нажал «Отправить» с согласием — значит, сам просит связаться.
+	l.Score = score.Of(score.Input{Passport: p, Turns: turns, Agreed: true})
+	if line := missingLine(l.Score); line != "" {
+		l.Summary += "\n" + line
+	}
 	for attempt := 0; attempt < codeAttempts; attempt++ {
 		l.Code = lead.NewCode()
 		err = s.repo.CreateLead(ctx, &l)
@@ -162,6 +179,7 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 
 	// Контакты в журнал не пишутся: там телефоны.
 	log.Info().Str("lead_code", l.Code).Str("summary_source", string(l.SummarySource)).
+		Str("grade", string(l.Score.Grade)).Int("points", l.Score.Points).
 		Int("turns", len(turns)).Dur("took", time.Since(started)).Msg("заявка принята")
 	return l, nil
 }
@@ -170,6 +188,10 @@ func (s *Service) CreateForSession(ctx context.Context, c lead.Contacts, message
 // ответила. Любой сбой оставляет заявку с тем, что уже записано.
 func (s *Service) summarize(ctx context.Context, l *lead.Lead, turns []dialog.Turn, view *passport.View) {
 	transcript := dialog.Transcript(turns)
+	if len(l.Score.Missing) > 0 && transcript != "" {
+		// Что спросить на звонке посчитал скоринг — модель только формулирует.
+		transcript = "НЕ ЗАПОЛНЕНО (спросить на звонке): " + strings.Join(l.Score.Missing, ", ") + "\n\n" + transcript
+	}
 	if view != nil {
 		// Паспорт клиент видел и мог поправить: для резюме он надёжнее пересказа.
 		transcript = passportText(*view) + "\n\n" + transcript

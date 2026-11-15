@@ -520,9 +520,12 @@ func TestLeadAndFeedback(t *testing.T) {
 	var l struct{ ID, Summary string }
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &l))
 	assert.Len(t, l.ID, 10)
-	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", l.Summary, "без модели — список вопросов")
+	assert.True(t, strings.HasPrefix(l.Summary, "Вопросы клиента: Нужен АСКУЭ\nЧто уточнить менеджеру: "),
+		"без модели — список вопросов и что уточнить: %q", l.Summary)
 	require.Len(t, store.leads, 1)
 	assert.Equal(t, "Иван", store.leads[0].Name)
+	assert.NotEmpty(t, store.leads[0].Score.Grade, "оценка сохранена с заявкой")
+	assert.NotContains(t, rec.Body.String(), "grade", "оценку видит менеджер, а не клиент")
 
 	rec = do(s, http.MethodPost, "/api/feedback", `{"session_id": "s", "message_id": "m", "rating": -1, "comment": "мимо"}`)
 	require.Equal(t, http.StatusOK, rec.Code)

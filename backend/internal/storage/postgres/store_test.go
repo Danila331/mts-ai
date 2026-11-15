@@ -15,6 +15,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/lead/score"
 	"github.com/Danila331/mts-ai/backend/internal/privacy"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
@@ -74,9 +75,20 @@ func TestStore(t *testing.T) {
 		dup := lead.Lead{Code: "0123456789", Summary: "s"}
 		assert.ErrorIs(t, s.CreateLead(ctx, &dup), lead.ErrCodeTaken)
 
-		var source string
-		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT summary_source FROM leads WHERE id = $1", l.ID).Scan(&source))
+		var source, scored string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT summary_source, score::text FROM leads WHERE id = $1", l.ID).
+			Scan(&source, &scored))
 		assert.Equal(t, "digest", source, "без источника — список вопросов")
+		assert.Equal(t, "{}", scored, "заявка без оценки — пустой объект")
+
+		withScore := lead.Lead{Code: "9876543210", Summary: "s", Score: score.Score{Grade: score.Warm, Points: 55,
+			Reasons: []string{"Подходит: Платформа учёта"}, Missing: []string{"схема сбора данных"}, Product: "platform"}}
+		require.NoError(t, s.CreateLead(ctx, &withScore))
+		var raw []byte
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT score FROM leads WHERE id = $1", withScore.ID).Scan(&raw))
+		var back score.Score
+		require.NoError(t, json.Unmarshal(raw, &back))
+		assert.Equal(t, withScore.Score, back, "оценка лежит в заявке как есть")
 
 		l.Summary, l.SummarySource = "резюме моделью", lead.SummaryLLM
 		require.NoError(t, s.UpdateLeadSummary(ctx, &l))
