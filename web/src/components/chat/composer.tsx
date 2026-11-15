@@ -1,7 +1,9 @@
 "use client";
 
-import { ArrowUp, Square } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowUp, Mic, Square } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { useDictation } from "@/hooks/use-dictation";
 import { cn } from "@/lib/utils";
 
 export function Composer({
@@ -54,6 +56,13 @@ export function Composer({
     return () => ro.disconnect();
   }, [text, compact]);
 
+  // Распознанная фраза дописывается в поле для проверки — сама не отправляется.
+  const append = useCallback((spoken: string) => {
+    setText((t) => (t.trim() ? `${t.replace(/\s+$/, "")} ${spoken}` : spoken));
+    ref.current?.focus();
+  }, []);
+  const dictation = useDictation(append, (message) => toast.error(message));
+
   const ready = !busy && !disabled && !!text.trim();
   const submit = () => {
     if (!ready) return;
@@ -85,6 +94,29 @@ export function Composer({
     </button>
   );
 
+  // Без Web Speech API в браузере кнопки нет вовсе.
+  const mic = dictation.supported ? (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        dictation.toggle();
+      }}
+      disabled={disabled}
+      aria-pressed={dictation.listening}
+      aria-label={dictation.listening ? "Остановить диктовку" : "Надиктовать сообщение"}
+      title={dictation.listening ? "Слушаю — нажмите, чтобы закончить" : "Надиктовать: текст появится в поле, отправите сами"}
+      className={cn(
+        "flex size-9 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50",
+        dictation.listening
+          ? "bg-brand-soft text-brand-text motion-safe:animate-pulse"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+      )}
+    >
+      <Mic className="size-[18px]" />
+    </button>
+  ) : null;
+
   return (
     <div
       onClick={() => ref.current?.focus()}
@@ -113,13 +145,17 @@ export function Composer({
         )}
       />
       {compact ? (
-        action
+        <>
+          {mic}
+          {action}
+        </>
       ) : (
         <div className="flex items-center gap-2 pl-3">
           <span className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
-            Enter — отправить, Shift + Enter — новая строка
+            {dictation.listening ? "Слушаю… текст появится в поле, отправите сами" : "Enter — отправить, Shift + Enter — новая строка"}
           </span>
           <span className="flex-1 sm:hidden" />
+          {mic}
           {action}
         </div>
       )}
