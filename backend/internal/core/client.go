@@ -94,6 +94,10 @@ func (c *Client) Chat(ctx context.Context, req chat.Request) (chat.Stream, error
 	if req.Mode == dialog.ModeChat && req.Role.Known() {
 		body["role"] = req.Role.Role
 	}
+	// Паспорт — только правилам «Честные нет» в чате; в промпт он не идёт.
+	if req.Mode == dialog.ModeChat && len(req.Passport) > 0 {
+		body["passport"] = req.Passport
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

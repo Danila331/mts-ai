@@ -75,6 +75,7 @@ func (s *Service) WithPassport(store Passports, model passport.Model) *Service {
 func (s *Service) Ask(ctx context.Context, req chat.Request) (*Relay, error) {
 	req.Role = s.role(ctx, req)
 	s.touch(ctx, req)
+	req.Passport = s.passportFor(ctx, req)
 	upstream, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
 	started := time.Now()
 	stream, err := s.core.Chat(upstream, req)
@@ -264,6 +265,25 @@ func (s *Service) role(ctx context.Context, req chat.Request) session.RoleHint {
 		return session.RoleHint{Role: r, Source: session.RoleAuto}
 	}
 	return session.RoleHint{}
+}
+
+// passportFor — паспорт сессии для ядра (T26). Нет сессии, не чат или
+// база не ответила — без паспорта: правила смотрят тогда только реплики.
+func (s *Service) passportFor(ctx context.Context, req chat.Request) json.RawMessage {
+	if s.passports == nil || req.Session.ID == "" || req.Mode != dialog.ModeChat {
+		return nil
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
+	defer cancel()
+	p, err := s.passports.LoadPassport(pctx, req.Session.ID)
+	if err != nil || len(p.Values) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(p.Render())
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 // touch записывает сессию до ответа: разговор виден на сервере, даже если
