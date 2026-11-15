@@ -4,6 +4,8 @@ import {
   BookOpen,
   ChevronDown,
   Code2,
+  FileCheck2,
+  FlaskConical,
   Menu,
   MessageSquare,
   PanelLeft,
@@ -11,6 +13,7 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Sparkles,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -30,6 +33,9 @@ const NAV = [
   { href: "/playground", label: "Чат и отладка", icon: MessageSquare },
   { href: "/kb", label: "База знаний", icon: BookOpen },
   { href: "/widget", label: "Виджет для сайта", icon: Code2 },
+  { href: "/check-data", label: "Проверить выгрузку", icon: FileCheck2 },
+  { href: "/manager/copilot", label: "Копилот менеджера", icon: Sparkles },
+  { href: "/lab", label: "Стресс-тест", icon: FlaskConical },
   { href: "/settings", label: "Настройки RAG", icon: SlidersHorizontal },
 ];
 
