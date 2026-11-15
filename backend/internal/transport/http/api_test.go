@@ -55,7 +55,11 @@ func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title 
 	}
 	s, ok := m.sessions[ref.ID]
 	if !ok {
-		s = session.Session{ID: ref.ID, Channel: string(ref.Channel), Title: title, CreatedAt: time.Now()}
+		s = session.Session{ID: ref.ID, Channel: string(ref.Channel), Title: title, Page: json.RawMessage(`{}`), CreatedAt: time.Now()}
+	}
+	// Как UpsertSession: страница пишется, только если пришла непустая.
+	if len(ref.Page) > 0 {
+		s.Page = ref.Page
 	}
 	s.Mode, s.UpdatedAt = mode, time.Now()
 	m.sessions[ref.ID] = s
@@ -717,4 +721,73 @@ func TestChatSessionValidation(t *testing.T) {
 	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", `{`+q+`}`).Code)
 	assert.Empty(t, store.sessions)
 	assert.Equal(t, 1, store.answerCount())
+}
+
+func TestSessionKeepsWidgetPage(t *testing.T) {
+	core, bodies := recordingCore(t)
+	s, store := newServer(t, core.URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	ask := func(page string) {
+		t.Helper()
+		body := `{"messages": [{"role": "user", "content": "Окупится ли станция?"}], "session_id": "widget-page-1", "channel": "embed"`
+		if page != "" {
+			body += `, "page": ` + page
+		}
+		require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", body+`}`).Code)
+	}
+
+	ask(`{"path": "/solar", "title": "Солнечные станции — МТС", "utm_source": "yandex", "utm_campaign": "solar-2026", "utm_term": ""}`)
+	want := `{"path": "/solar", "title": "Солнечные станции — МТС", "utm_source": "yandex", "utm_campaign": "solar-2026"}`
+	assert.JSONEq(t, want, string(store.sessions["widget-page-1"].Page), "пустые значения не храним")
+
+	ask("")
+	ask(`{}`)
+	assert.JSONEq(t, want, string(store.sessions["widget-page-1"].Page), "вопрос без страницы её не стирает")
+
+	ask(`{"path": "/askue", "title": "Платформа учёта"}`)
+	assert.JSONEq(t, `{"path": "/askue", "title": "Платформа учёта"}`, string(store.sessions["widget-page-1"].Page),
+		"клиент перешёл на другую страницу — сессия знает последнюю")
+
+	for _, b := range bodies() {
+		_, leaked := b["page"]
+		assert.False(t, leaked, "страница ядру не уходит: в промпт она не попадает")
+		assert.NotContains(t, string(b["messages"]), "/solar")
+	}
+
+	rec := do(s, http.MethodGet, "/api/sessions/widget-page-1", "", ManagerHeader, "manager-token")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var h session.History
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &h))
+	assert.JSONEq(t, `{"path": "/askue", "title": "Платформа учёта"}`, string(h.Session.Page))
+}
+
+func TestChatPageValidation(t *testing.T) {
+	s, store := newServer(t, fakeCore(t, goodStream).URL, nil)
+	q := `"messages": [{"role": "user", "content": "q"}], "session_id": "good-sess-1", "channel": "embed"`
+	long := strings.Repeat("я", session.PageValueRunes+1)
+	huge := `{"path": "/` + strings.Repeat("a", session.PageBytes) + `"}`
+	for page, want := range map[string]string{
+		`{"path": "/solar", "cookie": "sid=1"}`:  "page: неизвестное поле «cookie» — только path, title и utm_source|medium|campaign|term|content",
+		`{"path": "/solar", "url": "https://x"}`: "page: неизвестное поле «url» — только path, title и utm_source|medium|campaign|term|content",
+		`{"referrer": "https://ya.ru"}`:          "page: неизвестное поле «referrer» — только path, title и utm_source|medium|campaign|term|content",
+		`{"utm_id": "1"}`:                        "page: неизвестное поле «utm_id» — только path, title и utm_source|medium|campaign|term|content",
+		`{"path": 1}`:                            "page.path: ожидается строка",
+		`{"title": {"x": "y"}}`:                  "page.title: ожидается строка",
+		`{"title": "` + long + `"}`:              "page.title: не длиннее 300 знаков",
+		`["/solar"]`:                             "page: ожидается объект {path, title, utm_*}",
+		`"/solar"`:                               "page: ожидается объект {path, title, utm_*}",
+		huge:                                     "page: не больше 2048 байт",
+	} {
+		rec := do(s, http.MethodPost, "/api/chat", `{`+q+`, "page": `+page+`}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, page)
+		assert.JSONEq(t, `{"error": "`+want+`"}`, rec.Body.String(), page)
+	}
+	assert.Empty(t, store.sessions, "отказ — до записи сессии")
+	assert.Zero(t, store.answerCount(), "и до ядра")
+
+	// Ровно на пределе — принимается; null — как без страницы.
+	edge := `{"title": "` + strings.Repeat("я", session.PageValueRunes) + `"}`
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", `{`+q+`, "page": `+edge+`}`).Code)
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{"messages": [{"role": "user", "content": "q"}], "session_id": "good-sess-2", "page": null}`).Code)
+	assert.JSONEq(t, `{}`, string(store.sessions["good-sess-2"].Page))
 }

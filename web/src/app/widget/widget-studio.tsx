@@ -3,6 +3,7 @@
 import {
   ArrowUpRight,
   Check,
+  ChevronDown,
   Code2,
   Copy,
   Lock,
@@ -13,6 +14,7 @@ import {
   Pipette,
   Plus,
   RotateCcw,
+  Route,
   Smartphone,
   X,
 } from "lucide-react";
@@ -23,8 +25,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { TOPICS, type TopicName, topicByName } from "@/components/chat/topics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { matchTopic } from "@/lib/page-context";
 import { cn } from "@/lib/utils";
+
+/** Строка data-topics: префикс пути страницы сайта → тема приветствия и первых вопросов в чате. */
+interface TopicRule {
+  prefix: string;
+  topic: TopicName;
+}
 
 interface Settings {
   title: string;
@@ -33,6 +43,7 @@ interface Settings {
   greeting: string;
   quick: string[];
   delay: number;
+  topics: TopicRule[];
 }
 
 const DEFAULTS: Settings = {
@@ -42,7 +53,13 @@ const DEFAULTS: Settings = {
   greeting: "Здравствуйте! Подберу решение по энергоучёту, потерям и солнечной генерации.",
   quick: ["Как снизить расходы на электроэнергию?", "Окупится ли солнечная станция?"],
   delay: 3,
+  topics: [
+    { prefix: "/solar", topic: "solar" },
+    { prefix: "/askue", topic: "askue" },
+  ],
 };
+
+const TOPIC_NAMES = Object.keys(TOPICS) as TopicName[];
 
 const COLORS = [
   { value: "#FF0032", name: "Красный МТС" },
@@ -56,19 +73,31 @@ const TRY = [
   { label: "Поиск потерь", text: "Как найти, где теряется электроэнергия в нашей сети?" },
 ];
 
-const LIMITS = { title: 40, greeting: 140, quick: 60 };
+const LIMITS = { title: 40, greeting: 140, quick: 60, prefix: 60, topics: 8 };
 const isHex = (v: string) => /^#[0-9a-f]{6}$/i.test(v);
 const quickList = (s: Settings) => s.quick.map((q) => q.trim()).filter(Boolean).slice(0, 3);
 const attr = (v: string) => v.replace(/"/g, "&quot;");
+/** Тот же формат префикса, что принимает загрузчик (src/lib/page-context.ts). */
+const isPrefix = (v: string) => /^\/[^\s"'<>]{0,199}$/.test(v);
+
+/** data-topics как объект: только верные префиксы, повтор префикса — последняя строка. */
+function topicsMap(s: Settings) {
+  const out: Record<string, string> = {};
+  for (const { prefix, topic } of s.topics) if (isPrefix(prefix.trim())) out[prefix.trim()] = topic;
+  return out;
+}
 
 function snippet(origin: string, s: Settings) {
+  const topics = topicsMap(s);
+  // JSON с двойными кавычками — в одинарных кавычках атрибута; одинарных в префиксах нет (isPrefix).
+  const topicsAttr = Object.keys(topics).length ? `\n  data-topics='${JSON.stringify(topics)}'` : "";
   return `<script src="${origin}/widget.js" async
   data-title="${attr(s.title)}"
   data-color="${s.color}"
   data-position="${s.position}"
   data-greeting="${attr(s.greeting)}"
   data-quick="${attr(quickList(s).join("|"))}"
-  data-greeting-delay="${s.delay}"></script>`;
+  data-greeting-delay="${s.delay}"${topicsAttr}></script>`;
 }
 
 function useCopy() {
@@ -215,6 +244,71 @@ function SidePicker({ value, onChange, color }: { value: Settings["position"]; o
   );
 }
 
+/** data-topics строками: префикс пути → тема из базы. Своё приветствие и первые вопросы — в чате на этих страницах. */
+function TopicRules({ value, onChange }: { value: TopicRule[]; onChange: (v: TopicRule[]) => void }) {
+  const patch = (i: number, p: Partial<TopicRule>) => onChange(value.map((r, j) => (j === i ? { ...r, ...p } : r)));
+  return (
+    <>
+      {value.length > 0 && (
+        <ul className="grid gap-2">
+          {value.map((r, i) => {
+            const bad = !isPrefix(r.prefix.trim());
+            return (
+              <li key={i} className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-1.5">
+                <Input
+                  value={r.prefix}
+                  maxLength={LIMITS.prefix}
+                  placeholder="/solar"
+                  aria-label={`Префикс пути ${i + 1}`}
+                  aria-invalid={bad}
+                  onChange={(e) => patch(i, { prefix: e.target.value })}
+                  className="h-9 font-mono text-[13px] md:text-[13px]"
+                />
+                <span className="relative inline-flex min-w-0">
+                  <select
+                    value={r.topic}
+                    onChange={(e) => patch(i, { topic: e.target.value as TopicName })}
+                    aria-label={`Тема для ${r.prefix || `строки ${i + 1}`}`}
+                    className="h-9 w-full min-w-0 appearance-none truncate rounded-lg border border-input bg-background pr-7 pl-2.5 text-[13px] outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+                  >
+                    {TOPIC_NAMES.map((name) => (
+                      <option key={name} value={name}>
+                        {TOPICS[name].label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-4 -translate-y-1/2 text-muted-foreground" />
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onChange(value.filter((_, j) => j !== i))}
+                  aria-label={`Удалить тему ${i + 1}`}
+                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-60 transition hover:bg-muted hover:text-foreground hover:opacity-100"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {value.length < LIMITS.topics && (
+        <button
+          type="button"
+          onClick={() => {
+            const used = new Set(value.map((r) => r.topic));
+            const topic = TOPIC_NAMES.find((n) => !used.has(n)) ?? TOPIC_NAMES[0];
+            onChange([...value, { prefix: "/", topic }]);
+          }}
+          className="flex h-9 items-center justify-center gap-1.5 rounded-lg border border-dashed text-[13px] text-muted-foreground transition-colors hover:border-input hover:bg-muted hover:text-foreground"
+        >
+          <Plus className="size-3.5" /> Добавить страницу
+        </button>
+      )}
+    </>
+  );
+}
+
 function Segmented<T extends string>({
   value,
   onChange,
@@ -227,7 +321,7 @@ function Segmented<T extends string>({
   label: string;
 }) {
   return (
-    <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="radiogroup" aria-label={label}>
+    <div className="inline-flex w-fit max-w-full overflow-x-auto rounded-lg bg-muted p-1" role="radiogroup" aria-label={label}>
       {options.map(({ value: v, label: l, icon: Icon, iconOnly, disabled }) => (
         <button
           key={v}
@@ -239,7 +333,7 @@ function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(v)}
           className={cn(
-            "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
             value === v && "bg-background text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-accent",
           )}
         >
@@ -377,6 +471,7 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
   const [standUp, setStandUp] = useState<boolean | null>(null);
   const [src, setSrc] = useState("");
   const [nonce, setNonce] = useState(0);
+  const [previewPath, setPreviewPath] = useState("/");
   const frame = useRef<HTMLIFrameElement>(null);
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS((x) => ({ ...x, [k]: v }));
   const stand = standUrl.replace(/\/$/, "");
@@ -402,6 +497,12 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
 
   const mts = source === "mts" && standUp !== false;
 
+  // Страница превью: главная или одна из страниц с темой — виджет видит этот путь и берёт тему из data-topics.
+  const topics = useMemo(() => topicsMap(s), [s]);
+  const pages = useMemo(() => ["/", ...Object.keys(topics).filter((p) => p !== "/")], [topics]);
+  const path = pages.includes(previewPath) ? previewPath : "/";
+  const previewTopic = topicByName(matchTopic(path, topics));
+
   // Превью — настоящий widget.js: на копии сайта МТС (стенд принимает настройки в адресе) или на заглушке.
   useEffect(() => {
     if (standUp === null) return;
@@ -413,7 +514,9 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
         greeting: s.greeting,
         greetingDelay: String(Math.min(s.delay, 1)),
         quick: quickList(s).join("|"),
+        path,
       };
+      if (Object.keys(topics).length) cfg.topics = JSON.stringify(topics);
       if (mts) {
         const q = new URLSearchParams(Object.entries(cfg).map(([k, v]) => [`w_${k}`, v]));
         q.set("w_preview", "1");
@@ -424,7 +527,7 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [s, nonce, mts, stand, standUp]);
+  }, [s, nonce, mts, stand, standUp, path, topics]);
 
   const command = (action: "ask" | "toggle", text?: string) => {
     const win = frame.current?.contentWindow;
@@ -607,6 +710,20 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                     </div>
                   </Field>
                 </Panel>
+
+                <Panel icon={Route} title="Темы страниц">
+                  <Field
+                    label="Префикс пути → тема"
+                    hint="На странице с этим началом пути чат здоровается и предлагает первые вопросы по продукту. Совпадает самый длинный префикс; на остальных страницах — общее приветствие."
+                    aside={
+                      <span className="tnum ml-auto text-xs text-muted-foreground">
+                        {s.topics.length}/{LIMITS.topics}
+                      </span>
+                    }
+                  >
+                    <TopicRules value={s.topics} onChange={(v) => set("topics", v)} />
+                  </Field>
+                </Panel>
               </div>
               <button
                 type="button"
@@ -651,7 +768,10 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                   </span>
                   <div className="mx-auto flex h-7 w-full max-w-[380px] min-w-0 items-center justify-center gap-1.5 rounded-full border bg-background px-3 text-[12.5px] text-muted-foreground dark:bg-background">
                     <Lock className="size-3 shrink-0" />
-                    <span className="truncate text-foreground/80">{host}</span>
+                    <span className="truncate text-foreground/80">
+                      {host}
+                      {path !== "/" && <span className="text-muted-foreground">{path}</span>}
+                    </span>
                     {mts && <span className="shrink-0 text-muted-foreground/70">· копия для стенда</span>}
                   </div>
                   <Tooltip>
@@ -689,6 +809,25 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="mr-0.5 text-[13px] text-muted-foreground">Страница:</span>
+                <Segmented
+                  label="Страница сайта в превью"
+                  value={path}
+                  onChange={setPreviewPath}
+                  options={pages.map((p) => ({ value: p, label: p === "/" ? "Главная" : p }))}
+                />
+                <span className="text-[13px] text-muted-foreground">
+                  {previewTopic ? (
+                    <>
+                      тема <span className="font-medium text-foreground">«{previewTopic.label}»</span> — откройте чат
+                    </>
+                  ) : (
+                    "общее приветствие"
+                  )}
+                </span>
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="mr-0.5 text-[13px] text-muted-foreground">Спросить в превью:</span>
                 {TRY.map((t) => (
                   <Button key={t.label} variant="outline" size="sm" onClick={() => command("ask", t.text)}>

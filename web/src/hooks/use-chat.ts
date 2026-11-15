@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Channel, streamChat } from "@/lib/api";
+import type { PageInfo } from "@/lib/page-context";
 import { readSandbox } from "@/lib/sandbox";
 import type { ChatMode, Message, Session, Turn } from "@/lib/types";
 
@@ -28,12 +29,13 @@ export function toTurns(messages: Message[]): Turn[] {
  * Сессии чата в localStorage + отправка сообщений. Один хук на стенд и на виджет — у них разные ключи хранилища.
  * sandbox — отправлять ли с вопросом настройки песочницы (/settings). Только стенд: виджет на сайте
  * всегда отвечает с общими настройками. channel — откуда разговор: id сессии уходит на сервер с каждым
- * вопросом, и менеджер видит диалог целиком, даже если клиент очистил браузер.
+ * вопросом, и менеджер видит диалог целиком, даже если клиент очистил браузер. page — страница сайта, где
+ * открыт виджет (T8): уходит с вопросом и пишется в сессию для аналитики, ядру и в промпт не попадает.
  */
 export function useChat(
   storageKey: string,
   mode: ChatMode = "chat",
-  { sandbox = false, channel = "playground" }: { sandbox?: boolean; channel?: Channel } = {},
+  { sandbox = false, channel = "playground", page }: { sandbox?: boolean; channel?: Channel; page?: PageInfo } = {},
 ) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>("");
@@ -105,6 +107,7 @@ export function useChat(
             overrides: sandbox ? readSandbox() : undefined,
             sessionId,
             channel,
+            page,
           },
         );
       } catch (err) {
@@ -117,7 +120,7 @@ export function useChat(
         controllers.current.delete(sessionId);
       }
     },
-    [mode, sandbox, channel, patchMessage],
+    [mode, sandbox, channel, page, patchMessage],
   );
 
   const send = useCallback(

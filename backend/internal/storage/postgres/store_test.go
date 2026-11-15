@@ -112,6 +112,25 @@ func TestStore(t *testing.T) {
 			[]string{h.Turns[0].Content, h.Turns[1].Content, h.Turns[2].Content, h.Turns[3].Content})
 		assert.Equal(t, []string{"kb-1", "kb-2"}, h.Turns[1].Sources)
 
+		// Страница виджета (T8): пишется при создании, пустая её не стирает,
+		// непустая заменяет.
+		paged := session.Ref{ID: "widget-page-1", Channel: session.Embed,
+			Page: json.RawMessage(`{"path": "/solar", "utm_source": "yandex"}`)}
+		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Про солнце"))
+		h, err = s.History(ctx, paged.ID)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"path": "/solar", "utm_source": "yandex"}`, string(h.Session.Page))
+		require.NoError(t, s.TouchSession(ctx, session.Ref{ID: paged.ID, Channel: session.Embed}, "chat", "Ещё"))
+		h, err = s.History(ctx, paged.ID)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"path": "/solar", "utm_source": "yandex"}`, string(h.Session.Page), "вопрос без страницы её не стирает")
+		paged.Page = json.RawMessage(`{"path": "/askue", "title": "Платформа учёта"}`)
+		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Ещё"))
+		h, err = s.History(ctx, paged.ID)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"path": "/askue", "title": "Платформа учёта"}`, string(h.Session.Page))
+		assert.Equal(t, "Про солнце", h.Session.Title)
+
 		_, err = s.History(ctx, "nobody-here")
 		assert.ErrorIs(t, err, session.ErrNotFound)
 		assert.Error(t, s.TouchSession(ctx, session.Ref{ID: "x-sess-01", Channel: "fax"}, "chat", ""),
