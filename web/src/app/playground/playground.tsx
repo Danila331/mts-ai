@@ -199,6 +199,7 @@ export function Playground() {
               if (explicit) setDebugOpen(true);
             }}
             onLead={() => setLeadOpen(true)}
+            summary
           />
         )}
       </div>

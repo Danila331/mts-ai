@@ -373,3 +373,41 @@
     -webkit-text-fill-color: currentColor;
   }
 }
+
+/*
+ * «Итоги консультации» (T10): «Скачать PDF» = window.print(). Копия документа живёт в .eb-print-root прямо
+ * в <body>; на экране она скрыта, а в печати остаётся только она — без сайдбара, чата и всплывающих слоёв.
+ */
+.eb-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm 15mm;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+  }
+
+  body:has(> .eb-print-root) > :not(.eb-print-root) {
+    display: none !important;
+  }
+
+  .eb-print-root {
+    display: block;
+    color: #1d2023;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .eb-print-root a {
+    color: inherit;
+  }
+}
