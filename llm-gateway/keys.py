@@ -53,7 +53,7 @@ def call(base: str, master: str, method: str, path: str, body: dict | None = Non
         return e.code, e.read().decode(errors="replace")
 
 
-def wait_ready(base: str, seconds: int = 180) -> bool:
+def wait_ready(base: str, seconds: int) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
@@ -85,7 +85,9 @@ def spec(svc: str, defaults: dict) -> dict:
 def main() -> int:
     base = sys.argv[1].rstrip("/")
     master = os.environ["LITELLM_MASTER_KEY"]
-    if not wait_ready(base):
+    # На пустой базе LiteLLM сначала накатывает всю историю своей схемы (220+ миграций); на хостинге с базой
+    # по сети это минуты. Ждать меньше — значит не создать ключи служб на первом старте.
+    if not wait_ready(base, int(num("GW_KEYS_WAIT_SEC", 600))):
         print("llm-gateway: база шлюза не ответила — ключи служб не синхронизированы", file=sys.stderr)
         return 1
     failed = 0
