@@ -1,13 +1,11 @@
 "use client";
 
 import { Check, ChevronDown, Download, FileJson, PanelRight, Pencil, Trash2 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { ChatView } from "@/components/chat/chat-view";
-import { LeadDialog } from "@/components/chat/lead-dialog";
-import { DebugPanel } from "@/components/debug/debug-panel";
-import { ChunkSheet } from "@/components/kb/chunk-sheet";
 import { exportSession, SessionsList } from "@/components/sessions-sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +23,11 @@ import { useKb } from "@/hooks/use-kb";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import type { ChatMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+// Тяжёлые части экрана — отдельными чанками: разбор ответа, лист раздела базы и заявка не нужны для первого экрана.
+const DebugPanel = dynamic(() => import("@/components/debug/debug-panel").then((m) => m.DebugPanel), { ssr: false });
+const ChunkSheet = dynamic(() => import("@/components/kb/chunk-sheet").then((m) => m.ChunkSheet), { ssr: false });
+const LeadDialog = dynamic(() => import("@/components/chat/lead-dialog").then((m) => m.LeadDialog), { ssr: false });
 
 const DEBUG_KEY = "eb.debug.open";
 

@@ -7,7 +7,8 @@ import "./globals.css";
 
 // Geist — рабочий гротеск интерфейса с кириллицей; Geist Mono — только id, числа в данных, промпт и JSON.
 const sans = Geist({ variable: "--font-geist", subsets: ["latin", "cyrillic"], display: "swap" });
-const mono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin", "cyrillic"], display: "swap" });
+// Моноширинный не нужен для первого экрана — не предзагружаем, он подтянется по месту.
+const mono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin", "cyrillic"], display: "swap", preload: false });
 
 export const metadata: Metadata = {
   title: "EnergyTool AI — ИИ-консультант МТС",

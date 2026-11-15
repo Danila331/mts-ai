@@ -276,10 +276,15 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     else if (cfg.greeting && !sessionStorage.getItem(STORAGE_GREETED) && cfg.greetingDelay >= 0) {
       setTimeout(() => !isOpen && bubble.classList.add("show"), cfg.greetingDelay * 1000);
     }
-    // Чат подгружаем заранее, когда браузер свободен: открытие будет мгновенным.
+    // Чат подгружаем по намерению — наведение или фокус на кнопке и подсказке, — чтобы открытие было мгновенным,
+    // а запасной вариант — через несколько секунд в простое: сайт клиента сначала грузит своё, потом наш чат.
+    for (const el of [launcher, bubble]) {
+      el.addEventListener("pointerenter", ensureFrame, { once: true });
+      el.addEventListener("focusin", ensureFrame, { once: true });
+      el.addEventListener("touchstart", ensureFrame, { once: true, passive: true });
+    }
     const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
-    if (idle) idle(ensureFrame);
-    else setTimeout(ensureFrame, 2500);
+    setTimeout(() => (idle ? idle(ensureFrame) : ensureFrame()), 6000);
   };
   if (document.body) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });
