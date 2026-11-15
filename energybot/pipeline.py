@@ -26,6 +26,7 @@ from .llm import Api, context_overflow, env, env_num, strip_thinking
 from .prompts import (
     CHECK_NOTE,
     CHECK_TAIL,
+    COPILOT_MAX_WORDS,
     EVIDENCE_INLINE_TAIL,
     EVIDENCE_TAIL,
     REFINE,
@@ -337,7 +338,8 @@ class Consultant:
             timings["refine"] = time.perf_counter() - t2
         if text:
             t3 = time.perf_counter()
-            text, checked = self.check(text, messages, known, turns, fast)
+            limits = {"max_words": COPILOT_MAX_WORDS, "length": "150 слов"} if mode == "copilot" else {}
+            text, checked = self.check(text, messages, known, turns, fast, **limits)
             guard.update(checked)
             timings["guard"] = time.perf_counter() - t3
         timings["total"] = time.perf_counter() - t0
@@ -490,11 +492,12 @@ class Consultant:
             return Answer(FALLBACK, sources, timings, reason, guard)
         return Answer(text, sources, timings, "", guard)
 
-    def check(self, text: str, messages: list, materials: str, turns: list, fast: bool) -> tuple:
-        """Числа — только из материалов и диалога, длина — в разумных пределах."""
+    def check(self, text: str, messages: list, materials: str, turns: list, fast: bool,
+              max_words: int = MAX_WORDS, length: str = "") -> tuple:
+        """Числа — только из материалов и диалога, длина — в разумных пределах (у копилота менеджера — свои)."""
         dialog = "\n".join(t["content"] for t in turns)
         bad = unknown_numbers(text, materials, dialog)
-        too_long = word_count(text) > MAX_WORDS
+        too_long = word_count(text) > max_words
         if not bad and not too_long:
             return text, {}
         guard = {"unknown_numbers": bad, "too_long": too_long}
@@ -502,7 +505,8 @@ class Consultant:
             try:
                 fixed = tidy(split_plan(self.api.chat(messages + [
                     {"role": "assistant", "content": text},
-                    {"role": "user", "content": repair_instruction(bad, too_long)},
+                    {"role": "user", "content": repair_instruction(bad, too_long, length) if length
+                     else repair_instruction(bad, too_long)},
                 ])))
                 if fixed:
                     text, guard["repaired"] = fixed, True

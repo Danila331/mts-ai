@@ -750,7 +750,7 @@ export function DebugPanel({
   ];
   const enabled = (v: string) => (v === "search" ? !!r : !!a);
   const meta = a
-    ? [a.model ? a.model.split("/").pop() : "без модели", a.mode === "eval" ? "автопроверка" : "чат", sec(a.timings.server_total)]
+    ? [a.model ? a.model.split("/").pop() : "без модели", a.mode === "eval" ? "автопроверка" : a.mode === "copilot" ? "копилот" : "чат", sec(a.timings.server_total)]
     : ["ищу в базе…"];
 
   return (

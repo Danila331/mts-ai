@@ -14,7 +14,7 @@
     GET  /healthz               жива ли служба (без токена: это проба хостинга)
     GET  /core/health           схема ответа, есть ли модель, эмбеддинги, размер базы
     GET  /core/kb               база знаний разделами (те же фрагменты, что видит модель)
-    POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval", "overrides": {ключ: значение}}
+    POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"|"copilot", "overrides": {…}}
                                 → SSE: stage, answer, done. overrides — настройки RAG только для этого ответа
                                 (песочница стенда), те же ключи и пределы, что у /core/settings
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
@@ -621,7 +621,7 @@ class App:
 
     def chat(self, body: dict, emit) -> dict:
         turns = clean_turns(body.get("messages"))
-        mode = body.get("mode") if body.get("mode") in ("chat", "eval") else self.mode
+        mode = body.get("mode") if body.get("mode") in ("chat", "eval", "copilot") else self.mode
         applied, values = self.settings.overrides(body.get("overrides"))
         # Весь ответ — и поиск, и представление для отладки — с настройками этого запроса.
         with overridden(values):

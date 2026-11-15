@@ -7,7 +7,8 @@ export interface Turn {
   content: string;
 }
 
-export type ChatMode = "chat" | "eval";
+/** chat — клиент на сайте, eval — как автопроверка, copilot — менеджер МТС спрашивает базу (T11). */
+export type ChatMode = "chat" | "eval" | "copilot";
 
 export interface Hit {
   rank: number;

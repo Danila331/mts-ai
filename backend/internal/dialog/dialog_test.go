@@ -85,5 +85,6 @@ func TestDigestAndTranscript(t *testing.T) {
 func TestParseMode(t *testing.T) {
 	assert.Equal(t, ModeChat, ParseMode("chat"))
 	assert.Equal(t, ModeEval, ParseMode("eval"))
+	assert.Equal(t, ModeCopilot, ParseMode("copilot"))
 	assert.Equal(t, Mode(""), ParseMode("debug"))
 }

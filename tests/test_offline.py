@@ -117,6 +117,27 @@ class PostprocessTest(unittest.TestCase):
         self.assertEqual(split_inline_evidence("ЦИТАТЫ:\n- «…»\nНЕТ В БАЗЕ: —"), ("", ""))  # формат не соблюдён
         self.assertEqual(split_inline_evidence("Просто ответ."), ("Просто ответ.", ""))
 
+    def test_copilot_rules_stay_out_of_chat_and_eval(self):
+        """Копилот менеджера (T11) — отдельный блок: промпты чата и автопроверки не меняются ни на символ."""
+        from energybot.guard import repair_instruction
+        from energybot.prompts import COPILOT_MODE, COPILOT_TAIL, build_messages, build_write_messages
+        turns = [{"role": "user", "content": "Сравни платформу учёта и поиск потерь"}]
+        for style in ("tight", "full", "recipe", "jury", "jury2"):
+            for mode in ("eval", "chat"):
+                for msgs in (build_messages("СПР", "МАТ", turns, mode, style=style, near=2),
+                             build_write_messages("МАТ", turns, "черновик", mode)):
+                    text = "\n".join(m["content"] for m in msgs)
+                    self.assertNotIn("КОПИЛОТ", text, f"{mode}/{style}")
+                    self.assertNotIn(COPILOT_TAIL, text, f"{mode}/{style}")
+            copilot = "\n".join(m["content"] for m in build_messages("СПР", "МАТ", turns, "copilot", style=style, near=2))
+            self.assertIn(COPILOT_MODE.strip(), copilot)
+            self.assertIn(COPILOT_TAIL, copilot)
+            self.assertNotIn("ПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ", copilot, "эталоны клиенту задали бы копилоту чужую форму")
+            self.assertNotIn("РАБОТА С ЗАЯВКОЙ", copilot)
+        # Проверка длины: прежний текст у чата и автопроверки, свой предел у копилота.
+        self.assertIn("40–60 слов", repair_instruction([], True))
+        self.assertIn("150 слов", repair_instruction([], True, "150 слов"))
+
     def test_tidy_removes_markdown(self):
         self.assertEqual(tidy("Консультант: **Да**, можно:\n- раз\n- два\nВопрос?"), "Да, можно: раз два Вопрос?")
 

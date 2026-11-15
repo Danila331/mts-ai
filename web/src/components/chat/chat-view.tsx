@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { Composer } from "./composer";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
-import { Starters } from "./starters";
+import { type Starter, Starters } from "./starters";
 
 const GREETING =
   "Подберу решение по базе знаний МТС EnergyTool: учёт электроэнергии, поиск потерь, солнечная генерация, оптовый рынок и тарифы. Опишите задачу своими словами.";
@@ -75,6 +75,8 @@ export function ChatView({
   onLead,
   compact,
   greeting,
+  heading = "Чем помочь с электроэнергией?",
+  starters,
   prefill,
   disabled,
 }: {
@@ -87,6 +89,9 @@ export function ChatView({
   onLead?: () => void;
   compact?: boolean;
   greeting?: string;
+  /** Заголовок пустого экрана и подсказки первого вопроса — свои у копилота менеджера. */
+  heading?: string;
+  starters?: Starter[];
   prefill?: { text: string; nonce: number };
   disabled?: boolean;
 }) {
@@ -138,7 +143,7 @@ export function ChatView({
           <div className="msg-in flex flex-col items-center text-center">
             <h1 className="flex items-center gap-3 text-[26px] leading-tight font-medium tracking-[-0.02em] sm:text-[30px]">
               <BrandGlyph className="size-8 sm:size-9" />
-              Чем помочь с электроэнергией?
+              {heading}
             </h1>
             <p className="mt-2.5 max-w-[36rem] text-[14px] leading-relaxed text-pretty text-muted-foreground">
               {greeting ?? "Отвечаю только по базе знаний МТС EnergyTool и показываю источник каждого факта."}
@@ -146,7 +151,7 @@ export function ChatView({
           </div>
           <div className="mt-7">{composer}</div>
           <div className="mt-4">
-            <Starters onPick={send} />
+            <Starters onPick={send} items={starters} />
           </div>
         </div>
       </div>
@@ -171,7 +176,7 @@ export function ChatView({
                 </p>
               </div>
               <div className="pl-8.5">
-                <Starters onPick={send} compact />
+                <Starters onPick={send} compact items={starters} />
               </div>
             </div>
           )}
