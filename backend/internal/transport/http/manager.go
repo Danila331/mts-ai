@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/Danila331/mts-ai/backend/internal/analytics"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
@@ -119,4 +120,29 @@ func intParam(c echo.Context, name string, def, min, max int) (int, error) {
 		return 0, errors.New(name + ": целое от " + strconv.Itoa(min) + " до " + strconv.Itoa(max))
 	}
 	return n, nil
+}
+
+// analytics — воронка, срезы и пробелы базы за 7 или 30 дней (T6).
+func (s *Server) analytics(c echo.Context) error {
+	if s.deps.Analytics == nil {
+		return fail(c, http.StatusNotFound, "not found")
+	}
+	var days int
+	raw := strings.TrimSpace(c.QueryParam("days"))
+	if raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return fail(c, http.StatusBadRequest, "days: 7 или 30")
+		}
+		days = n
+	}
+	days, err := analytics.ParseDays(days, raw != "")
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	report, err := s.deps.Analytics.Analytics(c.Request().Context(), days)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, report)
 }

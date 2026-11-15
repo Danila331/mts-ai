@@ -18,6 +18,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/rs/zerolog"
 
+	"github.com/Danila331/mts-ai/backend/internal/analytics"
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	chatuc "github.com/Danila331/mts-ai/backend/internal/chat/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/config"
@@ -75,6 +76,10 @@ type (
 		LeadCard(ctx context.Context, code string) (lead.Card, error)
 		SetLeadStatus(ctx context.Context, code string, status lead.Status) error
 	}
+	// Analytics — отчёт экрана менеджера (T6).
+	Analytics interface {
+		Analytics(ctx context.Context, days int) (analytics.Report, error)
+	}
 	Settings interface {
 		Settings(ctx context.Context) (json.RawMessage, error)
 		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
@@ -94,6 +99,8 @@ type Deps struct {
 	Passports Passports
 	// Board — nil выключает заявки менеджера.
 	Board Board
+	// Analytics — nil выключает аналитику.
+	Analytics Analytics
 	// Documents — nil выключает приём документов.
 	Documents Documents
 	// Metrics — nil выключает метрики.
@@ -246,6 +253,8 @@ func (s *Server) routes() {
 	api.GET("/leads", s.leadList, managerLimit, s.requireManager)
 	api.GET("/leads/:code", s.leadCard, managerLimit, s.requireManager)
 	api.PATCH("/leads/:code/status", s.leadStatus, managerLimit, s.requireManager)
+	// Аналитика воронки и пробелов базы (T6): ?days=7|30.
+	api.GET("/analytics", s.analytics, managerLimit, s.requireManager)
 	// Паспорт задачи правит сам клиент: id сессии знает только его браузер.
 	api.PATCH("/sessions/:id/passport", s.patchPassport, feedbackLimit)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Danila331/mts-ai/backend/internal/analytics"
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/config"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
@@ -186,4 +187,42 @@ func TestLeadStatusChange(t *testing.T) {
 
 func chatRecord(id, sessionID, question, answer string) chat.Record {
 	return chat.Record{Answer: chat.Answer{ID: id, Text: answer, Mode: "chat"}, Question: question, SessionID: sessionID}
+}
+
+// Analytics — заглушка хранилища: отчёт из фиксированных счётчиков.
+func (m *memStore) Analytics(_ context.Context, days int) (analytics.Report, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.analyticsDays = days
+	return analytics.Build(days,
+		analytics.Raw{Sessions: 10, Answered: 8, Filled: 4, WithLead: 2, Leads: 2, Answers: 20, Fallbacks: 3,
+			ByGrade: map[string]int{"hot": 1, "cold": 1}, ByKind: map[string]int{"callback": 2},
+			SessionsByChannel: map[string]int{"embed": 6, "playground": 4}, LeadsByChannel: map[string]int{"embed": 2}},
+		[]analytics.Gap{{Question: "Сколько стоит [телефон]?", Count: 2, LastAt: time.Now()}}), nil
+}
+
+func TestAnalyticsNeedsManagerAndPeriod(t *testing.T) {
+	s, store := newServer(t, fakeCore(t, goodStream).URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	manager := []string{ManagerHeader, "manager-token"}
+
+	assert.Equal(t, http.StatusUnauthorized, do(s, http.MethodGet, "/api/analytics", "").Code)
+	assert.Equal(t, http.StatusUnauthorized, do(s, http.MethodGet, "/api/analytics?days=7", "", ManagerHeader, "wrong").Code)
+
+	rec := do(s, http.MethodGet, "/api/analytics", "", manager...)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 7, store.analyticsDays, "по умолчанию неделя")
+	var report analytics.Report
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &report))
+	require.Len(t, report.Funnel, 4)
+	assert.Equal(t, "Заявка", report.Funnel[3].Label)
+	assert.InDelta(t, 0.2, report.Funnel[3].Share, 0.001)
+	assert.Equal(t, 3, report.Fallbacks)
+	assert.Equal(t, "fallback", report.GapSignal)
+	require.Len(t, report.Gaps, 1)
+
+	require.Equal(t, http.StatusOK, do(s, http.MethodGet, "/api/analytics?days=30", "", manager...).Code)
+	assert.Equal(t, 30, store.analyticsDays)
+	for _, bad := range []string{"0", "14", "-7", "abc"} {
+		assert.Equal(t, http.StatusBadRequest, do(s, http.MethodGet, "/api/analytics?days="+bad, "", manager...).Code, bad)
+	}
 }

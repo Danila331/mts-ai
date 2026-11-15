@@ -143,6 +143,7 @@ func run() error {
 		Sessions:  store,
 		Passports: store,
 		Board:     store,
+		Analytics: store,
 		Documents: documents,
 		Metrics:   m,
 		RateStore: rateStore,

@@ -49,6 +49,8 @@ type memStore struct {
 	// model — модель извлечения паспорта; nil — только телефон кодом.
 	model passport.Model
 	down  bool
+	// analyticsDays — период последнего запроса аналитики.
+	analyticsDays int
 }
 
 func (m *memStore) LoadPassport(_ context.Context, id string) (passport.Passport, error) {
@@ -228,6 +230,7 @@ func newServerWithMetrics(t *testing.T, coreURL string, mutate func(*config.Conf
 		Sessions:  store,
 		Passports: store,
 		Board:     store,
+		Analytics: store,
 		Metrics:   m,
 	}, zerolog.Nop()), store, m
 }
