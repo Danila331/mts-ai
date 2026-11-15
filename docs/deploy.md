@@ -24,7 +24,7 @@ Railway: prometheus ──▶ /metrics api и llm-gateway
 | Redis | Railway, `Redis` | нет — только приватная сеть |
 | Метрики | Railway, служба `prometheus`, корень `/monitoring` | по желанию — интерфейс Prometheus |
 
-Тот же набор служб поднимается локально одной командой — `docker compose up --build` (см. `docker-compose.yml`).
+Тот же набор служб поднимается локально одной командой — `docker compose up --build` (см. `compose.yaml`), вместе с фронтом на http://localhost:3000.
 
 ## Автодеплой: слияние dev → main и есть выкладка
 

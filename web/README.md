@@ -13,13 +13,16 @@ Next.js 16 + TypeScript + shadcn/ui. Фронт ходит через прокс
 
 ## Запуск
 
-Из корня репозитория:
+Весь стенд вместе с фронтом — из корня репозитория одной командой (образ `web/Dockerfile`, Next standalone):
 
 ```bash
-docker compose up --build   # Postgres, ядро и Go-API на :8787, ключи модели — из .env
+docker compose up --build   # стенд на http://localhost:3000, ключи модели — из .env
 ```
 
+Разработка фронта с горячей перезагрузкой — бэкенд в docker, Next локально:
+
 ```bash
+docker compose up --build api   # Postgres, ядро, шлюз и Go-API на :8787
 cd web && npm install && npm run dev  # стенд на http://localhost:3000
 ```
 

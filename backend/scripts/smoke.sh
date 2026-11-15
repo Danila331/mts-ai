@@ -1,15 +1,17 @@
 #!/bin/sh
-# Сквозная проверка поднятого бэкенда запросами фронта.
+# Сквозная проверка поднятого стенда запросами фронта.
 #
-#   sh backend/scripts/smoke.sh [адрес API] [EB_API_TOKEN]
+#   sh backend/scripts/smoke.sh [адрес API] [EB_API_TOKEN] [адрес стенда]
 #
-# Проверяет связность: прокси → API → ядро → база. Качество ответа здесь
-# не проверяется — без ключа модели ядро отвечает заглушкой, и это тоже
-# ответ.
+# Проверяет связность: стенд → прокси Next → API → ядро → база. Качество
+# ответа здесь не проверяется — без ключа модели ядро отвечает заглушкой,
+# и это тоже ответ. Стенд (третий аргумент, например
+# http://127.0.0.1:3000 из compose.yaml) проверяется, только если задан.
 set -eu
 
 api="${1:-http://127.0.0.1:8787}"
 token="${2:-}"
+web="${3:-}"
 auth=""
 if [ -n "$token" ]; then auth="Authorization: Bearer $token"; fi
 
@@ -46,4 +48,19 @@ call POST /api/feedback '{"session_id":"s","message_id":"m","rating":1}' \
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" --data '{"messages":"x"}' "$api/api/chat")
 [ "$code" = 400 ] || fail "/api/chat с плохим телом: $code, ожидался 400"
 
-echo "smoke: ok ($api)"
+if [ -n "$web" ]; then
+  for path in /playground /kb /widget /embed /widget.js; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "$web$path")
+    [ "$code" = 200 ] || fail "стенд $path: $code, ожидался 200"
+  done
+  # Прокси Next сам подставляет токен API: из браузера запрос идёт без него.
+  curl -sS "$web/api/health" | grep -q '"db":true' || fail "стенд /api/health: прокси не дошёл до API"
+  curl -sS "$web/api/kb" | grep -q '"docs"' || fail "стенд /api/kb: нет docs"
+  stream=$(curl -sS -X POST -H "Content-Type: application/json" \
+    --data '{"messages":[{"role":"user","content":"Что такое АСКУЭ?"}],"mode":"chat"}' "$web/api/chat")
+  echo "$stream" | grep -q '^event: done' || fail "стенд /api/chat: нет события done: $(echo "$stream" | head -c 500)"
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$web/api/not-allowed")
+  [ "$code" = 404 ] || fail "стенд /api/not-allowed: $code, прокси пускает только свой список путей"
+fi
+
+echo "smoke: ok ($api${web:+, $web})"

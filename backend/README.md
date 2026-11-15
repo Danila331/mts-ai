@@ -73,7 +73,7 @@ queries/                        SQL для sqlc
 Всё в docker — из корня репозитория:
 
 ```bash
-docker compose up --build        # Postgres :5433, Redis, ядро, API :8787, метрики :9091
+docker compose up --build        # весь стенд (compose.yaml): web :3000, API :8787, метрики :9091, Postgres :5433
 ```
 
 Без docker (нужны Go 1.25+ и Postgres):
