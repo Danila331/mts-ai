@@ -237,6 +237,7 @@ set -a; source .env; set +a
 .venv/bin/python -m unittest discover -s tests -v   # без ключей
 .venv/bin/python eval/retrieval_eval.py --verbose   # без ключей — BM25, с ключами — гибрид
 .venv/bin/python eval/run_eval.py --with-demo --baseline   # нужен ключ; Score как на платформе, отчёт в eval/reports/
+.venv/bin/python eval/personas.py --mock   # стресс-тест по персонам на заглушке; настоящий (--real) — платно, см. eval/personas/README.md
 ```
 
 Сабмит:
