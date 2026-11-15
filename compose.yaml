@@ -254,14 +254,16 @@ services:
   # Дашборды поверх Prometheus (monitoring/grafana/): provisioning и
   # дашборды монтируются из репозитория, руками в интерфейсе настраивать
   # нечего. Интерфейс — http://localhost:3001; вход — admin и пароль из
-  # GF_SECURITY_ADMIN_PASSWORD (без него compose не стартует: пустой пароль
-  # у Grafana означал бы admin/admin).
+  # GF_SECURITY_ADMIN_PASSWORD. Без него — пароль разработки, как у других
+  # служебных секретов этого файла: стенд поднимается одной командой (T28),
+  # а порт слушает только петля. На хостинге пароль задаётся свой
+  # (docs/deploy.md) — admin/admin Grafana не получает ни там, ни тут.
   grafana:
     image: grafana/grafana:12.3.0@sha256:70d9599b186ce287be0d2c5ba9a78acb2e86c1a68c9c41449454d0fc3eeb84e8
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?задайте GF_SECURITY_ADMIN_PASSWORD в .env — вход в Grafana только с паролем}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-dev-grafana-local}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_AUTH_DISABLE_LOGIN_FORM: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"

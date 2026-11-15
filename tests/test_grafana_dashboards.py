@@ -142,8 +142,11 @@ class DashboardsTest(unittest.TestCase):
         self.assertEqual(in_compose.group(0), in_docker.group(0))
 
     def test_grafana_requires_password(self):
+        # Не admin/admin: пароль из окружения, а без него — пароль разработки (стенд одной командой, T28).
         compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
-        self.assertIn("GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?", compose)
+        self.assertIn("GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-", compose)
+        self.assertNotIn("GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}", compose)
+        self.assertIn('"127.0.0.1:${EB_GRAFANA_PORT:-3001}:3000"', compose.replace("[", "").replace("]", ""))
         self.assertIn('GF_AUTH_ANONYMOUS_ENABLED: "false"', compose)
 
 

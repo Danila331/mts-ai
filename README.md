@@ -45,7 +45,7 @@
 Нужен Docker с Compose v2. Из корня репозитория:
 
 ```bash
-cp .env.example .env        # вписать LLM_BASE_URL, LLM_API_KEY и GF_SECURITY_ADMIN_PASSWORD; .env в git не попадает
+cp .env.example .env        # вписать LLM_BASE_URL и LLM_API_KEY; .env в git не попадает
 docker compose up --build   # → http://localhost:3000
 ```
 
@@ -56,7 +56,8 @@ docker compose up --build   # → http://localhost:3000
 ### Grafana: дашборды
 
 Нужна только для просмотра метрик. Открыть http://localhost:3001, войти как `admin` с паролем из
-`GF_SECURITY_ADMIN_PASSWORD` (`.env`; без пароля `docker compose` не стартует, анонимного доступа нет). Источник
+`GF_SECURITY_ADMIN_PASSWORD` (`.env`; не задан — пароль разработки `dev-grafana-local`, порт только на
+`127.0.0.1`; на хостинге — свой пароль, см. `docs/deploy.md`; анонимного доступа нет). Источник
 данных (Prometheus) и три дашборда подхватываются из `monitoring/grafana/` сами, настраивать в интерфейсе нечего;
 правки в интерфейсе не сохраняются — менять JSON в репозитории.
 
