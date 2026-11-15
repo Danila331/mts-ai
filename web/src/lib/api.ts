@@ -174,6 +174,9 @@ export async function sendLead(body: {
   kind?: LeadKind;
   /** Согласие на обработку персональных данных — на том же шаге, что и контакты. */
   consent: boolean;
+  /** Антибот (T35): скрытая ловушка (у человека пусто) и сколько форма была на экране, мс. */
+  website?: string;
+  elapsed_ms?: number;
 }): Promise<{ id: string; summary: string; kind?: LeadKind }> {
   const res = await fetch(`${BASE}/lead`, {
     method: "POST",

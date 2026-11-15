@@ -280,7 +280,9 @@ components:
 - Загрузчик создаёт кнопку-лаунчер и `iframe` на `/embed` (стили сайта и виджета изолированы друг от друга),
   на мобильных — на весь экран; Esc закрывает.
 - `postMessage` с точным `targetOrigin` в обе стороны; получатель проверяет и `event.origin`, и `event.source`
-  (загрузчик — origin `widget.js` и окно своего iframe, `/embed` — origin из `?parent=` и `window.parent`):
+  (загрузчик — origin `widget.js` и окно своего iframe, `/embed` — origin из `?parent=` и `window.parent`;
+  `?parent=` принимается, только если он в `EB_EMBED_ALLOWED_ORIGINS` и совпадает с `location.ancestorOrigins[0]`,
+  где браузер его даёт; `*` и `null` никогда — T35, `web/src/lib/embed-origin.ts`):
   iframe → страница `eb:ready`, `eb:close`, `eb:unread`; страница → iframe `eb:open`, `eb:ask`, `eb:page`
   (`{page, topic, stream}`).
   Сообщения до `eb:ready` загрузчик копит в очереди.

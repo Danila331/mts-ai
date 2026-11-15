@@ -138,6 +138,8 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `EB_CORE_TOKEN` | `${{core.EB_CORE_TOKEN}}` |
 | `EB_API_TOKEN` | ещё одна случайная строка — общая с Vercel |
 | `EB_ADMIN_TOKEN` | токен администратора `/settings` (не короче 32 знаков) — общий с Vercel; без него глобальные настройки RAG закрыты, работает только песочница |
+| `EB_EMBED_ALLOWED_ORIGINS` | сайты, которым можно встроить виджет: `https://www.example.ru, https://shop.example.ru` (origin'ы без путей и масок). Определяет `frame-ancestors` у `/embed` и проверку `?parent=`; пусто — виджет работает только на самом стенде и локально (T35) |
+| `EB_TRUST_PROXY_HEADERS` | на Vercel не нужна: платформа ставит `X-Forwarded-For` сама, и Next ему верит. В других местах `1` — только если перед Next стоит ваш прокси, перезаписывающий заголовок; иначе пределы по адресу обходятся подменой заголовка (T35) |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `${{core.LLM_BASE_URL}}`, `${{llm-gateway.GW_KEY_API}}`, `energy-chat` — тот же шлюз, свой ключ |
 | `EB_THINKING_PARAM` | `${{core.EB_THINKING_PARAM}}` |
 | `PORT` | `8080` — тот же порт, что у домена |
@@ -245,6 +247,8 @@ sh backend/scripts/smoke.sh https://<api>.up.railway.app <EB_API_TOKEN>
 | `EB_ALLOWED_ORIGINS` | — | CORS, только для вызовов из браузера напрямую |
 | `EB_LIMIT_CHAT_PER_MINUTE` / `_BURST` | 20 / 5 | вопросов с адреса |
 | `EB_LIMIT_LEAD_PER_HOUR` / `_BURST` | 10 / 3 | заявок с адреса |
+| `EB_LIMIT_CHAT_PER_DAY` | 300 | вопросов с адреса за сутки (T35); счётчик в Redis или памяти, как остальные пределы |
+| `EB_LEAD_MIN_FILL` | `2s` | быстрее заявка не принимается: антибот без CAPTCHA вместе со скрытым полем `website` (T35); `0` — выкл. |
 | `EB_LIMIT_FEEDBACK_PER_MINUTE` / `_BURST` | 30 / 10 | оценок с адреса |
 | `EB_LIMIT_SETTINGS_PER_MINUTE` / `_BURST` | 10 / 5 | запросов к настройкам и попыток входа администратора с адреса |
 | `EB_LIMIT_MANAGER_PER_MINUTE` / `_BURST` | 120 / 30 | запросов экрана менеджера (`/manager`: опрос списка раз в 10 с, карточки, статусы) с адреса |

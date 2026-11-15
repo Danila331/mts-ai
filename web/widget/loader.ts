@@ -5,7 +5,8 @@
  *           data-greeting="…" data-greeting-delay="6" data-topics='{"/solar":"solar","/askue":"askue"}'></script>
  *
  * Кнопка и подсказка живут в Shadow DOM (стили сайта их не ломают и наоборот), чат — в iframe на /embed.
- * Связь с iframe — postMessage с проверкой origin. API страницы: window.EnergyToolChat.{open, close, toggle, ask, destroy}.
+ * Связь с iframe — postMessage: отправка на точный origin загрузчика (не «*»), приём только от этого origin и из
+ * окна нашего iframe (isTrustedMessage, T35). API страницы: window.EnergyToolChat.{open, close, toggle, ask, destroy}.
  * Любой элемент с data-energytool-ask="вопрос" открывает виджет с этим вопросом.
  *
  * Страница (T8): iframe получает сообщением eb:page только путь, заголовок и UTM-метки страницы — без cookies,
@@ -20,6 +21,7 @@
  * целиком, когда его проверили. Флаг — так же, как тема: в адресе iframe (?stream=0) и в сообщении eb:page.
  */
 
+import { isTrustedMessage, targetOrigin } from "../src/lib/embed-origin";
 import { type PageInfo, matchTopic, pageFrom, parseTopics } from "../src/lib/page-context";
 import { parseStreamFlag } from "../src/lib/stream-text";
 
@@ -229,8 +231,12 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     sendPage();
   }
 
+  // Точный origin сервера виджета; для «null» (скрипт со страницы file://) слать некуда — сообщения не уходят.
+  const target = targetOrigin(origin);
+
   function post(msg: unknown) {
-    if (ready && iframe?.contentWindow) iframe.contentWindow.postMessage(msg, origin);
+    if (!target) return;
+    if (ready && iframe?.contentWindow) iframe.contentWindow.postMessage(msg, target);
     else queue.push(msg);
   }
 
@@ -280,11 +286,11 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   }
 
   function onMessage(e: MessageEvent) {
-    if (e.origin !== origin || !iframe || e.source !== iframe.contentWindow) return;
+    if (!iframe || !isTrustedMessage(e, target, iframe.contentWindow)) return;
     const data = e.data as { type?: string };
     if (data?.type === "eb:ready") {
       ready = true;
-      while (queue.length) iframe.contentWindow!.postMessage(queue.shift(), origin);
+      while (queue.length) iframe.contentWindow!.postMessage(queue.shift(), target!);
     } else if (data?.type === "eb:close") close();
     else if (data?.type === "eb:unread" && !isOpen) wrap.classList.add("unread");
   }

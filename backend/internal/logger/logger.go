@@ -56,6 +56,9 @@ func New(o Options) (zerolog.Logger, error) {
 	if out == nil {
 		out = os.Stdout
 	}
+	// Телефон, почта и имя из заявки не должны попасть в журнал, даже если
+	// они оказались в тексте чужой ошибки (T35).
+	out = MaskWriter(out)
 	switch o.Format {
 	case "", FormatJSON:
 	case FormatConsole:

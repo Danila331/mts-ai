@@ -80,6 +80,7 @@ os.environ.setdefault("EB_STYLE", "jury")
 import honest_no  # noqa: E402 — scripts/honest_no.py: «честные нет» (T26), только режим chat
 import httpx  # noqa: E402 — зависимость energybot/llm.py
 import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с этим файлом
+import logmask  # noqa: E402 — scripts/logmask.py: маскировка телефонов и почты в журнале (T35)
 import quick_replies  # noqa: E402 — scripts/quick_replies.py: кнопки быстрых ответов (T31), только режим chat
 
 from energybot.dialog import search_queries  # noqa: E402
@@ -114,11 +115,15 @@ def log(level: str, message: str, **fields) -> None:
         if rid:
             record["request_id"] = rid
         record.update(fields)
+        # Строковые поля маскируются и обрезаются до сборки JSON: обрезка готовой строки сломала бы формат.
+        record = {k: logmask.mask(v) if isinstance(v, str) else v for k, v in record.items()}
         line = json.dumps(record, ensure_ascii=False, default=str)
     else:
         extra = " ".join(f"{k}={v}" for k, v in fields.items())
         line = f"[core] {message}" + (f" {extra}" if extra else "") + (f" request_id={rid}" if rid else "")
-    print(line, file=sys.stderr, flush=True)
+    # Телефон, почта и длинные тексты в журнал не попадают (T35); JsonStderr/MaskedStream маскируют ещё раз —
+    # на случай строк, написанных мимо log().
+    print(line if LOG_JSON else logmask.mask(line), file=sys.stderr, flush=True)
 
 
 class JsonStderr(io.TextIOBase):
@@ -152,10 +157,12 @@ class JsonStderr(io.TextIOBase):
             level = "error" if ("traceback" in lowered or "error" in lowered or "ошибк" in lowered) else (
                 "warn" if ("недоступ" in lowered or "отклонил" in lowered) else "info")
             record = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "level": level,
-                      "service": "core", "message": line.strip()}
+                      "service": "core", "message": logmask.mask(line.strip())}
             if request_id():
                 record["request_id"] = request_id()
             line = json.dumps(record, ensure_ascii=False)
+        else:
+            line = logmask.mask(line, limit=0)  # строка JSON из log(): поля уже обрезаны, здесь только маска
         with self.lock:
             self.raw.write(line + "\n")
             self.raw.flush()
@@ -167,6 +174,8 @@ class JsonStderr(io.TextIOBase):
 LOG_JSON = env("EB_LOG_FORMAT", "text") == "json"
 if LOG_JSON:
     sys.stderr = JsonStderr(sys.stderr)
+else:
+    sys.stderr = logmask.MaskedStream(sys.stderr)
 
 
 # ---------- отладочные данные одного ответа ----------

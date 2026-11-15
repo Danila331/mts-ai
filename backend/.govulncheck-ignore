@@ -5,5 +5,5 @@
 #
 # Пересматривать при каждом обновлении echo; переход на echo v5 — отдельная задача.
 
-GO-2026-6872  # echo v4: предел частоты обходится подделанным X-Forwarded-For. Исправлено только в v5. У нас в бою адрес для пределов берётся из X-Client-IP прокси Next, и только при заданном EB_API_TOKEN (server.go, clientIP); проверка доверенного источника адреса — T35
-GO-2026-6875  # echo v4: middleware.Proxy пересылает присланный X-Real-IP. Исправлено только в v5. Прокси-middleware echo мы не используем; уязвимость достижима только через общий код RealIP — см. запись выше
+GO-2026-6872  # echo v4: предел частоты обходится подделанным X-Forwarded-For. Исправлено только в v5. Закрыто нашим кодом (T35): в бою адрес для пределов берётся только из X-Client-IP прокси Next — и только при заданном EB_API_TOKEN, и только если там настоящий IP (server.go, clientIP; тесты TestClientIPNeedsTokenAndRealAddress, TestParseIP); Next передаёт адрес, только когда ему доверено X-Forwarded-For (EB_TRUST_PROXY_HEADERS, по умолчанию — на Vercel; web/src/lib/client-ip.ts). Уязвимый путь echo (ExtractIPFromXFFHeader) остаётся запасным без токена, то есть на машине разработчика; запись можно убрать с переходом на echo v5
+GO-2026-6875  # echo v4: middleware.Proxy пересылает присланный X-Real-IP. Исправлено только в v5. Прокси-middleware echo мы не используем (проверено в T35: grep по middleware.Proxy пуст); X-Real-IP как источник адреса не читается нигде в API, только X-Client-IP от прокси с токеном — см. запись выше. Запись можно убрать с переходом на echo v5

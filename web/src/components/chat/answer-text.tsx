@@ -4,6 +4,7 @@ import { ArrowUpRight, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { KbIndex } from "@/hooks/use-kb";
+import { safeAnswerText } from "@/lib/answer-links";
 import type { AnswerPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { markTerms } from "@/lib/glossary";
@@ -187,14 +188,14 @@ export function AnswerText({
   if (!answer?.citations?.length || !showCitations) {
     return (
       <p className={cn("whitespace-pre-wrap", className)}>
-        <TermText pieces={markTerms(text)} kb={kb} />
+        <TermText pieces={markTerms(safeAnswerText(text))} kb={kb} />
       </p>
     );
   }
   const order = citationOrder(answer);
   // Подсказки к терминам (T16): каждый термин подчёркивается один раз на весь ответ.
   const seen = new Set<string>();
-  const parts = answer.citations.map((c) => markTerms(c.sentence, seen));
+  const parts = answer.citations.map((c) => markTerms(safeAnswerText(c.sentence), seen));
   return (
     <p className={className}>
       {answer.citations.map((c, i) => (

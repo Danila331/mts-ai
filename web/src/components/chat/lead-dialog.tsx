@@ -23,6 +23,7 @@ import { type LeadKind, kindInfo, sessionKinds } from "@/lib/lead-kinds";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { CallbackPicker } from "./callback-picker";
+import { useAntibot } from "./honeypot";
 import { LeadKindPicker } from "./lead-kind-picker";
 import { Consent } from "./consent";
 import { LeadChecklist } from "./post-lead";
@@ -138,6 +139,7 @@ function LeadForm({
   const [consent, setConsent] = useState(false);
   const [touched, setTouched] = useState({ name: false, phone: false });
   const [sending, setSending] = useState(false);
+  const antibot = useAntibot();
   const lead = session.lead;
   const digits = form.phone.replace(/\D/g, "").length;
   const nameError = touched.name && !form.name.trim() ? "Как к вам обращаться?" : "";
@@ -151,7 +153,15 @@ function LeadForm({
     if (!valid || sending) return;
     setSending(true);
     try {
-      const res = await sendLead({ ...form, messages: toTurns(session.messages), session_id: session.id, callback, kind, consent });
+      const res = await sendLead({
+        ...form,
+        messages: toTurns(session.messages),
+        session_id: session.id,
+        callback,
+        kind,
+        consent,
+        ...(await antibot.settle()),
+      });
       setSavedNote([kindInfo(kind).note, callbackNote(callback)].filter(Boolean).join(" "));
       onDone(res);
       toast.success(leadSavedText(callback, kindInfo(kind).note), { description: `Номер заявки №${res.id}` });
@@ -269,6 +279,7 @@ function LeadForm({
             />
           </Field>
         </div>
+        {antibot.field}
         <LeadKindPicker id={`lead-kind-${session.id}`} kinds={kinds} value={kind} onChange={setKind} />
         <CallbackPicker id={`lead-callback-${session.id}`} value={callback} onChange={setCallback} />
         <Consent id={`lead-consent-${session.id}`} checked={consent} onChange={setConsent} />
