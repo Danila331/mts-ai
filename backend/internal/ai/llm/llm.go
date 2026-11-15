@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Message struct {
@@ -100,6 +101,12 @@ func (c *Client) Chat(ctx context.Context, messages []Message, maxTokens int) (s
 		text, err = c.post(ctx, body)
 	}
 	return text, err
+}
+
+// Complete — один вопрос с указанием: system задаёт роль, user — что
+// сделать. Короткая форма Chat для тех, кому диалог не нужен.
+func (c *Client) Complete(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	return c.Chat(ctx, []Message{{Role: "system", Content: system}, {Role: "user", Content: user}}, maxTokens)
 }
 
 // thinkingFields — как попросить сервер не размышлять. У разных
@@ -216,9 +223,15 @@ func StripThinking(text string) string {
 	return strings.TrimSpace(text)
 }
 
+// clip подрезает s до n байт, не разрезая символ: тело ошибки сервера
+// бывает по-русски, и половина буквы в журнале — это мусор вместо
+// текста.
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }

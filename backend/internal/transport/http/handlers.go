@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog"
 
 	"github.com/Danila331/mts-ai/backend/internal/apperr"
 	"github.com/Danila331/mts-ai/backend/internal/chat"
@@ -23,7 +26,7 @@ import (
 // заявок.
 func (s *Server) healthz(c echo.Context) error {
 	if err := s.deps.Health.Live(c.Request().Context()); err != nil {
-		s.log.Error().Err(err).Msg("база не отвечает")
+		zerolog.Ctx(c.Request().Context()).Error().Err(err).Msg("база не отвечает")
 		return fail(c, http.StatusServiceUnavailable, "база не отвечает")
 	}
 	return c.JSON(http.StatusOK, map[string]bool{"ok": true})
@@ -113,7 +116,8 @@ func (s *Server) chat(c echo.Context) error {
 		return s.mapErr(c, err)
 	}
 
-	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{Turns: turns, Mode: dialog.ParseMode(body.Mode)})
+	mode := dialog.ParseMode(body.Mode)
+	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{Turns: turns, Mode: mode})
 	if err != nil {
 		return s.coreFail(c, err)
 	}
@@ -129,16 +133,81 @@ func (s *Server) chat(c echo.Context) error {
 	w.WriteHeader(http.StatusOK)
 	w.Flush()
 
-	relay.Forward(func(ev chat.Event) error {
-		var buf bytes.Buffer
-		fmt.Fprintf(&buf, "event: %s\ndata: %s\n\n", ev.Name, ev.Data)
-		if _, err := w.Write(buf.Bytes()); err != nil {
-			return err
-		}
-		w.Flush()
-		return nil
-	})
+	s.deps.Metrics.StreamOpened()
+	defer s.deps.Metrics.StreamClosed()
+
+	out := &sseWriter{w: w}
+	stop := out.heartbeat(s.cfg.HTTP.SSEHeartbeat)
+	outcome := relay.Forward(out.event)
+	stop()
+	s.deps.Metrics.ChatOutcome(string(outcome), string(mode))
 	return nil
+}
+
+// sseWriter пишет поток ответа. Пишут двое — пересылка событий ядра и
+// heartbeat, — поэтому запись под замком: иначе комментарий мог бы
+// вклиниться посреди события.
+type sseWriter struct {
+	mu   sync.Mutex
+	w    *echo.Response
+	gone bool
+}
+
+var errClientGone = errors.New("клиент закрыл соединение")
+
+func (s *sseWriter) write(p []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gone {
+		return errClientGone
+	}
+	if _, err := s.w.Write(p); err != nil {
+		s.gone = true
+		return err
+	}
+	s.w.Flush()
+	return nil
+}
+
+func (s *sseWriter) event(ev chat.Event) error {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "event: %s\ndata: %s\n\n", ev.Name, ev.Data)
+	return s.write(buf.Bytes())
+}
+
+// heartbeat шлёт в поток комментарий раз в every, пока не вызван stop.
+//
+// Между стадией «пишу» и ответом проходит до минуты тишины, а прокси по
+// дороге рвут соединения, в которых долго ничего не идёт. Комментарий
+// («: ping») спецификация SSE велит клиенту пропускать; фронт пропускает
+// блоки без data. stop дожидается выхода горутины: после возврата
+// обработчика писать в ответ нельзя.
+func (s *sseWriter) heartbeat(every time.Duration) (stop func()) {
+	if every <= 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if s.write([]byte(": ping\n\n")) != nil {
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		wg.Wait()
+	}
 }
 
 type leadRequest struct {
@@ -166,6 +235,7 @@ func (s *Server) lead(c echo.Context) error {
 	if err != nil {
 		return s.mapErr(c, err)
 	}
+	s.deps.Metrics.Lead(string(l.SummarySource))
 	return c.JSON(http.StatusOK, leadResponse{ID: l.Code, Summary: l.Summary})
 }
 
@@ -235,7 +305,7 @@ func (s *Server) mapErr(c echo.Context, err error) error {
 	if errors.As(err, &he) {
 		return he
 	}
-	s.log.Error().Err(err).Str("path", c.Path()).Msg("запрос не обработан")
+	zerolog.Ctx(c.Request().Context()).Error().Err(err).Str("route", c.Path()).Msg("запрос не обработан")
 	return fail(c, http.StatusInternalServerError, "Что-то сломалось на нашей стороне")
 }
 
@@ -249,7 +319,7 @@ func (s *Server) coreFail(c echo.Context, err error) error {
 		coreErr.Status != http.StatusUnauthorized {
 		return fail(c, coreErr.Status, coreErr.Msg)
 	}
-	s.log.Error().Err(err).Str("path", c.Path()).Msg("ядро не ответило")
+	zerolog.Ctx(c.Request().Context()).Error().Err(err).Str("route", c.Path()).Msg("ядро не ответило")
 	if errors.Is(err, core.ErrUnavailable) {
 		return fail(c, http.StatusBadGateway, "Ядро консультанта не запущено или перезапускается")
 	}

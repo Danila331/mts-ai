@@ -66,3 +66,9 @@ func TestChatNotConfigured(t *testing.T) {
 	_, err := New(Options{}).Chat(context.Background(), nil, 10)
 	assert.ErrorIs(t, err, ErrNotConfigured)
 }
+
+func TestClipKeepsRunes(t *testing.T) {
+	assert.Equal(t, "ab", clip("ab", 5))
+	// «я» — два байта: три байта режутся до целой буквы, а не до половины.
+	assert.Equal(t, "я", clip("яя", 3))
+}

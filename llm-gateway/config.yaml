@@ -1,0 +1,99 @@
+# Шлюз к моделям — LiteLLM Proxy.
+#
+# Ядро и api просят модель по псевдониму (energy-chat, energy-embed,
+# energy-rerank) и не знают, какой провайдер за ним стоит. Сменить модель
+# или провайдера — поменять переменные GW_* у этой службы, не трогая ни
+# ядро, ни api.
+#
+# Значения os.environ/X подставляет LiteLLM. Деплоймент, у которого не
+# задана хотя бы одна из его переменных, выключается при старте
+# (render.py): пустой api_base у openai/ означал бы запросы на
+# api.openai.com с чужим ключом.
+#
+# Префикс модели — протокол провайдера: openai/ — любой
+# OpenAI-совместимый сервер (прокси организаторов, vLLM, OpenRouter),
+# hosted_vllm/ — vLLM, в том числе его /rerank.
+
+model_list:
+  # Генерация: ответ консультанта (ядро) и резюме заявки (api).
+  - model_name: energy-chat
+    litellm_params:
+      model: os.environ/GW_CHAT_MODEL # openai/qwen/qwen3.8-27b
+      api_base: os.environ/GW_BASE_URL
+      api_key: os.environ/GW_API_KEY
+
+  # Запас генерации: та же модель у другого провайдера. Другую модель
+  # ставить сюда только после прогона eval/: промпты подобраны под Qwen.
+  - model_name: energy-chat-fallback
+    litellm_params:
+      model: os.environ/GW_FALLBACK_CHAT_MODEL # openai/qwen/qwen3.8-27b
+      api_base: os.environ/GW_FALLBACK_BASE_URL
+      api_key: os.environ/GW_FALLBACK_API_KEY
+
+  # Эмбеддинги поиска. Запаса другой моделью нет и быть не может:
+  # векторы разных моделей несовместимы, смена модели — переиндексация.
+  - model_name: energy-embed
+    litellm_params:
+      model: os.environ/GW_EMBED_MODEL # openai/baai/bge-m3
+      api_base: os.environ/GW_BASE_URL
+      api_key: os.environ/GW_API_KEY
+
+  # Реранкер выдачи поиска.
+  - model_name: energy-rerank
+    litellm_params:
+      model: os.environ/GW_RERANK_MODEL # hosted_vllm/qwen/qwen3-reranker-8b
+      api_base: os.environ/GW_BASE_URL
+      api_key: os.environ/GW_API_KEY
+
+litellm_settings:
+  # Метрики Prometheus на /metrics: запросы, токены, задержки и ошибки по
+  # моделям и ключам служб. Prometheus стенда забирает их по приватной сети.
+  callbacks: ["prometheus"]
+  # /metrics без ключа: шлюз виден только из приватной сети, как и
+  # /metrics у api, а ключ для Prometheus — ещё один секрет без пользы.
+  require_auth_for_metrics_endpoint: false
+  # Параметры, которых LiteLLM не знает (chat_template_kwargs, reasoning,
+  # enable_thinking, top_k), не выбрасываются молча: ядро само понимает,
+  # что сервер их не принял, — по 400 или по размышлениям в ответе.
+  drop_params: false
+  # Потолок одного запроса к провайдеру. Ответ с размышлениями — до
+  # минуты; больше трёх минут ядро всё равно не ждёт (EB_CORE_TIMEOUT).
+  request_timeout: 180
+
+router_settings:
+  # Повторы — у клиентов (ядро и api повторяют 429/5xx сами). Повторы и
+  # здесь перемножились бы: 3 × 3 запроса к лежащему провайдеру и минуты
+  # ожидания вместо секунд.
+  num_retries: 0
+  # Провайдер, ответивший ошибкой allowed_fails раз за минуту, выводится
+  # из ротации на cooldown_time секунд: запросы сразу идут в запас, а не
+  # ждут заведомо лежащий сервер. Без запаса (GW_FALLBACK_* не заданы)
+  # LiteLLM единственный деплоймент из ротации не выводит.
+  allowed_fails: 2
+  cooldown_time: 30
+  # 400 от провайдера — ошибка запроса, а не поломка провайдера: она
+  # уходит клиенту как есть, без запаса и без вывода из ротации. Ядро по
+  # этому 400 переключает формат параметра размышлений и запоминает
+  # неподдерживаемые параметры сэмплинга; с запасом на 400 оно получало
+  # бы ответ от другого провайдера, а здоровый основной уходил бы в
+  # cooldown из-за пары пробных запросов.
+  fallback_on_unsupported_params: false
+  allowed_fails_policy:
+    BadRequestErrorAllowedFails: 1000
+  fallbacks:
+    - energy-chat: ["energy-chat-fallback"]
+
+general_settings:
+  # Ключ администратора шлюза. Службы ходят со своими ключами (keys.py,
+  # GW_KEY_CORE, GW_KEY_API) — они живут в базе шлюза (DATABASE_URL).
+  # Без базы своих ключей нет, и службы ходят с этим.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # База шлюза недоступна — ключи, уже проверенные раньше, продолжают
+  # работать. Иначе сбой вспомогательной базы останавливает консультанта.
+  allow_requests_on_db_unavailable: true
+  # В журнал расходов — только счётчики, без текстов: в вопросах бывают
+  # имена и телефоны, и копия переписки в базе шлюза — это ещё одно
+  # место с персональными данными.
+  store_prompts_in_spend_logs: false
+  disable_error_logs: true
+  maximum_spend_logs_retention_period: "30d"

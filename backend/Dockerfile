@@ -1,6 +1,6 @@
 # Образ Go-API. Сборка — отдельной стадией: в образ уезжает один
 # бинарник без компилятора и исходников.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 
@@ -14,7 +14,10 @@ COPY . .
 # CGO выключен: бинарник должен запускаться в образе без libc сборки.
 # Миграции вшиты в бинарник (migrations/migrations.go), копировать их
 # рядом не нужно.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api
+# Версия попадает в каждую строку журнала (поле version). Без аргумента
+# служба на Railway берёт её из RAILWAY_GIT_COMMIT_SHA.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/api ./cmd/api
 
 FROM alpine:3.22
 
@@ -27,7 +30,8 @@ WORKDIR /app
 COPY --from=build /out/api /app/api
 
 USER energytool
-EXPOSE 8080
+# 8080 — API, 9091 — /metrics (только приватная сеть).
+EXPOSE 8080 9091
 
 # Конфига в образе нет намеренно: настройки — только окружением, ровно
 # как на хостинге. Флаг указывает на несуществующий файл.

@@ -23,13 +23,16 @@
 from __future__ import annotations
 
 import hmac
+import io
 import json
 import os
+import re
 import socket
 import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -55,14 +58,92 @@ load_dotenv(ROOT / ".env")
 # Умолчание, а не жёсткая настройка: EB_STYLE из окружения по-прежнему главнее.
 os.environ.setdefault("EB_STYLE", "jury")
 
+import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с этим файлом
+
 from energybot.dialog import search_queries  # noqa: E402
 from energybot.guard import SENTENCE, numbers  # noqa: E402
+from energybot.kb import KnowledgeBase  # noqa: E402
 from energybot.llm import Api, env, env_num  # noqa: E402
 from energybot.pipeline import FALLBACK, Consultant  # noqa: E402
 from energybot.text import tokens  # noqa: E402
 
 MAX_BODY = 256_000
 MAX_TURNS = 40
+
+
+# ---------- журнал ----------
+# Обращение, которое сейчас обрабатывает поток. Отдельно от Trace: Trace.reset() в начале ответа не должен
+# стирать идентификатор, выданный ещё на входе запроса.
+REQUEST = threading.local()
+REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def request_id() -> str:
+    return getattr(REQUEST, "id", "")
+
+
+def log(level: str, message: str, **fields) -> None:
+    """Строка журнала: JSON при EB_LOG_FORMAT=json, иначе текст. request_id текущего потока — сам."""
+    rid = request_id()
+    if LOG_JSON:
+        record = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "level": level,
+                  "service": "core", "message": message}
+        if rid:
+            record["request_id"] = rid
+        record.update(fields)
+        line = json.dumps(record, ensure_ascii=False, default=str)
+    else:
+        extra = " ".join(f"{k}={v}" for k, v in fields.items())
+        line = f"[core] {message}" + (f" {extra}" if extra else "") + (f" request_id={rid}" if rid else "")
+    print(line, file=sys.stderr, flush=True)
+
+
+class JsonStderr(io.TextIOBase):
+    """stderr, где каждая строка — JSON с request_id текущего потока.
+
+    energybot пишет свои строки ([llm], [retrieval], [consultant]) обычным print: правка их ради формата
+    журнала задела бы код сабмита. Перехват на выходе даёт им тот же формат и request_id запроса, в котором
+    они написаны, — так вызов модели находится в журнале по обращению из журнала Go-службы.
+    """
+
+    def __init__(self, raw):
+        self.raw = raw
+        self.local = threading.local()
+        self.lock = threading.Lock()
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        buf = getattr(self.local, "buf", "") + text
+        *lines, rest = buf.split("\n")
+        self.local.buf = rest
+        for line in lines:
+            if line.strip():
+                self._emit(line)
+        return len(text)
+
+    def _emit(self, line: str) -> None:
+        if not line.startswith("{"):
+            lowered = line.lower()
+            level = "error" if ("traceback" in lowered or "error" in lowered or "ошибк" in lowered) else (
+                "warn" if ("недоступ" in lowered or "отклонил" in lowered) else "info")
+            record = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "level": level,
+                      "service": "core", "message": line.strip()}
+            if request_id():
+                record["request_id"] = request_id()
+            line = json.dumps(record, ensure_ascii=False)
+        with self.lock:
+            self.raw.write(line + "\n")
+            self.raw.flush()
+
+    def flush(self) -> None:
+        self.raw.flush()
+
+
+LOG_JSON = env("EB_LOG_FORMAT", "text") == "json"
+if LOG_JSON:
+    sys.stderr = JsonStderr(sys.stderr)
 
 
 # ---------- отладочные данные одного ответа ----------
@@ -269,7 +350,10 @@ class Field:
 class Settings:
     def __init__(self, bot: Consultant, api: Api):
         reference = bot.reference_text  # справочник выключается пустой строкой, а включается обратно им же
-        has_vectors = bot.retriever.vectors is not None
+        # Векторы могут появиться и после старта (App.retry_dense), поэтому — проверка в момент обращения,
+        # а не снимок на старте.
+        def has_vectors() -> bool:
+            return bot.retriever.vectors is not None
 
         def attr(obj, name):
             return (lambda: getattr(obj, name)), (lambda v: setattr(obj, name, v))
@@ -284,7 +368,7 @@ class Settings:
             field("full_docs", "search", "int", "EB_FULL_DOCS", bot, "full_docs", lo=0, hi=6),
             field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=200000),
             Field("use_dense", "search", "bool", "EB_USE_EMBEDDINGS", lambda: bot.dense,
-                  lambda v: setattr(bot, "dense", bool(v) and has_vectors), available=lambda: has_vectors),
+                  lambda v: setattr(bot, "dense", bool(v) and has_vectors()), available=has_vectors),
             field("use_reranker", "search", "bool", "EB_USE_RERANKER", api, "can_rerank",
                   available=lambda: api.configured),
             Field("use_reference", "search", "bool", "EB_REFERENCE", lambda: bool(bot.reference_text),
@@ -347,9 +431,59 @@ class App:
     def __init__(self):
         kb_path = Path(env("EB_KB_PATH", str(ROOT / "knowledge-base")))
         self.api = Api()
-        self.bot = WebConsultant(kb_path, index_dir=ROOT / "index", api=self.api)
+        t0 = time.perf_counter()
+        index_dir, from_cache = self.index_dir(kb_path)
+        self.bot = WebConsultant(kb_path, index_dir=index_dir, api=self.api)
+        saved = index_dir is not None and env("EB_INDEX_CACHE_DIR") != "" and \
+            index_cache.save(self.bot.retriever, index_dir)
+        log("info", "индекс готов", dense=self.bot.dense, from_cache=from_cache, saved=bool(saved),
+            took_ms=round((time.perf_counter() - t0) * 1000), cache=str(index_dir or ""))
         self.mode = env("EB_WEB_MODE", "chat")
         self.settings = Settings(self.bot, self.api)
+        self.kb_path = kb_path
+        if self.wants_dense() and not self.bot.dense:
+            threading.Thread(target=self.retry_dense, name="dense-retry", daemon=True).start()
+
+    def wants_dense(self) -> bool:
+        # Режим крошек есть не во всех версиях Retriever; без него векторы всегда «по умолчанию».
+        crumbs = getattr(self.bot.retriever, "crumbs", "path")
+        return self.api.configured and self.api.use_embeddings and crumbs == "path"
+
+    def retry_dense(self, every: float | None = None) -> None:
+        """Достраивает векторы, если на старте модель эмбеддингов не ответила.
+
+        Ядро стартует и без них — на BM25, — но без этой попытки так и осталось бы до перезапуска: на хостинге
+        порядок старта служб не гарантирован, и шлюз к моделям может подняться позже ядра. Векторы
+        подменяются целиком одним присваиванием: поиск в других потоках видит либо старое, либо новое.
+        """
+        every = every if every is not None else env_num("EB_DENSE_RETRY_SEC", 30.0, 5.0, 3600.0, float)
+        attempt = 0
+        # Условие — векторы, а не флаг dense: флаг может выключить оператор в настройках RAG, и тогда
+        # достраивать нечего — векторы уже есть.
+        while self.bot.retriever.vectors is None:
+            time.sleep(every)
+            attempt += 1
+            index_dir, _ = self.index_dir(self.kb_path)
+            if env("EB_INDEX_CACHE_DIR") and index_dir is None:
+                continue  # модель ещё не отвечает даже на контрольную фразу
+            vectors = self.bot.retriever._load_or_build_vectors(index_dir)
+            if vectors is None:
+                continue
+            self.bot.retriever.vectors = vectors
+            self.bot.dense = True
+            if env("EB_INDEX_CACHE_DIR") and index_dir is not None:
+                index_cache.save(self.bot.retriever, index_dir)
+            log("info", "векторы построены после старта", attempt=attempt)
+
+    def index_dir(self, kb_path: Path) -> tuple:
+        """Каталог векторов: кеш по текстам и модели (EB_INDEX_CACHE_DIR) или ROOT/index, как у сабмита."""
+        root = env("EB_INDEX_CACHE_DIR")
+        if not root:
+            return ROOT / "index", False
+        if not (self.api.configured and self.api.use_embeddings):
+            return None, False
+        target = index_cache.index_dir(Path(root), KnowledgeBase.load(kb_path), self.api)
+        return target, index_cache.cached(target)
 
     def health(self) -> dict:
         docs = dict.fromkeys(c.doc for c in self.bot.kb.chunks)
@@ -454,7 +588,18 @@ def make_handler(app: App):
 
         def log_message(self, fmt, *args):  # noqa: A003 — короче стандартного лога
             if self.path != "/healthz":  # пробы хостинга раз в несколько секунд заслоняют настоящие запросы
-                print(f"[core] {self.command} {self.path} {args[1] if len(args) > 1 else ''}", file=sys.stderr)
+                log("info", "запрос", method=self.command, path=self.path,
+                    status=args[1] if len(args) > 1 else "")
+
+        def begin(self) -> None:
+            """Идентификатор обращения: присланный шлюзом X-Request-ID или свой."""
+            rid = self.headers.get("X-Request-ID", "")
+            REQUEST.id = rid if REQUEST_ID.match(rid) else uuid.uuid4().hex
+
+        def end_headers(self):
+            if request_id():
+                self.send_header("X-Request-ID", request_id())
+            super().end_headers()
 
         def authorized(self) -> bool:
             return not token or hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {token}")
@@ -477,6 +622,7 @@ def make_handler(app: App):
             return data
 
         def do_GET(self):  # noqa: N802
+            self.begin()
             if self.path == "/healthz":
                 return self.json(200, {"ok": True})
             if not self.authorized():
@@ -490,6 +636,7 @@ def make_handler(app: App):
             return self.json(404, {"error": "not found"})
 
         def do_POST(self):  # noqa: N802
+            self.begin()
             if not self.authorized():
                 return self.json(401, {"error": "unauthorized"})
             try:
@@ -506,7 +653,7 @@ def make_handler(app: App):
             except ValueError as exc:
                 return self.json(400, {"error": str(exc)})
             except Exception as exc:  # noqa: BLE001
-                print(f"[core] {type(exc).__name__}: {exc}", file=sys.stderr)
+                log("error", "запрос не обработан", error=f"{type(exc).__name__}: {exc}")
                 return self.json(500, {"error": f"{type(exc).__name__}"})
 
         def stream_chat(self, body: dict):
@@ -528,10 +675,18 @@ def make_handler(app: App):
                     except OSError:
                         pass  # шлюз ушёл — ответ всё равно досчитаем, чтобы не оборвать модель на середине
 
+            t0 = time.perf_counter()
             try:
-                emit("answer", app.chat(body, emit))
+                payload = app.chat(body, emit)
+                emit("answer", payload)
+                calls = payload.get("llm_calls") or []
+                log("info", "ответ", answer_id=payload["id"], mode=payload["mode"], fallback=payload["fallback"],
+                    error=payload["error"] or "", llm_calls=len(calls),
+                    llm_errors=sum(1 for c in calls if c.get("error")),
+                    took_ms=round((time.perf_counter() - t0) * 1000))
             except Exception as exc:  # noqa: BLE001
-                print(f"[core] chat: {type(exc).__name__}: {exc}", file=sys.stderr)
+                log("error", "ответ не построен", error=f"{type(exc).__name__}: {exc}",
+                    took_ms=round((time.perf_counter() - t0) * 1000))
                 emit("error", {"error": f"{type(exc).__name__}: {exc}"})
             emit("done", {})
 
@@ -561,7 +716,7 @@ def main():
     app = App()
     server_cls = DualStackServer if ":" in host else ThreadingHTTPServer
     server = server_cls((host, port), make_handler(app))
-    print(f"[core] ядро: http://{host}:{port}/core/health", file=sys.stderr, flush=True)
+    log("info", "ядро слушает", url=f"http://{host}:{port}/core/health")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

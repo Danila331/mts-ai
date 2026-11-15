@@ -89,6 +89,17 @@ jobs:
       # образа, поднимаются база, ядро и API, и запросы фронта проходят
       # насквозь. Ключа модели в CI нет — ядро отвечает заглушкой, а
       # проверяется связность служб, а не качество ответа.
+      # Конфиг и правила Prometheus проверяет promtool из того же образа,
+      # что едет в бой: опечатка в PromQL иначе всплыла бы только тем, что
+      # тревога молча не срабатывает.
+      - name: Конфиг и правила Prometheus
+        run: |
+          docker run --rm -v "$PWD/monitoring:/m:ro" --entrypoint /bin/sh prom/prometheus:v3.16.0 -c '
+            sed -e "s|\${API_TARGET}|api:9091|g" -e "s|\${GATEWAY_TARGET}|llm-gateway:4000|g" \
+                -e "s|\${STAND}|ci|g" -e "s|/etc/prometheus/rules.yml|/m/rules.yml|" \
+                /m/prometheus.yml.tmpl > /prometheus/ci.yml &&
+            promtool check config /prometheus/ci.yml && promtool check rules /m/rules.yml'
+
       - name: Сборка и запуск
         env:
           EB_API_TOKEN: ci-token

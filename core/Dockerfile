@@ -21,7 +21,12 @@ RUN pip install -r solution-requirements.txt \
 
 COPY energybot ./energybot
 COPY knowledge-base ./knowledge-base
-COPY scripts/core_api.py ./scripts/core_api.py
+COPY scripts/core_api.py scripts/index_cache.py ./scripts/
+
+# Каталог кеша векторов (EB_INDEX_CACHE_DIR). Создаётся здесь, с владельцем
+# core: том docker перенимает владельца каталога образа, и непривилегированное
+# ядро может в него писать.
+RUN mkdir -p /data/index && chown core /data/index
 
 USER core
 

@@ -10,22 +10,23 @@ import (
 )
 
 const saveAnswer = `-- name: SaveAnswer :exec
-INSERT INTO answers (id, mode, question, answer, fallback, error, model, turns, timings, guard)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO answers (id, mode, question, answer, fallback, error, model, turns, timings, guard, request_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (id) DO NOTHING
 `
 
 type SaveAnswerParams struct {
-	ID       string
-	Mode     string
-	Question string
-	Answer   string
-	Fallback bool
-	Error    string
-	Model    string
-	Turns    int32
-	Timings  []byte
-	Guard    []byte
+	ID        string
+	Mode      string
+	Question  string
+	Answer    string
+	Fallback  bool
+	Error     string
+	Model     string
+	Turns     int32
+	Timings   []byte
+	Guard     []byte
+	RequestID string
 }
 
 // Повтор того же id — это повтор доставки, а не второй ответ: ядро
@@ -42,6 +43,7 @@ func (q *Queries) SaveAnswer(ctx context.Context, arg SaveAnswerParams) error {
 		arg.Turns,
 		arg.Timings,
 		arg.Guard,
+		arg.RequestID,
 	)
 	return err
 }

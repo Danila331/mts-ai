@@ -17,6 +17,13 @@ core:
   url: http://127.0.0.1:8788
   timeout: 3m
 
+log:
+  level: debug
+  format: console # json — чтобы увидеть строки ровно как на хостинге
+
+metrics:
+  port: 9091 # http://127.0.0.1:9091/metrics
+
 llm:
   model: qwen/qwen3.8-27b
   thinking_param: chat_template_kwargs

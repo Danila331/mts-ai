@@ -1,0 +1,60 @@
+# Правила стенда. Alertmanager не подключён: сработавшие правила видны в
+# интерфейсе Prometheus (Alerts) — это первый экран, когда «что-то не так».
+groups:
+  - name: energytool
+    rules:
+      - alert: ApiDown
+        expr: up{job="api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Go-API не отдаёт метрики 2 минуты"
+
+      - alert: LlmGatewayDown
+        expr: up{job="llm-gateway"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Шлюз к моделям не отвечает 2 минуты — консультант отвечает заглушками"
+
+      # Доля ответов, которые не дошли до клиента нормальным ответом модели:
+      # заглушки, ошибки ядра, оборванные и пустые потоки.
+      - alert: ChatAnswersDegraded
+        expr: |
+          sum(rate(eb_chat_answers_total{outcome!="answered"}[10m]))
+            / sum(rate(eb_chat_answers_total[10m])) > 0.2
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Больше 20% ответов за 10 минут — не ответ модели"
+
+      - alert: ApiErrors5xx
+        expr: sum(rate(eb_http_requests_total{status=~"5.."}[5m])) > 0.05
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Go-API отвечает 5xx"
+
+      # Заявка без резюме моделью — модель недоступна или не ответила.
+      - alert: LeadSummariesWithoutModel
+        expr: |
+          sum(increase(eb_leads_total{summary_source="digest"}[1h]))
+            / sum(increase(eb_leads_total[1h])) > 0.5
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Больше половины заявок за час — без резюме моделью"
+
+      - alert: RateLimitStoreFailing
+        expr: sum(increase(eb_rate_store_errors_total[10m])) > 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Redis пределов недоступен — пределы считаются в памяти каждой реплики"
+
+      - alert: ChatStreamsPiling
+        expr: sum(eb_chat_streams_in_flight) > 20
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Открытых потоков ответа больше 20 — ядро или модель не успевают"

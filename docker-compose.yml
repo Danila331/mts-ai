@@ -1,4 +1,5 @@
-# Бэкенд стенда одной командой: база, Python-ядро и Go-API.
+# Бэкенд стенда одной командой: база, Redis, шлюз к моделям (со своей базой),
+# Python-ядро, Go-API и Prometheus (http://localhost:9090).
 #
 #   docker compose up --build        # API: http://localhost:8787
 #   cd web && npm run dev            # стенд: http://localhost:3000
@@ -7,7 +8,9 @@
 # умолчанию ходит именно туда (EB_API_URL), и фронт переезда не заметит.
 #
 # Ключ модели берётся из .env в корне — того же, что читает ядро при
-# запуске без docker. Без него стенд поднимается, но отвечает заглушкой.
+# запуске без docker, — но знает его только шлюз (llm-gateway): ядро и
+# api ходят к модели через него, по псевдонимам energy-*. Без ключа стенд
+# поднимается, но отвечает заглушкой.
 #
 # Порты публикуются только на петлю: без явного адреса docker слушает
 # 0.0.0.0 и правит iptables сам, в обход хостового межсетевого экрана,
@@ -30,6 +33,74 @@ services:
       retries: 15
     volumes: ["pgdata:/var/lib/postgresql/data"]
 
+  # Общее хранилище пределов частоты: с ним пределы верны при любом
+  # числе реплик api. Без него api считает пределы в памяти.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # База шлюза к моделям: ключи служб, их пределы и расход. Отдельный
+  # сервер, а не схема в db: LiteLLM сам ведёт свою схему (Prisma), и
+  # пускать её в базу с заявками незачем.
+  llm-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes: ["llmdb:/var/lib/postgresql/data"]
+
+  # Шлюз к моделям (llm-gateway/, LiteLLM). Реальный провайдер — из .env
+  # (LLM_BASE_URL, LLM_API_KEY, LLM_MODEL…): compose подставляет их сюда сам.
+  # Запасной провайдер — GW_FALLBACK_* в .env; без них запаса нет.
+  llm-gateway:
+    build:
+      context: ./llm-gateway
+    image: energytool-llm-gateway:local
+    restart: unless-stopped
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-dev-gateway}
+      GW_BASE_URL: ${LLM_BASE_URL:-}
+      GW_API_KEY: ${LLM_API_KEY:-}
+      GW_CHAT_MODEL: openai/${LLM_MODEL:-qwen/qwen3.8-27b}
+      GW_EMBED_MODEL: openai/${EMB_MODEL:-baai/bge-m3}
+      GW_RERANK_MODEL: hosted_vllm/${RERANKER_MODEL:-qwen/qwen3-reranker-8b}
+      GW_FALLBACK_BASE_URL: ${GW_FALLBACK_BASE_URL:-}
+      GW_FALLBACK_API_KEY: ${GW_FALLBACK_API_KEY:-}
+      GW_FALLBACK_CHAT_MODEL: ${GW_FALLBACK_CHAT_MODEL:-}
+      DATABASE_URL: postgresql://litellm:litellm@llm-db:5432/litellm
+      # Ключи служб: у каждой свои модели и пределы (llm-gateway/keys.py).
+      # Здесь — значения для разработки; на хостинге — свои.
+      GW_KEY_CORE: ${GW_KEY_CORE:-sk-dev-core-0123456789abcdef}
+      GW_KEY_API: ${GW_KEY_API:-sk-dev-api-0123456789abcdef}
+    depends_on:
+      llm-db:
+        condition: service_healthy
+    # Наружу не публикуется: к нему ходят ядро и api по сети compose.
+    # Для отладки напрямую — раскомментировать.
+    # ports: ["127.0.0.1:4000:4000"]
+    healthcheck:
+      # Готов — когда отвечает и ключи служб уже в базе (/tmp/gw-ready):
+      # ядро, пришедшее со своим ключом раньше них, получило бы 401.
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=2); assert os.path.exists('/tmp/gw-ready')"]
+      start_period: 180s
+      start_interval: 2s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   core:
     build:
       context: .
@@ -42,11 +113,31 @@ services:
     environment:
       EB_CORE_HOST: 0.0.0.0
       EB_CORE_PORT: "8788"
+      # Модель — через шлюз, по псевдонимам. Перекрывают значения из .env:
+      # там адрес и ключ провайдера, а их знает только шлюз. Пустые
+      # отдельные адреса и ключи — эмбеддинги и реранкер тоже через шлюз.
+      LLM_BASE_URL: http://llm-gateway:4000/v1
+      LLM_API_KEY: ${GW_KEY_CORE:-sk-dev-core-0123456789abcdef}
+      LLM_MODEL: energy-chat
+      EMB_MODEL: energy-embed
+      RERANKER_MODEL: energy-rerank
+      EB_EMBEDDER_BASE_URL: ""
+      EB_RERANKER_BASE_URL: ""
+      EMBEDDER_API_KEY: ""
+      RERANKER_API_KEY: ""
+      # Кеш векторов базы: перезапуск ядра — секунды и один запрос к модели,
+      # а не пересчёт всей базы (scripts/index_cache.py).
+      EB_INDEX_CACHE_DIR: /data/index
       # Общий секрет с API. Здесь дев-значение; на хостинге — свой.
       EB_CORE_TOKEN: ${EB_CORE_TOKEN:-dev-core-token}
+    volumes: ["core-index:/data/index"]
     # Наружу ядро не публикуется: к нему ходит только api по сети
     # compose. Для отладки ядра напрямую — раскомментировать.
     # ports: ["127.0.0.1:8788:8788"]
+    # Ядро на старте считает эмбеддинги базы — шлюз должен уже отвечать.
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/healthz', timeout=2)"]
       # Ядро на старте читает базу знаний и, при включённых эмбеддингах,
@@ -74,10 +165,28 @@ services:
       EB_CORE_TOKEN: ${EB_CORE_TOKEN:-dev-core-token}
       EB_API_TOKEN: ${EB_API_TOKEN:-}
       EB_ALLOWED_ORIGINS: http://localhost:3000
-    ports: ["127.0.0.1:${EB_API_PORT:-8787}:8080"]
+      EB_REDIS_URL: redis://redis:6379/0
+      # Резюме заявок — через шлюз, тем же псевдонимом, что ответы ядра,
+      # но со своим ключом: только energy-chat и свои пределы.
+      LLM_BASE_URL: http://llm-gateway:4000/v1
+      LLM_API_KEY: ${GW_KEY_API:-sk-dev-api-0123456789abcdef}
+      LLM_MODEL: energy-chat
+    ports:
+      - "127.0.0.1:${EB_API_PORT:-8787}:8080"
+      - "127.0.0.1:${EB_METRICS_PORT:-9091}:9091"
+    # Остановка ждёт текущие ответы до EB_CORE_TIMEOUT (3 минуты) — по
+    # умолчанию docker убивает процесс через 10 секунд, и ответы
+    # обрывались бы на середине.
+    stop_grace_period: 4m
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
+      # Шлюз нужен только резюме заявок: без него заявка всё равно
+      # принимается со списком вопросов.
+      llm-gateway:
+        condition: service_started
       # Только старт, не готовность: api без ядра всё равно принимает
       # заявки и оценки, а /api/health честно скажет, что ядро
       # поднимается.
@@ -91,5 +200,25 @@ services:
       timeout: 3s
       retries: 3
 
+  # Сбор метрик api и шлюза, правила тревог (monitoring/). Интерфейс —
+  # http://localhost:9090, вкладка Alerts — сработавшие правила.
+  prometheus:
+    build:
+      context: ./monitoring
+    image: energytool-prometheus:local
+    restart: unless-stopped
+    environment:
+      API_TARGET: api:9091
+      GATEWAY_TARGET: llm-gateway:4000
+      STAND: local
+    ports: ["127.0.0.1:${EB_PROMETHEUS_PORT:-9090}:9090"]
+    volumes: ["prom-data:/prometheus"]
+    depends_on:
+      api:
+        condition: service_started
+
 volumes:
   pgdata:
+  llmdb:
+  core-index:
+  prom-data:
