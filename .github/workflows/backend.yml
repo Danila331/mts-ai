@@ -104,14 +104,17 @@ jobs:
       - name: Сборка и запуск
         env:
           EB_API_TOKEN: ci-token
+          EB_MANAGER_TOKEN: ci-manager
         run: docker compose up --build --wait --wait-timeout 300
 
       - name: Запросы фронта
+        env:
+          SMOKE_MANAGER_TOKEN: ci-manager
         run: sh backend/scripts/smoke.sh http://127.0.0.1:8787 ci-token http://127.0.0.1:3000
 
       - name: Ответ, заявка и оценка легли в базу
         run: |
-          for table in answers leads feedback; do
+          for table in answers leads feedback sessions; do
             n=$(docker compose exec -T db psql -U energytool -d energytool -tAc "SELECT count(*) FROM $table")
             if [ "$n" -lt 1 ]; then echo "$table: пусто"; exit 1; fi
             echo "$table: $n"

@@ -14,11 +14,15 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
-// Journal — куда ложатся ответы.
+// Journal — куда ложатся ответы и сессии.
 type Journal interface {
 	SaveAnswer(ctx context.Context, rec chat.Record) error
+	// TouchSession создаёт сессию на первом вопросе и отмечает каждый
+	// следующий.
+	TouchSession(ctx context.Context, ref session.Ref, mode, title string) error
 }
 
 // journalTimeout — потолок на запись ответа в журнал.
@@ -47,6 +51,7 @@ func New(core chat.Core, journal Journal, timeout time.Duration) *Service {
 // вкладкой. Потолок при этом свой — timeout. Значения контекста (логгер,
 // request_id) WithoutCancel сохраняет.
 func (s *Service) Ask(ctx context.Context, req chat.Request) (*Relay, error) {
+	s.touch(ctx, req)
 	upstream, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
 	started := time.Now()
 	stream, err := s.core.Chat(upstream, req)
@@ -144,6 +149,21 @@ func (r *Relay) Forward(emit func(chat.Event) error) chat.Outcome {
 	return outcome
 }
 
+// touch записывает сессию до ответа: разговор виден на сервере, даже если
+// ядро так и не ответит. Сбой базы ответ не останавливает — он в журнале
+// службы.
+func (s *Service) touch(ctx context.Context, req chat.Request) {
+	if req.Session.ID == "" {
+		return
+	}
+	jctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
+	defer cancel()
+	title := session.Title(dialog.LastQuestion(req.Turns))
+	if err := s.journal.TouchSession(jctx, req.Session, string(req.Mode), title); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("session_id", req.Session.ID).Msg("сессия не записана")
+	}
+}
+
 // record кладёт ответ в журнал и отдаёт разобранный ответ; ok — ответ
 // разобран.
 //
@@ -164,6 +184,7 @@ func (s *Service) record(ctx context.Context, req chat.Request, data json.RawMes
 		Question:  dialog.LastQuestion(req.Turns),
 		Turns:     len(req.Turns),
 		RequestID: requestid.From(ctx),
+		SessionID: req.Session.ID,
 	}
 
 	// Свой потолок поверх контекста ответа: ответ, пришедший на последней

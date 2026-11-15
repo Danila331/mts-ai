@@ -210,6 +210,7 @@ sh backend/scripts/smoke.sh https://<api>.up.railway.app <EB_API_TOKEN>
 | `EB_CORE_TIMEOUT` | `3m` | потолок на один ответ ядра |
 | `EB_API_TOKEN` | — | общий секрет с прокси Next; в бою обязателен |
 | `EB_ADMIN_TOKEN` | — | токен администратора: только с ним `POST /api/settings` меняет настройки RAG для всех; пусто — закрыто для всех |
+| `EB_MANAGER_TOKEN` | — | токен менеджера: разговоры клиентов `GET /api/sessions/:id` (и экран менеджера, T5); пусто — закрыто для всех |
 | `EB_ALLOWED_ORIGINS` | — | CORS, только для вызовов из браузера напрямую |
 | `EB_LIMIT_CHAT_PER_MINUTE` / `_BURST` | 20 / 5 | вопросов с адреса |
 | `EB_LIMIT_LEAD_PER_HOUR` / `_BURST` | 10 / 3 | заявок с адреса |

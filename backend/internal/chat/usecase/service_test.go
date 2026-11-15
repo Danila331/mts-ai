@@ -15,6 +15,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // script — поток ядра из готовых событий; err — чем он кончится.
@@ -53,9 +54,17 @@ func (c *fakeCore) Chat(ctx context.Context, _ chat.Request) (chat.Stream, error
 }
 
 type journal struct {
-	mu   sync.Mutex
-	recs []chat.Record
-	err  error
+	mu       sync.Mutex
+	recs     []chat.Record
+	sessions []string
+	err      error
+}
+
+func (j *journal) TouchSession(_ context.Context, ref session.Ref, _, title string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.sessions = append(j.sessions, ref.ID+"|"+string(ref.Channel)+"|"+title)
+	return j.err
 }
 
 func (j *journal) SaveAnswer(_ context.Context, r chat.Record) error {
@@ -148,4 +157,32 @@ func TestAskDetachesCancel(t *testing.T) {
 
 	_, err = New(&fakeCore{err: errors.New("down")}, &journal{}, time.Minute).Ask(context.Background(), req)
 	assert.Error(t, err)
+}
+
+func TestSessionTouchedAndAnswerLinked(t *testing.T) {
+	st := &script{events: []chat.Event{
+		ev("answer", `{"id": "a1", "text": "Ответ", "citations": [{"support": [{"id": "k1"}, {"id": "k2"}]}, {"support": [{"id": "k1"}]}]}`),
+		ev("done", `{}`),
+	}}
+	j := &journal{}
+	r := req
+	r.Session = session.Ref{ID: "sess-0001", Channel: session.Embed}
+	relay, err := New(&fakeCore{stream: st}, j, time.Minute).Ask(context.Background(), r)
+	require.NoError(t, err)
+	relay.Forward(func(chat.Event) error { return nil })
+
+	assert.Equal(t, []string{"sess-0001|embed|Что такое АСКУЭ?"}, j.sessions, "сессия записана до ответа")
+	require.Len(t, j.recs, 1)
+	assert.Equal(t, "sess-0001", j.recs[0].SessionID)
+	assert.Equal(t, []string{"k1", "k2"}, j.recs[0].Sources(), "разделы без повторов, по первому упоминанию")
+}
+
+func TestNoSessionNoTouch(t *testing.T) {
+	st := &script{events: []chat.Event{ev("answer", `{"id": "a1", "text": "Ответ"}`), ev("done", `{}`)}}
+	j := &journal{}
+	_, _ = forward(t, st, j, func(chat.Event) error { return nil })
+	assert.Empty(t, j.sessions)
+	require.Len(t, j.recs, 1)
+	assert.Empty(t, j.recs[0].SessionID)
+	assert.Equal(t, []string{}, j.recs[0].Sources())
 }

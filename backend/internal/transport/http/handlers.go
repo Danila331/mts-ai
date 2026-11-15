@@ -19,6 +19,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // healthz — проба хостинга: процесс жив и база отвечает. Ядро сюда не
@@ -105,6 +106,10 @@ type chatRequest struct {
 	Messages  json.RawMessage `json:"messages"`
 	Mode      string          `json:"mode"`
 	Overrides json.RawMessage `json:"overrides"`
+	// SessionID и Channel — разговор на фронте. Необязательны: без них
+	// ответ пишется в журнал без сессии.
+	SessionID string `json:"session_id"`
+	Channel   string `json:"channel"`
 }
 
 // maxOverrides — предел поля overrides. Настроек полтора десятка, и их
@@ -146,9 +151,14 @@ func (s *Server) chat(c echo.Context) error {
 	if err != nil {
 		return s.mapErr(c, err)
 	}
+	ref, err := session.Parse(body.SessionID, body.Channel)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
 
 	mode := dialog.ParseMode(body.Mode)
-	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{Turns: turns, Mode: mode, Overrides: sandbox})
+	relay, err := s.deps.Chat.Ask(c.Request().Context(),
+		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref})
 	if err != nil {
 		return s.coreFail(c, err)
 	}
@@ -239,6 +249,21 @@ func (s *sseWriter) heartbeat(every time.Duration) (stop func()) {
 		close(done)
 		wg.Wait()
 	}
+}
+
+// sessionHistory — разговор целиком: сессия и реплики по порядку.
+func (s *Server) sessionHistory(c echo.Context) error {
+	if s.deps.Sessions == nil {
+		return fail(c, http.StatusNotFound, "not found")
+	}
+	h, err := s.deps.Sessions.History(c.Request().Context(), c.Param("id"))
+	if errors.Is(err, session.ErrNotFound) {
+		return fail(c, http.StatusNotFound, "Сессии нет: не было или удалена по сроку хранения")
+	}
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, h)
 }
 
 type leadRequest struct {

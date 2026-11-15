@@ -16,6 +16,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	"github.com/Danila331/mts-ai/backend/internal/privacy"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // Тесты хранилища идут против живого Postgres: моки базы проверяют
@@ -34,7 +35,7 @@ func openTest(t *testing.T) *Store {
 	s, err := Open(context.Background(), config.DB{DSN: dsn, MaxConns: 4})
 	require.NoError(t, err)
 	t.Cleanup(s.Close)
-	_, err = s.Pool.Exec(context.Background(), "TRUNCATE answers, leads, feedback")
+	_, err = s.Pool.Exec(context.Background(), "TRUNCATE answers, leads, feedback, sessions")
 	require.NoError(t, err)
 	return s
 }
@@ -89,6 +90,34 @@ func TestStore(t *testing.T) {
 		assert.Error(t, s.UpdateLeadSummary(ctx, &missing), "обновить несуществующую заявку — ошибка, а не тишина")
 	})
 
+	t.Run("сессия", func(t *testing.T) {
+		ref := session.Ref{ID: "widget-sess-1", Channel: session.Embed}
+		var first chat.Answer
+		require.NoError(t, json.Unmarshal([]byte(`{"id": "s1", "text": "Ответ 1", "mode": "chat",
+			"citations": [{"support": [{"id": "kb-1"}, {"id": "kb-2"}]}]}`), &first))
+		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Первый вопрос"))
+		require.NoError(t, s.SaveAnswer(ctx, chat.Record{Answer: first, Question: "Первый вопрос", Turns: 1, SessionID: ref.ID}))
+		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Второй вопрос"))
+		require.NoError(t, s.SaveAnswer(ctx, chat.Record{
+			Answer: chat.Answer{ID: "s2", Text: "Ответ 2", Mode: "chat"}, Question: "Второй вопрос", Turns: 3, SessionID: ref.ID,
+		}))
+
+		h, err := s.History(ctx, ref.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "embed", h.Session.Channel)
+		assert.Equal(t, "Первый вопрос", h.Session.Title, "заголовок остаётся от первого вопроса")
+		assert.JSONEq(t, `{}`, string(h.Session.Page))
+		require.Len(t, h.Turns, 4)
+		assert.Equal(t, []string{"Первый вопрос", "Ответ 1", "Второй вопрос", "Ответ 2"},
+			[]string{h.Turns[0].Content, h.Turns[1].Content, h.Turns[2].Content, h.Turns[3].Content})
+		assert.Equal(t, []string{"kb-1", "kb-2"}, h.Turns[1].Sources)
+
+		_, err = s.History(ctx, "nobody-here")
+		assert.ErrorIs(t, err, session.ErrNotFound)
+		assert.Error(t, s.TouchSession(ctx, session.Ref{ID: "x-sess-01", Channel: "fax"}, "chat", ""),
+			"CHECK в базе — последняя линия для неизвестного канала")
+	})
+
 	t.Run("оценка", func(t *testing.T) {
 		require.NoError(t, s.CreateFeedback(ctx, feedback.Feedback{MessageID: "m", Rating: feedback.Like}))
 		// CHECK в базе — последняя линия, если предмет пропустил ноль.
@@ -111,11 +140,12 @@ func TestPrivacy(t *testing.T) {
 	}
 
 	t.Run("очистка по сроку", func(t *testing.T) {
-		exec("TRUNCATE answers, leads, feedback")
+		exec("TRUNCATE answers, leads, feedback, sessions")
 		exec(`INSERT INTO leads (code, summary, created_at) VALUES ('old', 's', now() - interval '100 days'), ('new', 's', now())`)
 		exec(`INSERT INTO answers (id, mode, question, answer, turns, created_at)
 		      VALUES ('a-old', 'chat', 'q', 'a', 1, now() - interval '40 days'), ('a-new', 'chat', 'q', 'a', 1, now())`)
 		exec(`INSERT INTO feedback (rating, created_at) VALUES (1, now() - interval '100 days')`)
+		exec(`INSERT INTO sessions (id, title, updated_at) VALUES ('sess-old-1', 'q', now() - interval '40 days'), ('sess-new-1', 'q', now())`)
 
 		now := time.Now()
 		n, locked, err := s.Purge(ctx, privacy.Policy{
@@ -123,7 +153,8 @@ func TestPrivacy(t *testing.T) {
 		}.Cutoffs(now))
 		require.NoError(t, err)
 		assert.True(t, locked)
-		assert.Equal(t, privacy.Counts{Leads: 1, Answers: 1}, n)
+		assert.Equal(t, privacy.Counts{Leads: 1, Answers: 1, Sessions: 1}, n)
+		assert.Equal(t, 1, count("sessions"), "сессия живёт столько же, сколько журнал ответов")
 		assert.Equal(t, 1, count("leads"))
 		assert.Equal(t, 1, count("answers"))
 		assert.Equal(t, 1, count("feedback"), "срок оценок не задан — не тронуты")
@@ -143,17 +174,18 @@ func TestPrivacy(t *testing.T) {
 	})
 
 	t.Run("удаление по запросу", func(t *testing.T) {
-		exec("TRUNCATE answers, leads, feedback")
+		exec("TRUNCATE answers, leads, feedback, sessions")
 		exec(`INSERT INTO leads (code, phone, summary) VALUES ('c1', '8 (900) 123-45-67', 's'), ('c2', '+7 911 000-00-00', 's')`)
 		exec(`INSERT INTO leads (code, phone, summary, messages) VALUES ('c3', '', 's', '[{"role":"user","content":"звоните +7 900 1234567"}]')`)
 		exec(`INSERT INTO answers (id, mode, question, answer, turns) VALUES ('a1', 'chat', 'мой номер 900-123-45-67', 'a', 1), ('a2', 'chat', 'АСКУЭ', 'a', 1)`)
 		exec(`INSERT INTO feedback (rating, comment) VALUES (1, 'перезвоните 89001234567'), (1, 'ок')`)
+		exec(`INSERT INTO sessions (id, title) VALUES ('sess-num-1', 'мой номер 8 900 123 45 67'), ('sess-other', 'АСКУЭ')`)
 		subj, err := privacy.NewSubject("+7 900 123 45 67", "")
 		require.NoError(t, err)
 
 		dry, err := s.Forget(ctx, subj, true)
 		require.NoError(t, err)
-		assert.Equal(t, privacy.Counts{Leads: 2, Answers: 1, Feedback: 1}, dry)
+		assert.Equal(t, privacy.Counts{Leads: 2, Answers: 1, Feedback: 1, Sessions: 1}, dry)
 		assert.Equal(t, 3, count("leads"), "пробный прогон ничего не удаляет")
 
 		n, err := s.Forget(ctx, subj, false)
@@ -162,6 +194,7 @@ func TestPrivacy(t *testing.T) {
 		assert.Equal(t, 1, count("leads"), "чужая заявка осталась")
 		assert.Equal(t, 1, count("answers"))
 		assert.Equal(t, 1, count("feedback"))
+		assert.Equal(t, 1, count("sessions"))
 
 		byCode, err := privacy.NewSubject("", "c2")
 		require.NoError(t, err)

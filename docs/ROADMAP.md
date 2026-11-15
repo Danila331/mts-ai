@@ -815,14 +815,15 @@ T9 ─► T35 (spotlighting OCR-текста); T8 ─► T35 (postMessage, за�
 
 | Миграция | Задача |
 |---|---|
-| `000002_sessions` | T1 |
-| `000003_passport` | T2 |
-| `000004_lead_score` | T3 (+ `callback_preference` для T4) |
-| `000005_lead_status` | T5 (+ `lead_deliveries`) |
-| `000006_session_profile` | T15 (+ `sessions.level` для T16) |
-| `000007_lead_kind` | T17 |
-| `000008_managers` | T24 |
-| `000009_trainer` | T23 |
+| `000002_observability` | занят до роадмапа (`feature/backend-hardening`): `request_id`, `summary_source` |
+| `000003_sessions` | T1 |
+| `000004_passport` | T2 |
+| `000005_lead_score` | T3 (+ `callback_preference` для T4) |
+| `000006_lead_status` | T5 (+ `lead_deliveries`) |
+| `000007_session_profile` | T15 (+ `sessions.level` для T16) |
+| `000008_lead_kind` | T17 |
+| `000009_managers` | T24 |
+| `000010_trainer` | T23 |
 | `000011_usage` | T34 |
 
 Нужна ещё колонка — добавляй её в миграцию своей задачи. Нужна новая миграция — бери следующий свободный номер и сразу впиши его в эту таблицу в своём PR.
