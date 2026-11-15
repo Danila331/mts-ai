@@ -10,6 +10,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -29,6 +30,7 @@ const NAV = [
   { href: "/playground", label: "Чат и отладка", icon: MessageSquare },
   { href: "/kb", label: "База знаний", icon: BookOpen },
   { href: "/widget", label: "Виджет для сайта", icon: Code2 },
+  { href: "/settings", label: "Настройки RAG", icon: SlidersHorizontal },
 ];
 
 /** Пункт сайдбара как в Claude: 36px, тонкая иконка в цвет текста, нейтральная плашка при наведении и у текущего. */

@@ -6,7 +6,8 @@
 
 const BACKEND = (process.env.EB_API_URL ?? "http://127.0.0.1:8787").replace(/\/+$/, "");
 const TOKEN = process.env.EB_API_TOKEN ?? "";
-const ALLOWED = new Set(["health", "kb", "chat", "lead", "feedback"]);
+// settings — глобальные настройки RAG (стенд для жюри: «Сохранить» меняет бота для всех).
+const ALLOWED = new Set(["health", "kb", "chat", "lead", "feedback", "settings", "settings/reset"]);
 
 // Ответ модели с перезапросами проверки занимает до пары минут, а функция Vercel живёт, пока идёт поток.
 // Умолчания платформы на это не рассчитаны: без запаса длинный ответ обрывался бы на середине.

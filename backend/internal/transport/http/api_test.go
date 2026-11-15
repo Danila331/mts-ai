@@ -92,6 +92,20 @@ func fakeCore(t *testing.T, chatBody string) *httptest.Server {
 		case "/core/chat":
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, chatBody)
+		case "/core/settings":
+			if r.Method == http.MethodGet {
+				_, _ = io.WriteString(w, `{"values": {"top_k": 8}, "changed": []}`)
+				return
+			}
+			raw, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(raw), `"top_k"`) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error": "неизвестные настройки: nope"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"values": {"top_k": 5}, "changed": ["top_k"]}`)
+		case "/core/settings/reset":
+			_, _ = io.WriteString(w, `{"values": {"top_k": 8}, "changed": []}`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -121,6 +135,7 @@ func newServer(t *testing.T, coreURL string, mutate func(*config.Config)) (*Serv
 		Feedback: feedbackuc.New(store),
 		Health:   health.New(cc, store),
 		KB:       cc,
+		Settings: cc,
 	}, log), store
 }
 
@@ -233,6 +248,31 @@ func TestHealthAndKB(t *testing.T) {
 	store.down = true
 	assert.Equal(t, http.StatusServiceUnavailable, do(s, http.MethodGet, "/healthz", "").Code)
 	assert.Equal(t, http.StatusNotFound, do(s, http.MethodGet, "/api/unknown", "").Code)
+}
+
+func TestSettings(t *testing.T) {
+	s, _ := newServer(t, fakeCore(t, goodStream).URL, nil)
+
+	rec := do(s, http.MethodGet, "/api/settings", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"values": {"top_k": 8}, "changed": []}`, rec.Body.String(), "ответ ядра как есть")
+
+	rec = do(s, http.MethodPost, "/api/settings", `{"values": {"top_k": 5}}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"values": {"top_k": 5}, "changed": ["top_k"]}`, rec.Body.String())
+
+	rec = do(s, http.MethodPost, "/api/settings", `{"values": {"nope": 1}}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "отказ ядра уходит клиенту с его текстом")
+	assert.JSONEq(t, `{"error": "неизвестные настройки: nope"}`, rec.Body.String())
+
+	for _, body := range []string{`{}`, `{"values": [1]}`, `{"values": "top_k=5"}`} {
+		rec = do(s, http.MethodPost, "/api/settings", body)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, body)
+	}
+
+	rec = do(s, http.MethodPost, "/api/settings/reset", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"values": {"top_k": 8}, "changed": []}`, rec.Body.String())
 }
 
 func TestLeadAndFeedback(t *testing.T) {
