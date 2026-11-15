@@ -28,7 +28,7 @@ os.environ.update(_saved_env)
 from mock_api import MockApi  # noqa: E402
 
 from energybot.llm import Api  # noqa: E402
-from energybot.pipeline import FALLBACK, Consultant, tidy  # noqa: E402
+from energybot.pipeline import Consultant, tidy  # noqa: E402
 
 KB_DIR = ROOT / "knowledge-base"
 QUESTION = [{"role": "user", "content": "Сколько будет стоить платформа учёта на 150 приборов?"}]
@@ -124,7 +124,9 @@ class CoreStreaming(unittest.TestCase):
         app = make_app("")
         payload, deltas, _ = ask(app, "chat")
         self.assertEqual(deltas, [])
-        self.assertEqual(payload["text"], FALLBACK)
+        # T30: в чате без модели клиент получает разделы базы; прежний FALLBACK остаётся в eval (test_degraded).
+        self.assertEqual(payload["text"], core_api.DEGRADED_TEXT)
+        self.assertTrue(payload["fallback"] and payload["degraded"]["sections"])
         self.assertFalse(payload["streamed"] or payload["revised"])
 
     def test_broken_model_falls_back_without_deltas(self):

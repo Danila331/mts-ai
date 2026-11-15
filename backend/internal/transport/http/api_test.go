@@ -1107,3 +1107,43 @@ func TestChatSendsPassportToCoreForHonestNo(t *testing.T) {
 	_, inEval := got[2]["passport"]
 	assert.False(t, inEval, "в автопроверке паспорта нет")
 }
+
+// Ядро лежит: чат отвечает быстро и понятно, а заявка и оценка принимаются.
+func TestDeadCoreChatFailsFastLeadWorks(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(dead.Close)
+
+	cfg := &config.Config{Env: "test"}
+	cc := core.New(dead.URL, "core-token").WithBreaker(2, time.Hour)
+	store := &memStore{}
+	s := New(cfg, Deps{
+		Chat:      chatuc.New(cc, store, time.Minute).WithPassport(store, store.model),
+		Leads:     leaduc.New(store, nil).WithPassports(store),
+		Feedback:  feedbackuc.New(store),
+		Health:    health.New(cc, store),
+		KB:        cc,
+		Settings:  cc,
+		Sessions:  store,
+		Passports: store,
+		Metrics:   metrics.New(),
+	}, zerolog.Nop())
+
+	body := `{"messages": [{"role": "user", "content": "Сколько стоит АСКУЭ?"}], "mode": "chat"}`
+	for i := 0; i < 2; i++ {
+		assert.Equal(t, http.StatusBadGateway, do(s, http.MethodPost, "/api/chat", body).Code)
+	}
+	rec := do(s, http.MethodPost, "/api/chat", body)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "предохранитель разомкнут — быстрый отказ")
+	assert.Contains(t, rec.Body.String(), "перезапускается")
+	assert.Contains(t, rec.Body.String(), "Заявки и оценки принимаются")
+	assert.NotContains(t, rec.Body.String(), "HTTP 500", "технических деталей клиенту нет")
+
+	rec = do(s, http.MethodPost, "/api/lead",
+		`{"name": "Иван", "phone": "+7 900", "consent": true, "messages": [{"role": "user", "content": "Нужен АСКУЭ"}]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Len(t, store.leads, 1)
+	rec = do(s, http.MethodPost, "/api/feedback", `{"session_id": "s", "message_id": "m", "rating": 1}`)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}

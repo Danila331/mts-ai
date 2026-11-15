@@ -112,7 +112,9 @@ func run() error {
 	rateStore, closeRedis := rateLimits(ctx, cfg, log, m)
 	defer closeRedis()
 
-	coreClient := core.New(cfg.Core.URL, cfg.Core.Token)
+	coreClient := core.New(cfg.Core.URL, cfg.Core.Token).
+		WithBreaker(cfg.Core.BreakerFailures, cfg.Core.BreakerCooldown).
+		WithRetries(cfg.Core.Retries)
 
 	model := llm.New(llm.Options{
 		BaseURL:         cfg.LLM.BaseURL,

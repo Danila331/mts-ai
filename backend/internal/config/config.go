@@ -84,6 +84,13 @@ type Core struct {
 	// проверки. Ответ с размышлениями занимает до минуты, перезапрос —
 	// ещё столько же; три минуты — запас, а не ожидание.
 	Timeout time.Duration `yaml:"timeout" env:"EB_CORE_TIMEOUT" env-default:"3m"`
+	// BreakerFailures — сколько вызовов ядра подряд должно не удаться, чтобы
+	// шлюз перестал ходить к нему на BreakerCooldown и отвечал сразу «ядро
+	// перезапускается». 0 выключает предохранитель.
+	BreakerFailures int           `yaml:"breaker_failures" env:"EB_CORE_BREAKER_FAILURES" env-default:"5"`
+	BreakerCooldown time.Duration `yaml:"breaker_cooldown" env:"EB_CORE_BREAKER_COOLDOWN" env-default:"15s"`
+	// Retries — повторы открытия потока ответа; только до первого байта.
+	Retries int `yaml:"retries" env:"EB_CORE_RETRIES" env-default:"1"`
 }
 
 // LLM — модель для резюме заявки. Тот же OpenAI-совместимый прокси и
