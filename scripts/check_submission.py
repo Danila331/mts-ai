@@ -4,7 +4,7 @@
 на лидерборде: состав архива, зависимости из набора жюри, импорты, запуск в чистом
 окружении только с requirements.txt из архива и формат submission.csv.
 
-    python scripts/check_submission.py [--zip dist/submission.zip] [--report check.md]
+    python scripts/check_submission.py [--final] [--zip PATH] [--report check.md]
 
 Код выхода 1, если хоть одна проверка не прошла. Отчёт — markdown (для CI).
 """
@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from build_submission import build  # noqa: E402
+from build_submission import build, output_path  # noqa: E402
 from mock_api import MockApi  # noqa: E402
 
 ALLOWED_THIRD_PARTY = {"httpx", "numpy"}  # то, что реально нужно решению; сверяется и с набором жюри
@@ -56,7 +56,7 @@ class Report:
         return "\n".join(lines) + "\n"
 
 
-def check_archive(zip_path: Path, r: Report) -> dict:
+def check_archive(zip_path: Path, r: Report, *, final: bool = False) -> dict:
     z = zipfile.ZipFile(zip_path)
     names = z.namelist()
     r.check("solution.py" in names, "solution.py в корне архива")
@@ -95,13 +95,16 @@ def check_archive(zip_path: Path, r: Report) -> dict:
     local = {n[:-3] for n in sources}
     third = sorted(m for m in imported - local if m not in sys.stdlib_module_names)
     req_names = {x.split("==")[0].lower() for x in reqs}
-    r.check(set(third) <= ALLOWED_THIRD_PARTY and set(third) <= req_names,
+    external = {m.replace("_", "-") for m in third}
+    allowed = ALLOWED_THIRD_PARTY | {"rank-bm25"} if final else ALLOWED_THIRD_PARTY
+    r.check(external <= allowed and external <= req_names,
             "сторонние импорты есть в requirements.txt архива", ", ".join(third) or "нет")
     r.check("energybot" not in imported, "нет импортов из вложенного пакета (всё в корне)")
     s = sources.get("solution.py", "")
     r.check('"questions.csv"' in s and '"knowledge-base.zip"' in s and 'env("DATA_DIR", "data")' in s,
             "читает DATA_DIR/questions.csv и knowledge-base.zip, по умолчанию data/")
-    r.check(all(v in sources.get("eb_llm.py", "") for v in ('"LLM_BASE_URL"', '"LLM_API_KEY"', '"LLM_MODEL"')),
+    llm_source = s if final else sources.get("eb_llm.py", "")
+    r.check(all(v in llm_source for v in ('"LLM_BASE_URL"', '"LLM_API_KEY"', '"LLM_MODEL"')),
             "адрес, ключ и модель берутся из переменных окружения платформы")
     return {"reqs": reqs, "names": names}
 
@@ -162,20 +165,21 @@ def check_run(zip_path: Path, r: Report):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--zip", default=str(ROOT / "dist" / "submission.zip"))
+    ap.add_argument("--zip", type=Path)
+    ap.add_argument("--final", action="store_true", help="проверить итоговый сабмит AIblanki")
     ap.add_argument("--report", help="куда записать markdown-отчёт")
     ap.add_argument("--no-run", action="store_true", help="только статические проверки, без запуска")
     args = ap.parse_args()
-    zip_path = Path(args.zip)
+    zip_path = args.zip or output_path(args.final)
     r = Report()
     try:
-        build(zip_path)
+        build(zip_path, final=args.final)
         r.check(True, "архив собирается scripts/build_submission.py", str(zip_path.relative_to(ROOT))
                 if zip_path.is_relative_to(ROOT) else str(zip_path))
     except SystemExit as exc:
         r.check(False, "архив собирается scripts/build_submission.py", str(exc))
     if zip_path.is_file():
-        check_archive(zip_path, r)
+        check_archive(zip_path, r, final=args.final)
         if not args.no_run:
             check_run(zip_path, r)
     if args.report:
