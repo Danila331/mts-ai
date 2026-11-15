@@ -7,7 +7,8 @@
 получают ядро и api, и оно не должно меняться от перезапуска шлюза.
 
 У каждой службы — свои модели и пределы. Ядро не может звать что-то,
-кроме energy-*, api — только energy-chat. Ключ api, утёкший из Go-службы,
+кроме energy-*, api — только energy-chat и energy-vision (текст с фото
+документа, T9). Ключ api, утёкший из Go-службы,
 не даёт ни эмбеддингов, ни бесконечных запросов.
 
 Пределы (0 — без предела):
@@ -26,7 +27,7 @@ import urllib.request
 SERVICES = {
     "core": {"models": ["energy-chat", "energy-chat-fallback", "energy-embed", "energy-rerank"],
              "rpm": 240, "tpm": 0, "parallel": 16, "budget": 0},
-    "api": {"models": ["energy-chat", "energy-chat-fallback"],
+    "api": {"models": ["energy-chat", "energy-chat-fallback", "energy-vision"],
             "rpm": 60, "tpm": 0, "parallel": 4, "budget": 0},
 }
 

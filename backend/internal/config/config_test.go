@@ -19,7 +19,8 @@ func clearEnv(t *testing.T) {
 		"EB_CORE_URL", "PORT", "LLM_BASE_URL", "LLM_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY",
 		"EB_DISABLE_THINKING", "EB_LIMIT_CHAT_PER_MINUTE", "EB_SHUTDOWN_TIMEOUT", "EB_METRICS_PORT",
 		"EB_LOG_FORMAT", "EB_LOG_LEVEL", "EB_REDIS_URL", "REDIS_URL", "EB_SSE_HEARTBEAT", "EB_ADMIN_TOKEN", "EB_MANAGER_TOKEN",
-		"EB_LIMIT_SETTINGS_PER_MINUTE", "EB_LIMIT_SETTINGS_BURST"} {
+		"EB_LIMIT_SETTINGS_PER_MINUTE", "EB_LIMIT_SETTINGS_BURST", "EB_VISION_MODEL", "EB_VISION_BASE_URL",
+		"EB_VISION_API_KEY", "EB_OCR_MAX_BYTES", "EB_OCR_MAX_PAGES", "EB_LIMIT_OCR_PER_HOUR", "EB_LIMIT_OCR_BURST"} {
 		t.Setenv(k, "")
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -103,6 +104,9 @@ func TestVerifyProduction(t *testing.T) {
 	assert.Error(t, cfg.Verify())
 
 	cfg.Limits.LeadBurst = 3
+	cfg.Limits.OCRPerHour = 0
+	assert.Error(t, cfg.Verify(), "без предела на документы — нет")
+	cfg.Limits.OCRPerHour = 30
 	cfg.Retention.LeadsDays = 0
 	assert.ErrorContains(t, cfg.Verify(), "EB_RETENTION", "бессрочное хранение заявок в бою не проходит")
 
@@ -114,4 +118,28 @@ func TestVerifyProduction(t *testing.T) {
 	assert.ErrorContains(t, cfg.Verify(), "EB_MANAGER_TOKEN короче")
 	cfg.HTTP.ManagerToken = ""
 	assert.NoError(t, cfg.Verify(), "пустой токен — закрытый доступ, это допустимо")
+}
+
+func TestVisionAndOCR(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("EB_ENV", "development")
+	t.Setenv("LLM_BASE_URL", "http://gateway/v1")
+	t.Setenv("LLM_API_KEY", "k")
+	cfg, err := Load("нет-файла.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Vision.Model, "без модели фото не принимаются")
+	assert.Equal(t, int64(10<<20), cfg.OCR.MaxBytes)
+	assert.Equal(t, 5, cfg.OCR.MaxPages)
+	assert.Equal(t, 30, cfg.Limits.OCRPerHour)
+	assert.Equal(t, "http://gateway/v1", cfg.VisionBaseURL(), "по умолчанию — тот же шлюз")
+	assert.Equal(t, "k", cfg.VisionAPIKey())
+
+	cfg.Vision.BaseURL, cfg.Vision.APIKey = "http://vision/v1", "vk"
+	assert.Equal(t, "http://vision/v1", cfg.VisionBaseURL())
+	assert.Equal(t, "vk", cfg.VisionAPIKey())
+
+	cfg.OCR.MaxBytes = MaxOCRBytes + 1
+	assert.ErrorContains(t, cfg.Verify(), "EB_OCR_MAX_BYTES", "даже в разработке")
+	cfg.OCR.MaxBytes, cfg.OCR.MaxPages = 1<<20, 0
+	assert.ErrorContains(t, cfg.Verify(), "EB_OCR_MAX_PAGES")
 }

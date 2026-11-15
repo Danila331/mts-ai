@@ -1,6 +1,18 @@
 import type { PageInfo } from "./page-context";
 import type { RoleId, RoleSource } from "./roles";
-import type { AnswerPayload, ChatMode, Health, KbData, Passport, RagSettings, Retrieval, SettingValue, Turn } from "./types";
+import type {
+  AnswerPayload,
+  ChatMode,
+  Health,
+  KbData,
+  OcrInfo,
+  OcrResult,
+  Passport,
+  RagSettings,
+  Retrieval,
+  SettingValue,
+  Turn,
+} from "./types";
 
 // Все запросы идут на тот же origin (/api/* проксируется в Python-API), поэтому работает и внутри iframe виджета.
 const BASE = "/api";
@@ -21,6 +33,37 @@ export function getKb(): Promise<KbData> {
   });
   kbPromise.catch(() => (kbPromise = null));
   return kbPromise;
+}
+
+const OCR_OFF: OcrInfo = { enabled: false, photos: false, pdf: false, types: [], max_bytes: 0, max_pages: 0 };
+let ocrPromise: Promise<OcrInfo> | null = null;
+
+/** Что принимается из документов (T9). Не меняется во время работы стенда — один запрос на вкладку;
+ * API недоступен — кнопки вложения нет, следующий вызов спросит снова. */
+export function getOcrInfo(): Promise<OcrInfo> {
+  ocrPromise ??= fetch(`${BASE}/ocr`, { cache: "no-store" })
+    .then((res) => (res.ok ? (res.json() as Promise<OcrInfo>) : Promise.reject(new Error(String(res.status)))))
+    .catch(() => {
+      ocrPromise = null;
+      return OCR_OFF;
+    });
+  return ocrPromise;
+}
+
+/** Документ → текст на проверку клиенту. Тело — сам файл: сервер проверяет его сигнатуру и ничего не хранит. */
+export async function readDocument(file: Blob, type: string, signal?: AbortSignal): Promise<OcrResult> {
+  const res = await fetch(`${BASE}/ocr`, {
+    method: "POST",
+    headers: { "Content-Type": type || "application/octet-stream" },
+    body: file,
+    signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (data.error) throw new Error(data.error);
+    throw new Error(res.status === 413 ? "Файл слишком большой" : `Не удалось распознать документ (${res.status})`);
+  }
+  return data as OcrResult;
 }
 
 export interface StreamHandlers {

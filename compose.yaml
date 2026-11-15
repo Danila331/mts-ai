@@ -82,6 +82,9 @@ services:
       GW_FALLBACK_BASE_URL: ${GW_FALLBACK_BASE_URL:-}
       GW_FALLBACK_API_KEY: ${GW_FALLBACK_API_KEY:-}
       GW_FALLBACK_CHAT_MODEL: ${GW_FALLBACK_CHAT_MODEL:-}
+      # Распознавание фото документов (T9) — только OCR. Пусто — псевдонима
+      # energy-vision нет, api фото не принимает.
+      GW_VISION_MODEL: ${GW_VISION_MODEL:-}
       DATABASE_URL: postgresql://litellm:litellm@llm-db:5432/litellm
       # Ключи служб: у каждой свои модели и пределы (llm-gateway/keys.py).
       # Здесь — значения для разработки; на хостинге — свои.
@@ -178,6 +181,9 @@ services:
       LLM_BASE_URL: http://llm-gateway:4000/v1
       LLM_API_KEY: ${GW_KEY_API:-sk-dev-api-0123456789abcdef}
       LLM_MODEL: energy-chat
+      # Текст с фото документа (T9) — псевдоним шлюза, если GW_VISION_MODEL
+      # задан; иначе пусто, и кнопка вложения неактивна.
+      EB_VISION_MODEL: ${GW_VISION_MODEL:+energy-vision}
     ports:
       - "127.0.0.1:${EB_API_PORT:-8787}:8080"
       - "127.0.0.1:${EB_METRICS_PORT:-9091}:9091"

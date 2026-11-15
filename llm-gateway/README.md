@@ -8,6 +8,7 @@
 | `energy-chat-fallback` | шлюз сам, когда `energy-chat` лежит | `GW_FALLBACK_CHAT_MODEL` у `GW_FALLBACK_BASE_URL` |
 | `energy-embed` | ядро (поиск) | `GW_EMBED_MODEL` у `GW_BASE_URL` |
 | `energy-rerank` | ядро (поиск) | `GW_RERANK_MODEL` у `GW_BASE_URL` |
+| `energy-vision` | api (текст с фото документа, T9) — только OCR, отвечает `energy-chat` | `GW_VISION_MODEL` у `GW_BASE_URL`; не задан — псевдонима нет, фото не принимаются |
 
 Ключ провайдера знает только шлюз. Ядро и api ходят со своими ключами (`GW_KEY_CORE`, `GW_KEY_API`): у каждого
 свой список моделей и пределы. Их создаёт `keys.py` при старте шлюза в его базе (`DATABASE_URL`, отдельный

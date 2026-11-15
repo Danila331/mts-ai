@@ -168,6 +168,28 @@ export interface Health {
   confidence_threshold?: number;
 }
 
+/** GET /api/ocr — что принимается из документов клиента (T9). */
+export interface OcrInfo {
+  /** Кнопка вложения активна: задана vision-модель (EB_VISION_MODEL). */
+  enabled: boolean;
+  photos: boolean;
+  pdf: boolean;
+  types: string[];
+  max_bytes: number;
+  max_pages: number;
+}
+
+/** POST /api/ocr — текст документа на проверку клиенту. Файл на сервере не хранится. */
+export interface OcrResult {
+  text: string;
+  kind: "pdf" | "jpeg" | "png" | "webp";
+  /** text_layer — PDF без модели, vision — фото через vision-модель (только OCR). */
+  source: "text_layer" | "vision";
+  pages?: number;
+  pages_read?: number;
+  truncated: boolean;
+}
+
 export interface KbChunk {
   id: string;
   order: number;

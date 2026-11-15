@@ -25,6 +25,8 @@ type Config struct {
 	DB        DB        `yaml:"db"`
 	Core      Core      `yaml:"core"`
 	LLM       LLM       `yaml:"llm"`
+	Vision    Vision    `yaml:"vision"`
+	OCR       OCR       `yaml:"ocr"`
 	Limits    Limits    `yaml:"limits"`
 	Log       Log       `yaml:"log"`
 	Metrics   Metrics   `yaml:"metrics"`
@@ -99,6 +101,50 @@ type LLM struct {
 	Timeout         time.Duration `yaml:"timeout" env:"EB_SUMMARY_TIMEOUT" env-default:"30s"`
 }
 
+// Vision — модель, которая только переписывает текст с фото документа
+// (T9, ADR 0006). Отвечает клиенту всегда Qwen: текст документа уходит в
+// чат репликой клиента. Пустая модель — фото не принимаются, и кнопка
+// вложения на фронте неактивна.
+type Vision struct {
+	Model string `yaml:"model" env:"EB_VISION_MODEL"`
+	// BaseURL и APIKey — если vision-модель живёт не там же, где модель
+	// ответов. Пусто — те же LLM_BASE_URL и LLM_API_KEY.
+	BaseURL string        `yaml:"base_url" env:"EB_VISION_BASE_URL"`
+	APIKey  string        `env:"EB_VISION_API_KEY"`
+	Timeout time.Duration `yaml:"timeout" env:"EB_VISION_TIMEOUT" env-default:"60s"`
+}
+
+// OCR — пределы загружаемого документа. Файл читается в память целиком и
+// нигде не хранится, поэтому его размер — это и память API.
+type OCR struct {
+	MaxBytes int64 `yaml:"max_bytes" env:"EB_OCR_MAX_BYTES" env-default:"10485760"`
+	// MaxPages — сколько первых страниц PDF читается.
+	MaxPages int `yaml:"max_pages" env:"EB_OCR_MAX_PAGES" env-default:"5"`
+}
+
+// Пределы документа, за которые настройка не выходит: больше — это уже
+// не счёт и не договор, а нагрузка на память API.
+const (
+	MaxOCRBytes = 32 << 20
+	MaxOCRPages = 50
+)
+
+// VisionBaseURL — адрес vision-модели: свой или общий с моделью ответов.
+func (c *Config) VisionBaseURL() string {
+	if c.Vision.BaseURL != "" {
+		return c.Vision.BaseURL
+	}
+	return c.LLM.BaseURL
+}
+
+// VisionAPIKey — ключ vision-модели: свой или общий с моделью ответов.
+func (c *Config) VisionAPIKey() string {
+	if c.Vision.APIKey != "" {
+		return c.Vision.APIKey
+	}
+	return c.LLM.APIKey
+}
+
 // Limits — предохранители от злоупотребления, на адрес клиента.
 // Ноль выключает предел; в бою ноль не проходит Verify.
 type Limits struct {
@@ -112,6 +158,11 @@ type Limits struct {
 	// глобальных настроек — не то, что человек делает десятки раз в минуту.
 	SettingsPerMinute int `yaml:"settings_per_minute" env:"EB_LIMIT_SETTINGS_PER_MINUTE" env-default:"10"`
 	SettingsBurst     int `yaml:"settings_burst" env:"EB_LIMIT_SETTINGS_BURST" env-default:"5"`
+	// Документы (T9): каждый — до десяти мегабайт в памяти и, для фото,
+	// запрос к платной vision-модели. Человек прикладывает несколько
+	// документов за разговор, а не десятки в минуту.
+	OCRPerHour int `yaml:"ocr_per_hour" env:"EB_LIMIT_OCR_PER_HOUR" env-default:"30"`
+	OCRBurst   int `yaml:"ocr_burst" env:"EB_LIMIT_OCR_BURST" env-default:"5"`
 	// RedisURL — общее хранилище пределов для нескольких реплик. Пусто —
 	// пределы в памяти процесса: верно ровно для одной реплики, на двух
 	// каждый предел молча удваивается. REDIS_URL — имя, под которым
@@ -228,6 +279,12 @@ func (c *Config) Verify() error {
 	if c.HTTP.ShutdownTimeout > 0 && c.HTTP.ShutdownTimeout < c.Core.Timeout {
 		errs = append(errs, errors.New("EB_SHUTDOWN_TIMEOUT меньше EB_CORE_TIMEOUT: выкладка будет обрывать ответы"))
 	}
+	if c.OCR.MaxBytes <= 0 || c.OCR.MaxBytes > MaxOCRBytes {
+		errs = append(errs, fmt.Errorf("EB_OCR_MAX_BYTES вне 1…%d", MaxOCRBytes))
+	}
+	if c.OCR.MaxPages <= 0 || c.OCR.MaxPages > MaxOCRPages {
+		errs = append(errs, fmt.Errorf("EB_OCR_MAX_PAGES вне 1…%d", MaxOCRPages))
+	}
 	if !c.Production() {
 		return errors.Join(errs...)
 	}
@@ -257,7 +314,8 @@ func (c *Config) Verify() error {
 	}
 	l := c.Limits
 	if l.ChatPerMinute <= 0 || l.ChatBurst <= 0 || l.LeadPerHour <= 0 || l.LeadBurst <= 0 ||
-		l.FeedbackPerMinute <= 0 || l.FeedbackBurst <= 0 || l.SettingsPerMinute <= 0 || l.SettingsBurst <= 0 {
+		l.FeedbackPerMinute <= 0 || l.FeedbackBurst <= 0 || l.SettingsPerMinute <= 0 || l.SettingsBurst <= 0 ||
+		l.OCRPerHour <= 0 || l.OCRBurst <= 0 {
 		errs = append(errs, errors.New("пределы EB_LIMIT_* в бою не могут быть нулевыми"))
 	}
 	return errors.Join(errs...)
