@@ -80,6 +80,8 @@ export interface AnswerPayload {
   prompt_chars: number;
   llm_calls?: LlmCall[];
   model: string;
+  /** Настройки песочницы, с которыми построен этот ответ; пусто — общие настройки стенда. */
+  overrides?: Record<string, SettingValue>;
 }
 
 export interface LlmCall {

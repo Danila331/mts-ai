@@ -27,17 +27,22 @@ export interface StreamHandlers {
   onAnswer: (a: AnswerPayload) => void;
 }
 
-/** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → answer → done. */
+/**
+ * POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → answer → done.
+ * overrides — настройки песочницы (src/lib/sandbox.ts): действуют только на этот ответ.
+ */
 export async function streamChat(
   messages: Turn[],
   mode: ChatMode,
   handlers: StreamHandlers,
   signal?: AbortSignal,
+  overrides?: Record<string, SettingValue>,
 ): Promise<void> {
+  const body = overrides && Object.keys(overrides).length ? { messages, mode, overrides } : { messages, mode };
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, mode }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!res.ok || !res.body) {
@@ -116,7 +121,7 @@ export async function getSettings(): Promise<RagSettings> {
   return settingsJson(await fetch(`${BASE}/settings`, { cache: "no-store" }));
 }
 
-/** Сохранить настройки — глобально, для всех ответов стенда до перезапуска ядра. */
+/** Сохранить настройки — глобально, для всех ответов стенда до перезапуска ядра. Только администратор. */
 export async function saveSettings(values: Record<string, SettingValue>): Promise<RagSettings> {
   return settingsJson(
     await fetch(`${BASE}/settings`, {
@@ -130,4 +135,33 @@ export async function saveSettings(values: Record<string, SettingValue>): Promis
 /** Вернуть значения из окружения ядра. */
 export async function resetSettings(): Promise<RagSettings> {
   return settingsJson(await fetch(`${BASE}/settings/reset`, { method: "POST" }));
+}
+
+export interface AdminSession {
+  /** Задан ли EB_ADMIN_TOKEN: можно ли вообще войти. */
+  enabled: boolean;
+  admin: boolean;
+}
+
+/** Вошёл ли посетитель как администратор стенда (httpOnly-cookie видит только сервер). */
+export async function getAdminSession(): Promise<AdminSession> {
+  const res = await fetch(`${BASE}/admin/session`, { cache: "no-store" });
+  if (!res.ok) return { enabled: false, admin: false };
+  return res.json();
+}
+
+export async function adminLogin(token: string): Promise<void> {
+  const res = await fetch(`${BASE}/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.error || `Вход не удался (${res.status})`);
+  }
+}
+
+export async function adminLogout(): Promise<void> {
+  await fetch(`${BASE}/admin/logout`, { method: "POST" });
 }

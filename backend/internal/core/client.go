@@ -85,6 +85,9 @@ func (c *Client) Chat(ctx context.Context, req chat.Request) (chat.Stream, error
 	if req.Mode != "" {
 		body["mode"] = req.Mode
 	}
+	if len(req.Overrides) > 0 {
+		body["overrides"] = req.Overrides
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

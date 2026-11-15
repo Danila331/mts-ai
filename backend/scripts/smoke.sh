@@ -45,6 +45,11 @@ call POST /api/lead '{"name":"Смоук","phone":"+70000000000","company":"","c
 call POST /api/feedback '{"session_id":"s","message_id":"m","rating":1}' \
   | grep -q '"ok":true' || fail "/api/feedback"
 
+# Глобальные настройки RAG — только администратору: токена прокси мало.
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" -H "Content-Type: application/json" \
+  --data '{"values":{"top_k":5}}' "$api/api/settings")
+[ "$code" = 401 ] || fail "/api/settings без токена администратора: $code, ожидался 401"
+
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" --data '{"messages":"x"}' "$api/api/chat")
 [ "$code" = 400 ] || fail "/api/chat с плохим телом: $code, ожидался 400"
 

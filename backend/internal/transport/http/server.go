@@ -170,6 +170,10 @@ func (s *Server) routes() {
 		"Заявок с этого адреса слишком много — попробуйте позже")
 	feedbackLimit := s.limiter(ratelimit.Rule{Name: "feedback", PerPeriod: l.FeedbackPerMinute, Period: time.Minute, Burst: l.FeedbackBurst},
 		"Слишком много оценок подряд")
+	// Свой предел у настроек и входа администратора: перебор токена
+	// упирается в него, не задевая вопросы и заявки того же адреса.
+	settingsLimit := s.limiter(ratelimit.Rule{Name: "settings", PerPeriod: l.SettingsPerMinute, Period: time.Minute, Burst: l.SettingsBurst},
+		"Слишком много запросов к настройкам — подождите минуту")
 
 	api := s.echo.Group("/api", s.requireToken)
 	api.GET("/health", s.health)
@@ -177,10 +181,15 @@ func (s *Server) routes() {
 	api.POST("/chat", s.chat, chatLimit)
 	api.POST("/lead", s.lead, leadLimit)
 	api.POST("/feedback", s.feedback, feedbackLimit)
-	// Настройки RAG глобальные: стенд для жюри, «Сохранить» меняет бота для всех.
-	api.GET("/settings", s.settings)
-	api.POST("/settings", s.saveSettings)
-	api.POST("/settings/reset", s.resetSettings)
+	// Настройки RAG: читать может каждый (страница /settings и песочница),
+	// менять для всех — только администратор (EB_ADMIN_TOKEN). Песочница
+	// идёт полем overrides в /api/chat и общих настроек не трогает.
+	api.GET("/settings", s.settings, settingsLimit)
+	api.POST("/settings", s.saveSettings, settingsLimit, s.requireAdmin)
+	api.POST("/settings/reset", s.resetSettings, settingsLimit, s.requireAdmin)
+	// Вход на /settings: прокси Next проверяет здесь введённый токен —
+	// под тем же пределом, что и сами настройки.
+	api.POST("/settings/login", s.adminLogin, settingsLimit, s.requireAdmin)
 }
 
 // Start слушает адрес до Shutdown; после него — http.ErrServerClosed.
@@ -288,6 +297,25 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 		got := []byte(c.Request().Header.Get(echo.HeaderAuthorization))
 		if subtle.ConstantTimeCompare(got, want) != 1 {
 			return fail(c, http.StatusUnauthorized, "unauthorized")
+		}
+		return next(c)
+	}
+}
+
+// AdminHeader — заголовок с токеном администратора от прокси Next.
+const AdminHeader = "X-Admin-Token"
+
+// requireAdmin пускает к глобальным настройкам только администратора.
+//
+// В отличие от requireToken, пустой токен не открывает доступ, а
+// закрывает: машина разработчика без EB_ADMIN_TOKEN получает песочницу,
+// как любой посетитель, — менять бота для всех по умолчанию нельзя.
+func (s *Server) requireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
+	token := s.cfg.HTTP.AdminToken
+	return func(c echo.Context) error {
+		got := c.Request().Header.Get(AdminHeader)
+		if token == "" || got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			return fail(c, http.StatusUnauthorized, "Глобальные настройки меняет только администратор стенда")
 		}
 		return next(c)
 	}

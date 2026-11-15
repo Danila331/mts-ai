@@ -135,6 +135,7 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `EB_CORE_URL` | `http://${{core.RAILWAY_PRIVATE_DOMAIN}}:8788` |
 | `EB_CORE_TOKEN` | `${{core.EB_CORE_TOKEN}}` |
 | `EB_API_TOKEN` | ещё одна случайная строка — общая с Vercel |
+| `EB_ADMIN_TOKEN` | токен администратора `/settings` (не короче 32 знаков) — общий с Vercel; без него глобальные настройки RAG закрыты, работает только песочница |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `${{core.LLM_BASE_URL}}`, `${{llm-gateway.GW_KEY_API}}`, `energy-chat` — тот же шлюз, свой ключ |
 | `EB_THINKING_PARAM` | `${{core.EB_THINKING_PARAM}}` |
 | `PORT` | `8080` — тот же порт, что у домена |
@@ -178,6 +179,7 @@ Project → Settings:
 | Git → Production Branch | `main` |
 | Environment Variables → `EB_API_URL` | публичный адрес `api` на Railway, `https://….up.railway.app` |
 | Environment Variables → `EB_API_TOKEN` | то же значение, что у `api` |
+| Environment Variables → `EB_ADMIN_TOKEN` | то же значение, что у `api`: вход администратора на `/settings` |
 | Environment Variables → `EB_STAND_URL` | адрес стенда сайта МТС, если он развёрнут |
 
 Браузер в Railway не ходит: все запросы идут на `/api/*` того же домена Vercel, и уже сервер Next
@@ -207,10 +209,12 @@ sh backend/scripts/smoke.sh https://<api>.up.railway.app <EB_API_TOKEN>
 | `EB_CORE_TOKEN` | — | общий секрет с ядром; в бою обязателен |
 | `EB_CORE_TIMEOUT` | `3m` | потолок на один ответ ядра |
 | `EB_API_TOKEN` | — | общий секрет с прокси Next; в бою обязателен |
+| `EB_ADMIN_TOKEN` | — | токен администратора: только с ним `POST /api/settings` меняет настройки RAG для всех; пусто — закрыто для всех |
 | `EB_ALLOWED_ORIGINS` | — | CORS, только для вызовов из браузера напрямую |
 | `EB_LIMIT_CHAT_PER_MINUTE` / `_BURST` | 20 / 5 | вопросов с адреса |
 | `EB_LIMIT_LEAD_PER_HOUR` / `_BURST` | 10 / 3 | заявок с адреса |
 | `EB_LIMIT_FEEDBACK_PER_MINUTE` / `_BURST` | 30 / 10 | оценок с адреса |
+| `EB_LIMIT_SETTINGS_PER_MINUTE` / `_BURST` | 10 / 5 | запросов к настройкам и попыток входа администратора с адреса |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | — | модель для резюме заявок; без неё резюме — список вопросов |
 | `EB_SUMMARY_TIMEOUT` | `30s` | тайм-аут одного запроса резюме |
 | `EB_REDIS_URL` / `REDIS_URL` | — | Redis для пределов частоты; без него — память реплики |

@@ -27,6 +27,10 @@ const (
 type Request struct {
 	Turns []dialog.Turn
 	Mode  dialog.Mode
+	// Overrides — настройки RAG только для этого ответа (песочница
+	// /settings): JSON-объект как прислал фронт, ключи и пределы
+	// проверяет ядро. Пусто — общие настройки.
+	Overrides json.RawMessage
 }
 
 // Event — одно событие потока. Data — JSON как его прислало ядро.

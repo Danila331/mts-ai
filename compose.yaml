@@ -166,6 +166,8 @@ services:
       EB_CORE_URL: http://core:8788
       EB_CORE_TOKEN: ${EB_CORE_TOKEN:-dev-core-token}
       EB_API_TOKEN: ${EB_API_TOKEN:-}
+      # Глобальные настройки RAG (/settings) — только с этим токеном; пусто — только песочница.
+      EB_ADMIN_TOKEN: ${EB_ADMIN_TOKEN:-}
       EB_ALLOWED_ORIGINS: http://localhost:3000
       EB_REDIS_URL: redis://redis:6379/0
       # Резюме заявок — через шлюз, тем же псевдонимом, что ответы ядра,
@@ -213,6 +215,8 @@ services:
     environment:
       EB_API_URL: http://api:8080
       EB_API_TOKEN: ${EB_API_TOKEN:-}
+      # Вход администратора на /settings — тот же токен, что у api; пусто — только песочница.
+      EB_ADMIN_TOKEN: ${EB_ADMIN_TOKEN:-}
     ports: ["127.0.0.1:${EB_WEB_PORT:-3000}:3000"]
     # Только старт api: стенд открывается сразу, а пока api и ядро
     # поднимаются, прокси честно отвечает «API не запущен».
