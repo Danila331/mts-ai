@@ -35,7 +35,7 @@ function IconAction({
             aria-label={label}
             aria-pressed={active}
             className={cn(
-              "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-4",
+              "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-[15px]",
               active && "text-foreground",
             )}
           />
@@ -52,9 +52,9 @@ function Tag({ tone, children }: { tone: "warning" | "danger" | "neutral"; child
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-md px-1.5 text-[11px] font-medium",
-        tone === "warning" && "bg-tone-warning text-white",
-        tone === "danger" && "bg-tone-danger text-white",
+        "inline-flex h-[18px] items-center rounded-[4px] px-1.5 text-[11px] font-medium",
+        tone === "warning" && "bg-warning-soft text-warning",
+        tone === "danger" && "bg-destructive-soft text-destructive",
         tone === "neutral" && "bg-muted text-muted-foreground",
       )}
     >
@@ -93,7 +93,7 @@ export function MessageItem({
       <div className={cn("flex justify-end", fresh && "msg-in")}>
         <div
           className={cn(
-            "max-w-[min(85%,36rem)] rounded-3xl bg-muted px-4 py-2.5 leading-relaxed text-foreground dark:bg-accent",
+            "max-w-[min(85%,36rem)] rounded-2xl bg-muted px-3.5 py-2 leading-relaxed text-foreground dark:bg-accent",
             compact ? "text-[14px]" : "text-[15px]",
           )}
         >
@@ -116,8 +116,9 @@ export function MessageItem({
       className={cn(
         "group relative",
         fresh && "msg-in",
-        onDebug && "-mx-3 rounded-2xl px-3 py-2 transition-colors",
-        onDebug && !message.pending && "hover:bg-surface",
+        onDebug && "-mx-3 rounded-xl px-3 py-2.5 transition-colors",
+        onDebug && !message.pending && "cursor-default hover:bg-surface",
+        onDebug && selected && "bg-surface",
       )}
       onClick={(e) => {
         if (!onDebug || (e.target as HTMLElement).closest("button,a")) return;
@@ -137,7 +138,7 @@ export function MessageItem({
             <button
               type="button"
               onClick={onRegenerate}
-              className="inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[13px] text-foreground transition-colors hover:bg-muted"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[13px] text-foreground transition-colors hover:bg-muted"
             >
               <RotateCcw className="size-3.5" /> Повторить
             </button>
@@ -151,14 +152,14 @@ export function MessageItem({
             kb={kb}
             onOpenChunk={onOpenChunk}
             showCitations={!compact}
-            className={cn("text-foreground", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}
+            className={cn("text-foreground text-pretty", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}
           />
           {/* Клиенту в виджете — чистый текст; номера и источники нужны жюри на стенде. */}
           {!compact && <SourcesRow answer={a} kb={kb} onOpen={onOpenChunk} />}
           <div
             className={cn(
-              "mt-2 -ml-2 flex flex-wrap items-center gap-0.5 transition-opacity",
-              !selected && "opacity-70 group-hover:opacity-100 focus-within:opacity-100",
+              "mt-1.5 -ml-1.5 flex flex-wrap items-center gap-px transition-opacity",
+              !selected && "opacity-60 group-hover:opacity-100 focus-within:opacity-100",
             )}
           >
             <IconAction label={copied ? "Скопировано" : "Копировать"} onClick={copy}>
@@ -181,12 +182,12 @@ export function MessageItem({
             )}
             {onDebug && (
               <IconAction label={selected ? "Открыто в отладке" : "Показать в отладке"} onClick={onDebug} active={selected}>
-                <PanelRight className={cn(selected && "text-brand-text")} />
+                <PanelRight />
               </IconAction>
             )}
             {!compact && a && (
               <span className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="tnum">{(a.timings.server_total / 1000).toFixed(1).replace(".", ",")} с</span>
+                <span className="tnum font-mono text-[11px]">{(a.timings.server_total / 1000).toFixed(1).replace(".", ",")} с</span>
                 {a.fallback && <Tag tone="warning">запасной ответ</Tag>}
                 {guardFired ? <Tag tone="danger">сработала проверка</Tag> : null}
                 {a.mode === "eval" && <Tag tone="neutral">автопроверка</Tag>}

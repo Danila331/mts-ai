@@ -7,11 +7,10 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Пока стенд только в светлой теме: тёмная не доведена (решение владельца, ноябрь 2026).
- * Токены `.dark` в globals.css остаются — чтобы вернуть тему, поставьте LIGHT_ONLY = false
- * и верните <ThemeToggle /> в подвал сайдбара. Чат в виджете светлый всегда: он живёт на чужом сайте.
+ * Стенд в светлой и тёмной темах (решение владельца, ноябрь 2026), по умолчанию — как в системе.
+ * Чат в виджете светлый всегда: он живёт на чужом сайте.
  */
-const LIGHT_ONLY = true;
+const LIGHT_ONLY = false;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

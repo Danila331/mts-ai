@@ -90,7 +90,7 @@ export function ThinkingLine({ message, compact }: { message: Message; compact?:
   return (
     <div role="status" aria-live="polite" aria-label={text} className="flex flex-col gap-1">
       <div className="flex min-h-7 min-w-0 items-center gap-2">
-        <BrandGlyph live className={compact ? "size-5" : "size-[22px]"} />
+        <BrandGlyph live className={compact ? "size-[18px]" : "size-5"} />
         <span
           className={cn("relative grid h-6 max-w-full items-center overflow-hidden transition-[width] duration-500 ease-out", size)}
           style={{ width }}
@@ -105,13 +105,13 @@ export function ThinkingLine({ message, compact }: { message: Message; compact?:
           {shown}
         </span>
         {seconds >= 2 && (
-          <span className="think-fade tnum shrink-0 text-[13px] text-muted-foreground/80" aria-hidden>
+          <span className="think-fade tnum shrink-0 font-mono text-[11px] text-muted-foreground" aria-hidden>
             {seconds} с
           </span>
         )}
       </div>
       {!compact && phase !== "search" && docTitles.length > 0 && (
-        <p className="think-fade truncate pl-[30px] text-[13px] text-muted-foreground/80">
+        <p className="think-fade truncate pl-7 text-[12px] text-muted-foreground">
           {docTitles.slice(0, 3).join(" · ")}
           {docTitles.length > 3 && ` и ещё ${docTitles.length - 3}`}
         </p>

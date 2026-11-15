@@ -1,11 +1,11 @@
 "use client";
 
-import { ArrowLeft, Headset, SquarePen, X } from "lucide-react";
+import { ArrowLeft, SquarePen, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChatView } from "@/components/chat/chat-view";
 import { LeadPanel } from "@/components/chat/lead-dialog";
-import { BotAvatar } from "@/components/chat/message-item";
+import { BrandMark } from "@/components/brand";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
 import { kbHref, useKb } from "@/hooks/use-kb";
@@ -79,20 +79,22 @@ export function EmbedChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answers]);
 
-  const style = color
-    ? ({
-        "--brand": color,
-        "--primary": color,
-        "--brand-text": color,
-      } as React.CSSProperties)
-    : undefined;
+  // Виджет живёт на сайте клиента: главное действие — в цвете виджета (по умолчанию красный МТС), а не графитом стенда.
+  const accent = color ?? "#FF0032";
+  const style = {
+    "--brand": accent,
+    "--primary": accent,
+    "--primary-foreground": "#ffffff",
+    "--brand-text": accent,
+    "--brand-soft": `color-mix(in oklch, ${accent} 9%, white)`,
+  } as React.CSSProperties;
 
   const headerButton =
-    "flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-[18px]";
+    "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-4";
 
   return (
     <div className="flex h-dvh flex-col bg-background" style={style}>
-      <header className="flex h-16 shrink-0 items-center gap-3 border-b px-4">
+      <header className="flex h-14 shrink-0 items-center gap-2.5 border-b px-3.5">
         {leadOpen ? (
           <>
             <button
@@ -104,43 +106,25 @@ export function EmbedChat() {
               <ArrowLeft />
             </button>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[15px] leading-tight font-semibold">Передать запрос менеджеру</div>
-              <div className="mt-1 truncate text-xs text-muted-foreground">Менеджер МТС EnergyTool получит резюме разговора</div>
+              <div className="truncate text-[14px] leading-tight font-semibold">Передать запрос менеджеру</div>
+              <div className="mt-0.5 truncate text-[12px] text-muted-foreground">Менеджер получит резюме разговора</div>
             </div>
           </>
         ) : (
           <>
-            <BotAvatar className="size-9" />
+            <BrandMark className="size-7 rounded-[8px]" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[15px] leading-tight font-semibold">{title}</div>
-              <div className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-                <span className="relative flex size-1.5 shrink-0">
-                  <span className="absolute inset-0 animate-ping rounded-full bg-success motion-reduce:hidden" />
-                  <span className="relative size-1.5 rounded-full bg-success" />
-                </span>
+              <div className="truncate text-[14px] leading-tight font-semibold">{title}</div>
+              <div className="mt-0.5 flex items-center gap-1.5 truncate text-[12px] text-muted-foreground">
+                <span className="size-1.5 shrink-0 rounded-full bg-success" aria-hidden />
                 <span className="truncate">{subtitle}</span>
               </div>
             </div>
           </>
         )}
-        <div className="-mr-1.5 flex items-center">
+        <div className="-mr-1 flex items-center gap-0.5">
           {!leadOpen && (
             <>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      onClick={() => setLeadOpen(true)}
-                      className={headerButton}
-                      aria-label="Связаться с менеджером"
-                    />
-                  }
-                >
-                  <Headset />
-                </TooltipTrigger>
-                <TooltipContent>Связаться с менеджером</TooltipContent>
-              </Tooltip>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -180,7 +164,7 @@ export function EmbedChat() {
         )}
       </div>
       {!leadOpen && (
-        <div className="shrink-0 px-4 pb-2.5 text-center text-[11px] leading-snug text-muted-foreground">
+        <div className="shrink-0 px-5 pb-2 text-center text-[11px] leading-snug text-muted-foreground">
           ИИ может ошибаться — цифры по вашему объекту подтвердит специалист МТС
         </div>
       )}
