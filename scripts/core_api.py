@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import io
 import json
@@ -46,6 +47,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -301,6 +303,46 @@ class WebApi(Api):
     max_tokens = Overridable()
     temperature = Overridable()
     can_rerank = Overridable()
+
+    # Кэш эмбеддингов запросов (T32): ключ — хэш нормализованного текста и модели. Безопасен: один и тот же
+    # текст всегда даёт один вектор; семантически «похожие» вопросы не склеиваются. Большие пачки (индексация
+    # фрагментов базы) мимо кэша — он только для коротких запросов диалога.
+    EMBED_CACHE_MAX = 512
+    EMBED_CACHE_BATCH = 4
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._embed_cache: OrderedDict = OrderedDict()
+        self._embed_lock = threading.Lock()
+        self.embed_hits = 0
+        self.embed_misses = 0
+
+    def _embed_key(self, text: str) -> str:
+        norm = " ".join(str(text).casefold().split())
+        return hashlib.sha256(f"{self.emb_model}\0{norm}".encode()).hexdigest()
+
+    def embed(self, texts: list, batch: int | None = None) -> list:
+        if not texts or len(texts) > self.EMBED_CACHE_BATCH:
+            return super().embed(texts, batch)
+        keys = [self._embed_key(t) for t in texts]
+        with self._embed_lock:
+            found = {}
+            for k in keys:
+                if k in self._embed_cache:
+                    self._embed_cache.move_to_end(k)
+                    found[k] = self._embed_cache[k]
+        missing = [(k, t) for k, t in dict(zip(keys, texts)).items() if k not in found]
+        if missing:
+            vecs = super().embed([t for _, t in missing], batch)
+            with self._embed_lock:
+                for (k, _), v in zip(missing, vecs):
+                    found[k] = v
+                    self._embed_cache[k] = v
+                while len(self._embed_cache) > self.EMBED_CACHE_MAX:
+                    self._embed_cache.popitem(last=False)
+        self.embed_hits += len(keys) - len(missing)
+        self.embed_misses += len(missing)
+        return [list(found[k]) for k in keys]
 
     def _post(self, url: str, key: str, body: dict, attempts: int = 3, timeout: float | None = None) -> dict:
         if not (TRACE.stream_on and TRACE.emit and url.endswith("/chat/completions")) or TRACE.streamed:

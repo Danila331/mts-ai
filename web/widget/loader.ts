@@ -12,6 +12,10 @@
  * других параметров адреса и referrer — и тему страницы по data-topics (префикс пути → тема). Тема ещё и в адресе
  * iframe (?topic=), чтобы приветствие было верным с первого кадра; путь и метки в адрес iframe не попадают.
  *
+ * Фасад (T32): до первого взаимодействия на сайт попадает только этот файл (несколько КБ, без зависимостей).
+ * Наведение, фокус или касание кнопки (и показ подсказки) — preconnect к хосту чата; iframe с бандлом чата создаётся
+ * по клику, при ask() и при восстановленном открытом состоянии. Сообщения до eb:ready встают в очередь.
+ *
  * Потоковая выдача (T13): по умолчанию ответ печатается по мере генерации; data-stream="0" — ответ появляется
  * целиком, когда его проверили. Флаг — так же, как тема: в адресе iframe (?stream=0) и в сообщении eb:page.
  */
@@ -226,6 +230,17 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     else queue.push(msg);
   }
 
+  /** Соединение с хостом чата заранее: к клику TCP и TLS уже готовы, а сам бандл ещё не скачан. */
+  let preconnected = false;
+  function preconnect() {
+    if (preconnected || iframe) return;
+    preconnected = true;
+    const link = document.createElement("link");
+    link.rel = "preconnect";
+    link.href = origin;
+    document.head.appendChild(link);
+  }
+
   function hideBubble() {
     bubble.classList.remove("show");
   }
@@ -303,12 +318,15 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     document.body.appendChild(host);
     if (cfg.open || sessionStorage.getItem(STORAGE_OPEN)) open();
     else if (cfg.greeting && !sessionStorage.getItem(STORAGE_GREETED) && cfg.greetingDelay >= 0) {
-      setTimeout(() => !isOpen && bubble.classList.add("show"), cfg.greetingDelay * 1000);
+      setTimeout(() => {
+        if (isOpen) return;
+        preconnect();
+        bubble.classList.add("show");
+      }, cfg.greetingDelay * 1000);
     }
-    // Чат подгружаем заранее, когда браузер свободен: открытие будет мгновенным.
-    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
-    if (idle) idle(ensureFrame);
-    else setTimeout(ensureFrame, 2500);
+    // Фасад: iframe не грузим, пока посетитель не проявил интерес (наведение, фокус, касание, клик).
+    for (const ev of ["pointerenter", "focus", "touchstart"]) launcher.addEventListener(ev, preconnect, { once: true, passive: true });
+    bubble.addEventListener("pointerenter", preconnect, { once: true });
   };
   if (document.body) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });
