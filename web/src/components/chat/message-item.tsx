@@ -8,6 +8,7 @@ import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand";
 import { AnswerText, SourcesRow } from "./answer-text";
+import { HonestNoNotice } from "./honest-no";
 import { ThinkingLine } from "./thinking-line";
 
 export function BotAvatar({ className }: { className?: string }) {
@@ -153,6 +154,8 @@ export function MessageItem({
             showCitations={!compact}
             className={cn("text-foreground", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}
           />
+          {/* «Честно: не подойдёт» (T26) — и на стенде, и в виджете: это ответ клиенту, а не отладка. */}
+          <HonestNoNotice answer={a} onOpenChunk={onOpenChunk} compact={compact} />
           {/* Клиенту в виджете — чистый текст; номера и источники нужны жюри на стенде. */}
           {!compact && <SourcesRow answer={a} kb={kb} onOpen={onOpenChunk} />}
           <div
