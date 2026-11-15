@@ -11,6 +11,7 @@ Prometheus.
                                                    └──▶ Railway: llm-gateway ◀── core     ──▶ провайдер модели
                                                         (LiteLLM, ключ провайдера — только здесь; база llm-db)
 Railway: prometheus ──▶ /metrics api и llm-gateway
+Railway: grafana ──▶ prometheus (приватная сеть)
 ```
 
 | Что | Где | Публичный адрес |
@@ -23,6 +24,7 @@ Railway: prometheus ──▶ /metrics api и llm-gateway
 | База шлюза | Railway, второй PostgreSQL `llm-db` | нет — только приватная сеть |
 | Redis | Railway, `Redis` | нет — только приватная сеть |
 | Метрики | Railway, служба `prometheus`, корень `/monitoring` | по желанию — интерфейс Prometheus |
+| Дашборды | Railway, служба `grafana`, корень `/monitoring/grafana` | по желанию — только с паролем |
 
 Тот же набор служб поднимается локально одной командой — `docker compose up --build` (см. `compose.yaml`), вместе с фронтом на http://localhost:3000.
 
@@ -168,6 +170,35 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `GATEWAY_TARGET` | `${{llm-gateway.RAILWAY_PRIVATE_DOMAIN}}:4000` |
 | `STAND` | `railway` |
 | `LISTEN` | `[::]:9090` — приватная сеть Railway адресует по IPv6 |
+
+### 3b. Railway: служба `grafana` (дашборды)
+
+Образ собирается из `monitoring/grafana/Dockerfile`: дашборды и provisioning (источник данных Prometheus) вшиты в
+образ, ручной настройки в интерфейсе нет. Новые дашборды выкладываются обычным деплоем службы.
+
+| Настройка | Значение |
+|---|---|
+| Source | `Danila331/mts-ai`, ветка `main`, **Wait for CI** включён |
+| Root Directory | `/monitoring/grafana` |
+| Dockerfile Path | `Dockerfile` (внутри `/monitoring/grafana`) |
+| Watch Paths | `/monitoring/grafana/**` |
+| Healthcheck | `/api/health`, тайм-аут 60 с |
+| Volume | в `/var/lib/grafana`: пользователи, настройки и сессии переживают выкладку (образ работает от uid 472; если том не пишется, задать `RAILWAY_RUN_UID=0`). Дашборды из тома не зависят — они в образе |
+| Public Networking | по желанию. Без публичного домена открыть Grafana можно только из приватной сети; домен включать лишь после того, как задан пароль |
+
+| Переменная | Значение |
+|---|---|
+| `GF_SECURITY_ADMIN_PASSWORD` | длинный случайный пароль; **задать до включения публичного домена** (без него у Grafana `admin` / `admin`). Только в переменных Railway, в репозиторий не попадает |
+| `GF_AUTH_ANONYMOUS_ENABLED` | `false` |
+| `GF_USERS_ALLOW_SIGN_UP` | `false` |
+| `GF_SERVER_HTTP_PORT` | `3000` — тот же порт, что у домена |
+| `GF_SERVER_HTTP_ADDR` | `::` — приватная сеть Railway адресует по IPv6 |
+| `GF_SERVER_ROOT_URL` | публичный адрес Grafana, если включён домен |
+| `GF_ANALYTICS_REPORTING_ENABLED`, `GF_ANALYTICS_CHECK_FOR_UPDATES` | `false` |
+| `PROMETHEUS_URL` | `http://${{prometheus.RAILWAY_PRIVATE_DOMAIN}}:9090` |
+
+Проверка: `GET /api/health` отвечает без входа; `GET /api/search` без пароля — 401; после входа видны три дашборда
+(«Консультант», «Модель и шлюз», «Заявки»). Сами `/metrics` api и шлюза остаются только в приватной сети.
 
 ### 4. Vercel: фронт
 

@@ -82,11 +82,14 @@ jobs:
     name: Образы и сквозная проверка
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Пароль Grafana из compose.yaml обязателен; в CI — одноразовый.
+      GF_SECURITY_ADMIN_PASSWORD: ci-grafana-password
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Тот же compose.yaml, что у разработчика: собираются все образы
-      # (web, api, core, шлюз, Prometheus), поднимается весь стенд, и
+      # (web, api, core, шлюз, Prometheus, Grafana), поднимается весь стенд, и
       # запросы браузера проходят насквозь — через прокси Next до базы.
       # Ключа модели в CI нет — ядро отвечает заглушкой, а
       # проверяется связность служб, а не качество ответа.
@@ -111,6 +114,23 @@ jobs:
         env:
           SMOKE_MANAGER_TOKEN: ci-manager
         run: sh backend/scripts/smoke.sh http://127.0.0.1:8787 ci-token http://127.0.0.1:3000
+
+      # Grafana здорова (healthcheck в compose уже дождался её в --wait),
+      # вход только с паролем, а дашборды из monitoring/grafana подгрузились.
+      - name: Grafana и дашборды
+        run: |
+          curl -fsS http://127.0.0.1:3001/api/health | tee /dev/stderr | grep -q '"database": *"ok"'
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/api/search)
+          if [ "$code" != 401 ]; then echo "анонимный доступ к Grafana: $code"; exit 1; fi
+          n=0
+          for _ in $(seq 1 20); do
+            n=$(curl -fsS -u "admin:$GF_SECURITY_ADMIN_PASSWORD" "http://127.0.0.1:3001/api/search?type=dash-db" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+            [ "$n" -ge 3 ] && break
+            sleep 3
+          done
+          echo "дашбордов: $n"
+          [ "$n" -ge 3 ]
+          curl -fsS -u "admin:$GF_SECURITY_ADMIN_PASSWORD" http://127.0.0.1:3001/api/datasources/uid/prometheus | grep -q '"type": *"prometheus"'
 
       - name: Ответ, заявка и оценка легли в базу
         run: |

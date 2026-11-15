@@ -251,8 +251,43 @@ services:
       api:
         condition: service_started
 
+  # Дашборды поверх Prometheus (monitoring/grafana/): provisioning и
+  # дашборды монтируются из репозитория, руками в интерфейсе настраивать
+  # нечего. Интерфейс — http://localhost:3001; вход — admin и пароль из
+  # GF_SECURITY_ADMIN_PASSWORD (без него compose не стартует: пустой пароль
+  # у Grafana означал бы admin/admin).
+  grafana:
+    image: grafana/grafana:12.3.0@sha256:70d9599b186ce287be0d2c5ba9a78acb2e86c1a68c9c41449454d0fc3eeb84e8
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?задайте GF_SECURITY_ADMIN_PASSWORD в .env — вход в Grafana только с паролем}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      PROMETHEUS_URL: http://prometheus:9090
+    ports: ["127.0.0.1:${EB_GRAFANA_PORT:-3001}:3000"]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      prometheus:
+        condition: service_started
+
 volumes:
   pgdata:
   llmdb:
   core-index:
   prom-data:
+  grafana-data:

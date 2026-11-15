@@ -33,7 +33,7 @@
              стенд, виджет, прокси            │ заявки, журнал, пределы
                                              ├──▶ db (Postgres 17)
                                              ├──▶ redis (пределы частоты)
-                                             └──▶ prometheus (метрики, тревоги)
+                                             └──▶ prometheus (метрики, тревоги) ──▶ grafana (дашборды, :3001)
 ```
 
 Браузер ходит только в `web`: адрес и токен API знает сервер Next. Ключ провайдера модели знает только шлюз.
@@ -45,13 +45,28 @@
 Нужен Docker с Compose v2. Из корня репозитория:
 
 ```bash
-cp .env.example .env        # вписать LLM_BASE_URL и LLM_API_KEY; .env в git не попадает
+cp .env.example .env        # вписать LLM_BASE_URL, LLM_API_KEY и GF_SECURITY_ADMIN_PASSWORD; .env в git не попадает
 docker compose up --build   # → http://localhost:3000
 ```
 
 Первый старт — несколько минут: ядро считает эмбеддинги базы (дальше берёт их из тома `core-index`). Готовность
 всех служб — `docker compose ps` (статус `healthy`). Без ключа стенд поднимается и отвечает заглушкой.
 Остановить — `docker compose down`, вместе с данными — `docker compose down -v`.
+
+### Grafana: дашборды
+
+Нужна только для просмотра метрик. Открыть http://localhost:3001, войти как `admin` с паролем из
+`GF_SECURITY_ADMIN_PASSWORD` (`.env`; без пароля `docker compose` не стартует, анонимного доступа нет). Источник
+данных (Prometheus) и три дашборда подхватываются из `monitoring/grafana/` сами, настраивать в интерфейсе нечего;
+правки в интерфейсе не сохраняются — менять JSON в репозитории.
+
+| Дашборд | Что на нём |
+|---|---|
+| Консультант | запросы к чату, p50/p95 длительности ответа, исходы ответов (`answered`, `fallback`, `core_error`, `broken`, `empty`), открытые потоки, отказы 429 по правилам, 5xx |
+| Модель и шлюз | запросы, ошибки, токены и расход по службе (`api_key_alias`: core, api), ошибки провайдера, срабатывания запасного провайдера, задержки |
+| Заявки | заявки по источнику резюме (`llm` / `digest`), конверсия ответ → заявка |
+
+Тревоги по-прежнему видны во вкладке Alerts Prometheus; доставки тревог в Telegram нет.
 
 ### Внешний API модели
 
@@ -103,6 +118,7 @@ OpenRouter). Ключ кладётся в `.env` и уходит только в
 | `api` — Go-API | http://localhost:8787 | `EB_API_PORT` |
 | `api` — `/metrics` | http://localhost:9091 | `EB_METRICS_PORT` |
 | `prometheus` | http://localhost:9090 | `EB_PROMETHEUS_PORT` |
+| `grafana` — дашборды | http://localhost:3001 | `EB_GRAFANA_PORT` |
 | `db` — Postgres | `localhost:5433` | `EB_DB_PORT` |
 | `core` :8788, `llm-gateway` :4000, `redis` :6379, `llm-db` :5432 | только сеть compose | — |
 
@@ -116,6 +132,7 @@ OpenRouter). Ключ кладётся в `.env` и уходит только в
 | Postgres / Redis | 17-alpine / 7-alpine | `compose.yaml` |
 | Шлюз к моделям | LiteLLM `1.108.9-lts` | `llm-gateway/Dockerfile` |
 | Prometheus | v3.16.0 | `monitoring/Dockerfile` |
+| Grafana | 12.3.0 | `compose.yaml`, `monitoring/grafana/Dockerfile` |
 
 ### Проверка основного сценария
 
