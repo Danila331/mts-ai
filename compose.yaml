@@ -1,11 +1,13 @@
-# Бэкенд стенда одной командой: база, Redis, шлюз к моделям (со своей базой),
-# Python-ядро, Go-API и Prometheus (http://localhost:9090).
+# Весь стенд одной командой: фронт и виджет (Next), Go-API, Python-ядро,
+# шлюз к моделям (со своей базой), Postgres, Redis и Prometheus.
 #
-#   docker compose up --build        # API: http://localhost:8787
-#   cd web && npm run dev            # стенд: http://localhost:3000
+#   docker compose up --build        # стенд: http://localhost:3000
+#                                    # API: http://localhost:8787, Prometheus: http://localhost:9090
 #
-# Порт API — 8787, тот же, что был у Python-API: прокси Next по
-# умолчанию ходит именно туда (EB_API_URL), и фронт переезда не заметит.
+# Для разработки фронта с горячей перезагрузкой — `cd web && npm run dev`
+# поверх того же compose: службу web тогда можно не поднимать
+# (docker compose up --build api), а прокси Next по умолчанию ходит на
+# API по 127.0.0.1:8787 (EB_API_URL).
 #
 # Ключ модели берётся из .env в корне — того же, что читает ядро при
 # запуске без docker, — но знает его только шлюз (llm-gateway): ядро и
@@ -199,6 +201,25 @@ services:
       interval: 30s
       timeout: 3s
       retries: 3
+
+  # Стенд и виджет (web/, Next standalone). Браузер ходит только сюда:
+  # /api/* сервер Next проксирует в api по сети compose, подставляя
+  # EB_API_TOKEN, — адрес и токен API в браузер не попадают.
+  web:
+    build:
+      context: ./web
+    image: energytool-web:local
+    restart: unless-stopped
+    environment:
+      EB_API_URL: http://api:8080
+      EB_API_TOKEN: ${EB_API_TOKEN:-}
+    ports: ["127.0.0.1:${EB_WEB_PORT:-3000}:3000"]
+    # Только старт api: стенд открывается сразу, а пока api и ядро
+    # поднимаются, прокси честно отвечает «API не запущен».
+    depends_on:
+      api:
+        condition: service_started
+    # Healthcheck — в образе (web/Dockerfile): статика /widget.js.
 
   # Сбор метрик api и шлюза, правила тревог (monitoring/). Интерфейс —
   # http://localhost:9090, вкладка Alerts — сработавшие правила.
