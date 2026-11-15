@@ -6,6 +6,8 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import type { KbIndex } from "@/hooks/use-kb";
 import type { AnswerPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { markTerms } from "@/lib/glossary";
+import { TermText } from "./glossary-term";
 
 /** Номера источников по порядку первого упоминания — как сноски. */
 export function citationOrder(answer: AnswerPayload | undefined): string[] {
@@ -183,14 +185,21 @@ export function AnswerText({
   className?: string;
 }) {
   if (!answer?.citations?.length || !showCitations) {
-    return <p className={cn("whitespace-pre-wrap", className)}>{text}</p>;
+    return (
+      <p className={cn("whitespace-pre-wrap", className)}>
+        <TermText pieces={markTerms(text)} kb={kb} />
+      </p>
+    );
   }
   const order = citationOrder(answer);
+  // Подсказки к терминам (T16): каждый термин подчёркивается один раз на весь ответ.
+  const seen = new Set<string>();
+  const parts = answer.citations.map((c) => markTerms(c.sentence, seen));
   return (
     <p className={className}>
       {answer.citations.map((c, i) => (
         <span key={i}>
-          {c.sentence}
+          <TermText pieces={parts[i]} kb={kb} />
           {!c.question && c.support.length > 0 && (
             <span className="whitespace-nowrap">
               {c.support.slice(0, 2).map((s) => (

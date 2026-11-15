@@ -15,7 +15,7 @@
     GET  /core/health           схема ответа, есть ли модель, эмбеддинги, размер базы
     GET  /core/kb               база знаний разделами (те же фрагменты, что видит модель)
     POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"|"copilot", "overrides": {…},
-                                 "role": "grid"|…}
+                                 "role": "grid"|…, "level": "simple"|"technical"}
                                 → SSE: stage, delta…, answer, done. overrides — настройки RAG только для этого ответа
                                 (песочница стенда), те же ключи и пределы, что у /core/settings. role — роль-подсказка
                                 собеседника (T15): одна строка в промпте, только в режиме chat; неизвестная — без неё.
@@ -87,7 +87,7 @@ from energybot.guard import SENTENCE, numbers  # noqa: E402
 from energybot.kb import KnowledgeBase  # noqa: E402
 from energybot.llm import THINK, Api, DeadlineExceeded, env, env_num, strip_thinking  # noqa: E402
 from energybot.pipeline import FALLBACK, Answer, Consultant, tidy  # noqa: E402
-from energybot.prompts import CLARIFY_SYSTEM, ROLES, render_dialog  # noqa: E402
+from energybot.prompts import CLARIFY_SYSTEM, LEVELS, ROLES, render_dialog  # noqa: E402
 from energybot.text import tokens  # noqa: E402
 
 MAX_BODY = 256_000
@@ -1051,14 +1051,18 @@ class App:
         # режиму — просто без подсказки: ответ не должен ломаться из-за расхождения списков.
         role = body.get("role") if isinstance(body.get("role"), str) else ""
         role = role if mode == "chat" and role in ROLES else ""
+        # Уровень объяснения (T16) — так же: только подсказка промпту чата, неизвестный — без неё.
+        level = body.get("level") if isinstance(body.get("level"), str) else ""
+        level = level if mode == "chat" and level in LEVELS else ""
         # Весь ответ — и поиск, и представление для отладки — с настройками этого запроса.
         stream = self.stream and mode != "eval" and body.get("stream") is not False
         with overridden(values):
-            payload = self._chat(turns, mode, emit, body.get("passport"), stream, role)
+            payload = self._chat(turns, mode, emit, body.get("passport"), stream, role, level)
         payload["overrides"] = applied
         return payload
 
-    def _chat(self, turns: list, mode: str, emit, passport=None, stream: bool = False, role: str = "") -> dict:
+    def _chat(self, turns: list, mode: str, emit, passport=None, stream: bool = False, role: str = "",
+              level: str = "") -> dict:
         TRACE.reset(emit)
         TRACE.stream = bool(stream and emit)
         t0 = time.perf_counter()
@@ -1068,7 +1072,7 @@ class App:
         if gate:
             retrieval = self.bot.prefetch(turns)
             gated = retrieval is not None and retrieval["score"] < self.threshold
-        answer = self.bot.clarify(turns) if gated else self.bot.answer(turns, mode=mode, role=role)
+        answer = self.bot.clarify(turns) if gated else self.bot.answer(turns, mode=mode, role=role, level=level)
         total = (time.perf_counter() - t0) * 1000
         # Модель недоступна (T30): только в чате с клиентом. Автопроверка (eval) и копилот остаются при прежнем
         # FALLBACK — судья сравнивает с эталонами, а копилот обращается к менеджеру, не к клиенту.
@@ -1110,6 +1114,7 @@ class App:
             "error": answer.error,
             "mode": mode,
             "role": role,
+            "level": level,
             "timings": timings | {"server_total": round(total)},
             "guard": answer.guard,
             "trace": getattr(answer, "trace", ""),

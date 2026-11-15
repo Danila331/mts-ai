@@ -23,8 +23,9 @@ type Journal interface {
 	SaveAnswer(ctx context.Context, rec chat.Record) error
 	// TouchSession создаёт сессию на первом вопросе и отмечает каждый
 	// следующий; роль вопроса (T15) пишется в сессию, неизвестная прежнюю
-	// не стирает.
-	TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint) error
+	// не стирает; уровень объяснения (T16) пишется, только если клиент его
+	// прислал.
+	TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint, level session.LevelChoice) error
 }
 
 // journalTimeout — потолок на запись ответа в журнал.
@@ -74,6 +75,7 @@ func (s *Service) WithPassport(store Passports, model passport.Model) *Service {
 // request_id) WithoutCancel сохраняет.
 func (s *Service) Ask(ctx context.Context, req chat.Request) (*Relay, error) {
 	req.Role = s.role(ctx, req)
+	req.Level = s.levelFor(req)
 	s.touch(ctx, req)
 	req.Passport = s.passportFor(ctx, req)
 	upstream, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
@@ -286,6 +288,15 @@ func (s *Service) passportFor(ctx context.Context, req chat.Request) json.RawMes
 	return raw
 }
 
+// levelFor — уровень объяснения вопроса (T16). Только режим chat: в
+// автопроверке и копилоте уровня нет, и в сессию он тоже не пишется.
+func (s *Service) levelFor(req chat.Request) session.LevelChoice {
+	if req.Mode != dialog.ModeChat {
+		return session.LevelChoice{}
+	}
+	return req.Level
+}
+
 // touch записывает сессию до ответа: разговор виден на сервере, даже если
 // ядро так и не ответит. Сбой базы ответ не останавливает — он в журнале
 // службы.
@@ -296,7 +307,7 @@ func (s *Service) touch(ctx context.Context, req chat.Request) {
 	jctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
 	defer cancel()
 	title := session.Title(dialog.LastQuestion(req.Turns))
-	if err := s.journal.TouchSession(jctx, req.Session, string(req.Mode), title, req.Role); err != nil {
+	if err := s.journal.TouchSession(jctx, req.Session, string(req.Mode), title, req.Role, s.levelFor(req)); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("session_id", req.Session.ID).Msg("сессия не записана")
 	}
 }

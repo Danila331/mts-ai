@@ -28,6 +28,7 @@ import { InlineLead } from "./inline-lead";
 import { PostLeadCard } from "./post-lead";
 import { QuickReplies } from "./quick-replies";
 import { PassportCard } from "./passport-card";
+import { LevelSwitch } from "./level-switch";
 import { RoleBadge, RolePicker, roleStarters } from "./role-picker";
 import { type Starter, Starters } from "./starters";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -149,6 +150,7 @@ export function ChatView({
   summary,
   wizards,
   showRoles,
+  showLevel,
 }: {
   chat: ChatController;
   kb: KbIndex | null;
@@ -173,6 +175,8 @@ export function ChatView({
    * Только чат с клиентом (режим chat): у копилота и в режиме автопроверки ролей нет.
    */
   showRoles?: boolean;
+  /** Переключатель «Проще / Технически» (T16) и кнопки «Объяснить …» под ответами. Только режим chat. */
+  showLevel?: boolean;
 }) {
   const [summaryFor, setSummaryFor] = useState<string | null>(null);
   const [freshLead, setFreshLead] = useState<string | null>(null);
@@ -317,6 +321,7 @@ export function ChatView({
           </div>
           <div className="mt-7">{composer}</div>
           {showRoles && <RolePicker value={session?.role} onPick={chat.setRole} className="mt-4" />}
+          {showLevel && <LevelSwitch value={session?.level} onPick={chat.setLevel} className="mt-3" />}
           <div className="mt-4">
             <Starters onPick={send} items={quick} />
           </div>
@@ -363,6 +368,7 @@ export function ChatView({
                 </p>
               </div>
               {showRoles && <RolePicker value={session?.role} onPick={chat.setRole} compact className="pl-8.5" />}
+              {showLevel && <LevelSwitch value={session?.level} onPick={chat.setLevel} compact className="pl-8.5" />}
               <div className="space-y-1.5 pl-8.5">
                 {wizards?.map((flow) => (
                   <WizardEntry key={flow.id} flow={flow} onStart={() => startWizard(flow)} compact />
@@ -414,6 +420,14 @@ export function ChatView({
                   : undefined
               }
               onRate={m.role === "assistant" && m.answer ? (r) => rate(m.id, r) : undefined}
+              onExplain={
+                showLevel && m.role === "assistant" && m.answer && !chat.busy
+                  ? (level) => {
+                      const id = chat.regenerate(m.id, level);
+                      if (id) onSelect?.(id);
+                    }
+                  : undefined
+              }
             />
             </div>
           ))}
@@ -425,6 +439,9 @@ export function ChatView({
       <div className={cn("shrink-0", compact ? "px-3 pt-1 pb-2" : "mx-auto w-full max-w-[720px] px-4 pb-3 sm:px-6")}>
         {role && messages.length > 0 && (
           <RoleBadge key={session?.id} role={role} source={session?.roleSource} onPick={chat.setRole} compact={compact} />
+        )}
+        {showLevel && messages.length > 0 && (
+          <LevelSwitch value={session?.level} onPick={chat.setLevel} compact={compact} disabled={chat.busy} className={cn(compact ? "mb-1.5" : "mb-2")} />
         )}
         {session?.lead && (
           <div className={cn("flex", compact ? "mb-2" : "mb-2.5 justify-center")}>

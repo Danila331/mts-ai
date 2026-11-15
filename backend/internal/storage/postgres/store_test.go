@@ -126,9 +126,9 @@ func TestStore(t *testing.T) {
 		var first chat.Answer
 		require.NoError(t, json.Unmarshal([]byte(`{"id": "s1", "text": "Ответ 1", "mode": "chat",
 			"citations": [{"support": [{"id": "kb-1"}, {"id": "kb-2"}]}]}`), &first))
-		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Первый вопрос", session.RoleHint{}))
+		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Первый вопрос", session.RoleHint{}, session.LevelChoice{}))
 		require.NoError(t, s.SaveAnswer(ctx, chat.Record{Answer: first, Question: "Первый вопрос", Turns: 1, SessionID: ref.ID}))
-		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Второй вопрос", session.RoleHint{}))
+		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Второй вопрос", session.RoleHint{}, session.LevelChoice{}))
 		require.NoError(t, s.SaveAnswer(ctx, chat.Record{
 			Answer: chat.Answer{ID: "s2", Text: "Ответ 2", Mode: "chat"}, Question: "Второй вопрос", Turns: 3, SessionID: ref.ID,
 		}))
@@ -147,16 +147,16 @@ func TestStore(t *testing.T) {
 		// непустая заменяет.
 		paged := session.Ref{ID: "widget-page-1", Channel: session.Embed,
 			Page: json.RawMessage(`{"path": "/solar", "utm_source": "yandex"}`)}
-		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Про солнце", session.RoleHint{}))
+		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Про солнце", session.RoleHint{}, session.LevelChoice{}))
 		h, err = s.History(ctx, paged.ID)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"path": "/solar", "utm_source": "yandex"}`, string(h.Session.Page))
-		require.NoError(t, s.TouchSession(ctx, session.Ref{ID: paged.ID, Channel: session.Embed}, "chat", "Ещё", session.RoleHint{}))
+		require.NoError(t, s.TouchSession(ctx, session.Ref{ID: paged.ID, Channel: session.Embed}, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
 		h, err = s.History(ctx, paged.ID)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"path": "/solar", "utm_source": "yandex"}`, string(h.Session.Page), "вопрос без страницы её не стирает")
 		paged.Page = json.RawMessage(`{"path": "/askue", "title": "Платформа учёта"}`)
-		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Ещё", session.RoleHint{}))
+		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
 		h, err = s.History(ctx, paged.ID)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"path": "/askue", "title": "Платформа учёта"}`, string(h.Session.Page))
@@ -170,29 +170,46 @@ func TestStore(t *testing.T) {
 			require.NoError(t, err)
 			return h.Session.Role, h.Session.RoleSource
 		}
-		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Мы сетевая компания", session.RoleHint{}))
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Мы сетевая компания", session.RoleHint{}, session.LevelChoice{}))
 		r, src := role()
 		assert.Equal(t, [2]string{"", ""}, [2]string{r, src}, "роли ещё нет")
 		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё",
-			session.RoleHint{Role: session.RoleGrid, Source: session.RoleAuto}))
+			session.RoleHint{Role: session.RoleGrid, Source: session.RoleAuto}, session.LevelChoice{}))
 		r, src = role()
 		assert.Equal(t, [2]string{"grid", "auto"}, [2]string{r, src})
-		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}))
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
 		r, src = role()
 		assert.Equal(t, [2]string{"grid", "auto"}, [2]string{r, src}, "вопрос без роли её не стирает")
 		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё",
-			session.RoleHint{Role: session.RoleEngineer, Source: session.RoleByClient}))
+			session.RoleHint{Role: session.RoleEngineer, Source: session.RoleByClient}, session.LevelChoice{}))
 		r, src = role()
 		assert.Equal(t, [2]string{"engineer", "client"}, [2]string{r, src}, "выбор клиента")
-		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{Source: session.RoleByClient}))
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{Source: session.RoleByClient}, session.LevelChoice{}))
 		r, src = role()
 		assert.Equal(t, [2]string{"", "client"}, [2]string{r, src}, "клиент снял роль")
-		assert.Error(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{Role: session.RoleGrid, Source: "model"}),
+		assert.Error(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{Role: session.RoleGrid, Source: "model"}, session.LevelChoice{}),
 			"CHECK в базе — последняя линия для неизвестного источника роли")
+
+		// Уровень объяснения (T16): пишется, только если клиент его прислал; пустой при выборе — «обычный».
+		lvl := func() string {
+			h, err := s.History(ctx, roled.ID)
+			require.NoError(t, err)
+			return h.Session.Level
+		}
+		assert.Equal(t, "", lvl(), "уровня ещё нет")
+		pick := func(l session.Level) session.LevelChoice { return session.LevelChoice{Level: l, Chosen: true} }
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, pick(session.LevelSimple)))
+		assert.Equal(t, "simple", lvl())
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
+		assert.Equal(t, "simple", lvl(), "вопрос без уровня его не стирает")
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, pick(session.LevelTechnical)))
+		assert.Equal(t, "technical", lvl())
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, pick("")))
+		assert.Equal(t, "", lvl(), "клиент вернул обычный уровень")
 
 		_, err = s.History(ctx, "nobody-here")
 		assert.ErrorIs(t, err, session.ErrNotFound)
-		assert.Error(t, s.TouchSession(ctx, session.Ref{ID: "x-sess-01", Channel: "fax"}, "chat", "", session.RoleHint{}),
+		assert.Error(t, s.TouchSession(ctx, session.Ref{ID: "x-sess-01", Channel: "fax"}, "chat", "", session.RoleHint{}, session.LevelChoice{}),
 			"CHECK в базе — последняя линия для неизвестного канала")
 	})
 

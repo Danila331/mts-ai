@@ -121,6 +121,10 @@ type chatRequest struct {
 	// попадает только в режиме chat.
 	Role       string `json:"role"`
 	RoleSource string `json:"role_source"`
+	// Level — уровень объяснения (T16, session.Levels): simple или
+	// technical. Поле есть, а значение пустое — обычный уровень. Только
+	// форма ответа; в промпт попадает в режиме chat.
+	Level *string `json:"level"`
 }
 
 // maxOverrides — предел поля overrides. Настроек полтора десятка, и их
@@ -180,9 +184,14 @@ func (s *Server) chat(c echo.Context) error {
 		return s.mapErr(c, err)
 	}
 
+	level, err := session.ParseLevel(body.Level)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+
 	mode := dialog.ParseMode(body.Mode)
 	relay, err := s.deps.Chat.Ask(c.Request().Context(),
-		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref, Role: role})
+		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref, Role: role, Level: level})
 	if err != nil {
 		return s.coreFail(c, err)
 	}

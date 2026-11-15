@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Channel, patchPassport, streamChat } from "@/lib/api";
 import type { PageInfo } from "@/lib/page-context";
+import type { LevelId } from "@/lib/level";
 import { type RoleId, type RoleState, resolveRole } from "@/lib/roles";
 import { readSandbox } from "@/lib/sandbox";
 import { appendDelta, isRevised } from "@/lib/stream-text";
@@ -25,6 +26,9 @@ const STREAM_FLUSH_MS = 40;
 /** Реплики клиента — по ним определяется роль-подсказка (T15). */
 const clientTexts = (messages: Message[]) => messages.filter((m) => m.role === "user" && !m.error).map((m) => m.content);
 const orgType = (passport?: Passport) => passport?.fields.find((f) => f.key === "org_type")?.value;
+
+/** Роль (T15) и уровень объяснения (T16), с которыми уходит вопрос. */
+type Profile = RoleState & { level?: LevelId | "" };
 
 /** История для API: только завершённые реплики, без отладочных полей. */
 export function toTurns(messages: Message[]): Turn[] {
@@ -110,7 +114,7 @@ export function useChat(
   );
 
   const run = useCallback(
-    async (sessionId: string, history: Message[], assistantId: string, profile: RoleState = {}) => {
+    async (sessionId: string, history: Message[], assistantId: string, profile: Profile = {}) => {
       const controller = new AbortController();
       controllers.current.set(sessionId, controller);
       // Дельты копятся здесь и попадают в состояние не чаще раза в STREAM_FLUSH_MS.
@@ -173,6 +177,7 @@ export function useChat(
             page,
             role: profile.role,
             roleSource: profile.roleSource,
+            level: profile.level,
           },
         );
       } catch (err) {
@@ -205,7 +210,8 @@ export function useChat(
       const user: Message = { id: uid(), role: "user", content, createdAt: now };
       const assistant: Message = { id: uid(), role: "assistant", content: "", createdAt: now, pending: true };
       const history = [...active.messages.filter((m) => !m.error), user];
-      const profile = mode === "chat" ? resolveRole(active, clientTexts(history), orgType(active.passport)) : {};
+      const profile: Profile =
+        mode === "chat" ? { ...resolveRole(active, clientTexts(history), orgType(active.passport)), level: active.level } : {};
       update(active.id, (s) => ({
         ...s,
         ...profile,
@@ -221,7 +227,7 @@ export function useChat(
 
   /** Ответить заново на ту же реплику клиента: ответ и всё после него заменяются. */
   const regenerate = useCallback(
-    (messageId: string) => {
+    (messageId: string, level?: LevelId) => {
       if (!active) return;
       const index = active.messages.findIndex((m) => m.id === messageId);
       if (index < 1) return;
@@ -233,8 +239,16 @@ export function useChat(
         createdAt: Date.now(),
         pending: true,
       };
-      update(active.id, (s) => ({ ...s, messages: [...s.messages.slice(0, index), assistant] }));
-      const profile = mode === "chat" ? resolveRole(active, clientTexts(history), orgType(active.passport)) : {};
+      // «Объяснить проще / технически» (T16): тот же вопрос с другим уровнем; он же остаётся уровнем сессии.
+      update(active.id, (s) => ({
+        ...s,
+        ...(level && mode === "chat" ? { level } : {}),
+        messages: [...s.messages.slice(0, index), assistant],
+      }));
+      const profile: Profile =
+        mode === "chat"
+          ? { ...resolveRole(active, clientTexts(history), orgType(active.passport)), level: level ?? active.level }
+          : {};
       void run(active.id, history, assistant.id, profile);
       return assistant.id;
     },
@@ -303,6 +317,12 @@ export function useChat(
     [active, update],
   );
 
+  /** Клиент выбрал уровень объяснения (T16) или вернул обычный (""); действует со следующего ответа. */
+  const setLevel = useCallback(
+    (level: LevelId | "") => active && update(active.id, (s) => ({ ...s, level })),
+    [active, update],
+  );
+
   /** Клиент поправил паспорт: правка уходит на сервер, бот её больше не перезапишет. */
   const editPassport = useCallback(
     async (values: Record<string, string | null>): Promise<Passport | undefined> => {
@@ -332,6 +352,7 @@ export function useChat(
     setLead,
     setWizard,
     setRole,
+    setLevel,
     editPassport,
     busy,
   };

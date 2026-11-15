@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KbIndex } from "@/hooks/use-kb";
 import { tidyStream } from "@/lib/stream-text";
+import { LEVELS, type LevelId, otherLevels } from "@/lib/level";
 import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand";
@@ -106,6 +107,7 @@ export function MessageItem({
   onRate,
   onDebug,
   onLead,
+  onExplain,
   selected,
   compact,
 }: {
@@ -117,6 +119,8 @@ export function MessageItem({
   onDebug?: () => void;
   /** Открыть форму заявки — кнопка в блоке «вот что есть в материалах» (T30). */
   onLead?: () => void;
+  /** «Объяснить проще / технически» (T16): тот же ответ с другим уровнем объяснения. */
+  onExplain?: (level: LevelId) => void;
   selected?: boolean;
   compact?: boolean;
 }) {
@@ -198,6 +202,22 @@ export function MessageItem({
           <DegradedSections answer={a} onOpenChunk={onOpenChunk} onLead={onLead} compact={compact} />
           {/* «Честно: не подойдёт» (T26) — и на стенде, и в виджете: это ответ клиенту, а не отладка. */}
           <HonestNoNotice answer={a} onOpenChunk={onOpenChunk} compact={compact} />
+          {onExplain && a && !a.fallback && !a.error && a.route !== "clarify" && (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {otherLevels(a.level).map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => onExplain(level)}
+                  title={LEVELS[level].hint}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border/80 px-2.5 text-[12.5px] text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <RotateCcw className="size-3" aria-hidden />
+                  {LEVELS[level].action}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Клиенту в виджете — чистый текст; номера и источники нужны жюри на стенде. */}
           {!compact && <SourcesRow answer={a} kb={kb} onOpen={onOpenChunk} />}
           <div

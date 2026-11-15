@@ -40,7 +40,8 @@ func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
 // каждом следующем; заголовок остаётся от первого. Страница виджета
 // пишется при создании и заменяется, только если пришла непустая. Роль
 // заменяется, только если у вопроса она известна или клиент её снял.
-func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint) error {
+func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint,
+	level session.LevelChoice) error {
 	page := []byte(ref.Page)
 	if len(page) == 0 {
 		page = []byte("{}")
@@ -48,6 +49,7 @@ func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title s
 	return s.Queries.UpsertSession(ctx, db.UpsertSessionParams{
 		ID: ref.ID, Channel: string(ref.Channel), Mode: mode, Title: title, Page: page,
 		Role: string(role.Role), RoleSource: string(role.Source),
+		Level: string(level.Level), LevelSet: level.Chosen,
 	})
 }
 

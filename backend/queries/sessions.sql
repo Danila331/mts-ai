@@ -3,16 +3,19 @@
 -- Страница виджета (T8) — последняя присланная: пустой {} её не стирает.
 -- Роль (T15) — последняя известная: вопрос без роли (role_source = '')
 -- прежнюю не стирает, а выбор клиента, в том числе «не указывать», — да.
+-- Уровень объяснения (T16) пишется, только если клиент его прислал
+-- (level_set): пустой уровень при level_set — «обычный», стирает прежний.
 -- name: UpsertSession :exec
-INSERT INTO sessions (id, channel, mode, title, page, role, role_source)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO sessions (id, channel, mode, title, page, role, role_source, level)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (id) DO UPDATE
 SET updated_at  = now(),
     mode        = EXCLUDED.mode,
     title       = CASE WHEN sessions.title = '' THEN EXCLUDED.title ELSE sessions.title END,
     page        = CASE WHEN EXCLUDED.page = '{}'::jsonb THEN sessions.page ELSE EXCLUDED.page END,
     role        = CASE WHEN EXCLUDED.role_source = '' THEN sessions.role ELSE EXCLUDED.role END,
-    role_source = CASE WHEN EXCLUDED.role_source = '' THEN sessions.role_source ELSE EXCLUDED.role_source END;
+    role_source = CASE WHEN EXCLUDED.role_source = '' THEN sessions.role_source ELSE EXCLUDED.role_source END,
+    level       = CASE WHEN sqlc.arg(level_set)::boolean THEN EXCLUDED.level ELSE sessions.level END;
 
 -- name: GetSession :one
 SELECT id, channel, mode, title, page, passport, role, role_source, level, created_at, updated_at

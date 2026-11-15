@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .prompts import CHAT_MODE, render_dialog, render_examples, role_hint
+from .prompts import CHAT_MODE, level_hint, render_dialog, render_examples, role_hint
 
 MAP_DOCS = ("00-product-map.md", "01-numbers-and-indicators.md")
 SCOPE_DOC = "02-product-scope-and-limits.md"
@@ -114,14 +114,14 @@ FINAL_FM = (
 
 
 def build_fm_messages(fact_map: str, materials: str, turns: list, mode: str = "eval", examples: bool = True,
-                      exclude_example: str = "", role: str = "") -> list:
+                      exclude_example: str = "", role: str = "", level: str = "") -> list:
     """Неизменная часть (правила, карта фактов, примеры) — в системном сообщении: её кэширует сервер.
     Найденные разделы и диалог — в конце."""
     system = RULES_FM + (CHAT_MODE if mode == "chat" else "") + f"\n\nКАРТА ФАКТОВ\n{fact_map}"
     if examples:
         system += "\n\nПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ (образец вывода, отбора фактов и длины; факты бери из базы)\n"
         system += render_examples(exclude_example)
-    system += role_hint(mode, role)
+    system += role_hint(mode, role) + level_hint(mode, level)
     user = f"РАЗДЕЛЫ БАЗЫ ПО ВОПРОСУ\n{materials}\n\n{render_dialog(turns)}\n\n{FINAL_FM}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

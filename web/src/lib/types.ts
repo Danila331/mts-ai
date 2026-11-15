@@ -1,6 +1,7 @@
 import type { WizardRecord } from "@/lib/wizards/engine";
 
 // Контракт API (Go-служба backend/, ответ строит ядро scripts/core_api.py). Поля — как в JSON сервера.
+import type { LevelId } from "./level";
 import type { RoleId, RoleSource } from "./roles";
 
 export type Role = "user" | "assistant";
@@ -143,6 +144,8 @@ export interface AnswerPayload {
   mode: ChatMode;
   /** Роль-подсказка, с которой ядро собрало промпт (T15); пусто — без неё. */
   role?: string;
+  /** Уровень объяснения, с которым ядро собрало промпт (T16); пусто — обычный. */
+  level?: string;
   timings: Record<string, number>;
   guard: Guard;
   trace: string;
@@ -298,6 +301,11 @@ export interface Session {
    */
   role?: RoleId | "";
   roleSource?: RoleSource;
+  /**
+   * Уровень объяснения (T16). undefined — клиент его не выбирал; "" — вернул обычный. Уходит на сервер с каждым
+   * вопросом режима chat, если он выбран.
+   */
+  level?: LevelId | "";
 }
 
 // ---------- настройки RAG (GET/POST /api/settings) ----------

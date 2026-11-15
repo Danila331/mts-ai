@@ -60,14 +60,17 @@ type journal struct {
 	recs     []chat.Record
 	sessions []string
 	roles    []session.RoleHint
+	levels   []session.LevelChoice
 	err      error
 }
 
-func (j *journal) TouchSession(_ context.Context, ref session.Ref, _, title string, role session.RoleHint) error {
+func (j *journal) TouchSession(_ context.Context, ref session.Ref, _, title string, role session.RoleHint,
+	level session.LevelChoice) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.sessions = append(j.sessions, ref.ID+"|"+string(ref.Channel)+"|"+title)
 	j.roles = append(j.roles, role)
+	j.levels = append(j.levels, level)
 	return j.err
 }
 
@@ -299,4 +302,34 @@ func TestRoleResolvedAndStored(t *testing.T) {
 			assert.False(t, sent.Known(), mode)
 		}
 	})
+}
+
+func TestLevelPassedAndStored(t *testing.T) {
+	ask := func(t *testing.T, r chat.Request) (session.LevelChoice, session.LevelChoice) {
+		t.Helper()
+		j := &journal{}
+		svc := New(nil, j, time.Minute)
+		core := &fakeCore{stream: &script{events: []chat.Event{ev("answer", `{"id": "a1", "text": "Ответ"}`), ev("done", `{}`)}}}
+		svc.core = core
+		relay, err := svc.Ask(context.Background(), r)
+		require.NoError(t, err)
+		relay.Forward(func(chat.Event) error { return nil })
+		var stored session.LevelChoice
+		if len(j.levels) > 0 {
+			stored = j.levels[len(j.levels)-1]
+		}
+		return core.req.Level, stored
+	}
+	ref := session.Ref{ID: "sess-level-1", Channel: session.Embed}
+	pick := session.LevelChoice{Level: session.LevelSimple, Chosen: true}
+
+	sent, stored := ask(t, chat.Request{Turns: req.Turns, Mode: dialog.ModeChat, Session: ref, Level: pick})
+	assert.Equal(t, pick, sent, "ядро получило уровень")
+	assert.Equal(t, pick, stored, "уровень записан в сессию")
+
+	for _, mode := range []dialog.Mode{dialog.ModeEval, dialog.ModeCopilot} {
+		sent, stored = ask(t, chat.Request{Turns: req.Turns, Mode: mode, Session: ref, Level: pick})
+		assert.Equal(t, session.LevelChoice{}, sent, mode)
+		assert.Equal(t, session.LevelChoice{}, stored, "в автопроверке и копилоте сессия уровень не получает")
+	}
 }

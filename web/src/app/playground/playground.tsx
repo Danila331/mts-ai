@@ -207,6 +207,7 @@ export function Playground() {
             summary
             wizards={mode === "chat" ? FLOWS : undefined}
             showRoles={mode === "chat"}
+            showLevel={mode === "chat"}
           />
         )}
       </div>

@@ -74,7 +74,8 @@ func (m *memStore) SavePassport(_ context.Context, id string, p passport.Passpor
 	return nil
 }
 
-func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title string, role session.RoleHint) error {
+func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title string, role session.RoleHint,
+	level session.LevelChoice) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sessions == nil {
@@ -91,6 +92,10 @@ func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title 
 	// Как UpsertSession: роль меняется, только если у вопроса есть источник.
 	if role.Source != "" {
 		s.Role, s.RoleSource = string(role.Role), string(role.Source)
+	}
+	// Как UpsertSession: уровень пишется, только если клиент его прислал.
+	if level.Chosen {
+		s.Level = string(level.Level)
 	}
 	s.Mode, s.UpdatedAt = mode, time.Now()
 	m.sessions[ref.ID] = s
@@ -1146,4 +1151,60 @@ func TestDeadCoreChatFailsFastLeadWorks(t *testing.T) {
 	require.Len(t, store.leads, 1)
 	rec = do(s, http.MethodPost, "/api/feedback", `{"session_id": "s", "message_id": "m", "rating": 1}`)
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestChatLevel(t *testing.T) {
+	core, bodies := recordingCore(t)
+	s, store := newServer(t, core.URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	q := `"messages": [{"role": "user", "content": "Чем мощность отличается от энергии?"}]`
+	levelOf := func(b map[string]json.RawMessage) string {
+		var l string
+		if raw, ok := b["level"]; ok {
+			require.NoError(t, json.Unmarshal(raw, &l))
+		}
+		return l
+	}
+
+	// Клиент выбрал «проще»: уровень ушёл ядру и лёг в сессию.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{`+q+`, "mode": "chat", "session_id": "level-sess-1", "channel": "embed", "level": "simple"}`).Code)
+	assert.Equal(t, "simple", levelOf(bodies()[0]))
+	assert.Equal(t, "simple", store.sessions["level-sess-1"].Level)
+
+	// Вопрос без поля уровень в сессии не меняет; ядру уходит то, что прислали (ничего).
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{`+q+`, "mode": "chat", "session_id": "level-sess-1"}`).Code)
+	assert.Empty(t, levelOf(bodies()[1]))
+	assert.Equal(t, "simple", store.sessions["level-sess-1"].Level)
+
+	// Технический — перезаписывает; пустой — обычный уровень.
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{`+q+`, "mode": "chat", "session_id": "level-sess-1", "level": "technical"}`).Code)
+	assert.Equal(t, "technical", levelOf(bodies()[2]))
+	assert.Equal(t, "technical", store.sessions["level-sess-1"].Level)
+	require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+		`{`+q+`, "mode": "chat", "session_id": "level-sess-1", "level": ""}`).Code)
+	assert.Empty(t, levelOf(bodies()[3]))
+	assert.Empty(t, store.sessions["level-sess-1"].Level)
+
+	rec := do(s, http.MethodGet, "/api/sessions/level-sess-1", "", ManagerHeader, "manager-token")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Автопроверка и копилот уровень ядру не передают — промпт как без него.
+	for _, mode := range []string{"eval", "copilot"} {
+		require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat",
+			`{`+q+`, "mode": "`+mode+`", "level": "technical"}`).Code)
+	}
+	for _, b := range bodies()[4:] {
+		_, sent := b["level"]
+		assert.False(t, sent)
+	}
+
+	// Неизвестный уровень — 400 до ядра и до сессии.
+	before := len(bodies())
+	rec = do(s, http.MethodPost, "/api/chat", `{`+q+`, "session_id": "level-sess-2", "level": "expert"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"error": "level: simple или technical"}`, rec.Body.String())
+	assert.Len(t, bodies(), before)
+	assert.NotContains(t, store.sessions, "level-sess-2")
 }

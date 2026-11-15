@@ -1,14 +1,17 @@
 "use client";
 
-import { ArrowLeft, ArrowUpRight, Check, Download } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { ArrowLeft, Check, Download } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BrandLockup } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import type { KbIndex } from "@/hooks/use-kb";
+import { type SummaryFormat, boardFileTitle, buildBoardPack, defaultFormat } from "@/lib/board-pack";
 import { type ConsultationSummary, buildSummary, summaryFileTitle } from "@/lib/consultation-summary";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { BoardDocument } from "./board-pack";
+import { KbLink, Section, dateTime } from "./summary-parts";
 
 /*
  * «Итоги консультации» (T10). PDF делает сам браузер: «Скачать PDF» → window.print() → «Сохранить как PDF».
@@ -17,32 +20,6 @@ import { cn } from "@/lib/utils";
  * браузер встраивает шрифт в PDF. В печать идёт копия документа в отдельном корне у <body>
  * (globals.css → @media print), поэтому одинаково работает и на стенде, и внутри iframe виджета.
  */
-
-const dateTime = (ts: number) =>
-  new Date(ts).toLocaleString("ru-RU", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
-
-function KbLink({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={cn("inline-flex items-baseline gap-0.5 text-brand-text underline-offset-2 hover:underline", className)}
-    >
-      {children}
-      <ArrowUpRight className="size-3 shrink-0 self-center print:hidden" aria-hidden />
-    </a>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="border-t pt-5 pb-1">
-      <h2 className="mb-3 text-[18px] leading-snug font-semibold break-after-avoid">{title}</h2>
-      {children}
-    </section>
-  );
-}
 
 /** Сам документ: одна разметка для превью на экране и для печати. */
 export function SummaryDocument({ summary, compact }: { summary: ConsultationSummary; compact?: boolean }) {
@@ -212,6 +189,9 @@ export function SummaryPanel({
   compact?: boolean;
 }) {
   const summary = useMemo(() => buildSummary(session, kb?.data), [session, kb]);
+  const pack = useMemo(() => buildBoardPack(session, kb?.data), [session, kb]);
+  // Пакет для правления (T22): сразу — для роли СНТ, УК, ТСЖ; остальным он доступен переключателем формата.
+  const [format, setFormat] = useState<SummaryFormat>(() => defaultFormat(session));
   const back = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -221,7 +201,7 @@ export function SummaryPanel({
   const print = () => {
     // Имя файла в «Сохранить как PDF» браузер берёт из заголовка страницы.
     const prev = document.title;
-    document.title = summaryFileTitle(summary);
+    document.title = format === "board" ? boardFileTitle(pack) : summaryFileTitle(summary);
     const restore = () => {
       document.title = prev;
       window.removeEventListener("afterprint", restore);
@@ -234,13 +214,35 @@ export function SummaryPanel({
     <div
       className="msg-in absolute inset-0 z-20 flex flex-col bg-background"
       role="region"
-      aria-label="Итоги консультации"
+      aria-label={format === "board" ? "Пакет для правления" : "Итоги консультации"}
     >
       <div className={cn("flex h-14 shrink-0 items-center gap-2 border-b", compact ? "px-3" : "px-4")}>
         <Button ref={back} variant="ghost" size={compact ? "sm" : "default"} onClick={onClose} className="-ml-1 text-muted-foreground">
           <ArrowLeft /> К чату
         </Button>
         <div className="min-w-0 flex-1" />
+        <div role="radiogroup" aria-label="Формат документа" className="inline-flex rounded-full border border-border/80 p-0.5">
+          {(
+            [
+              ["summary", "Итоги"],
+              ["board", "Для правления"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={format === id}
+              onClick={() => setFormat(id)}
+              className={cn(
+                "inline-flex h-7 items-center rounded-full px-2.5 text-[12.5px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                format === id ? "bg-primary/10 font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <Button onClick={print} size={compact ? "sm" : "default"}>
           <Download /> Скачать PDF
         </Button>
@@ -251,12 +253,16 @@ export function SummaryPanel({
             «Скачать PDF» откроет окно печати — выберите «Сохранить как PDF». Документ собирается в браузере и никуда
             не отправляется; контакты в него не попадают.
           </p>
-          <SummaryDocument summary={summary} compact={compact} />
+          {format === "board" ? (
+            <BoardDocument pack={pack} compact={compact} />
+          ) : (
+            <SummaryDocument summary={summary} compact={compact} />
+          )}
         </div>
       </div>
       {createPortal(
         <div className="eb-print-root" aria-hidden>
-          <SummaryDocument summary={summary} />
+          {format === "board" ? <BoardDocument pack={pack} /> : <SummaryDocument summary={summary} />}
         </div>,
         document.body,
       )}
