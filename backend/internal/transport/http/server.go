@@ -21,6 +21,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	chatuc "github.com/Danila331/mts-ai/backend/internal/chat/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/config"
+	"github.com/Danila331/mts-ai/backend/internal/document"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	"github.com/Danila331/mts-ai/backend/internal/metrics"
@@ -61,6 +62,13 @@ type (
 		LoadPassport(ctx context.Context, id string) (passport.Passport, error)
 		SavePassport(ctx context.Context, id string, p passport.Passport) error
 	}
+	// Documents — текст из фото и PDF клиента (T9). Файл живёт только в
+	// памяти запроса.
+	Documents interface {
+		Read(ctx context.Context, data []byte, declared string) (document.Result, error)
+		Photos() bool
+		MaxPages() int
+	}
 	Settings interface {
 		Settings(ctx context.Context) (json.RawMessage, error)
 		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
@@ -78,6 +86,8 @@ type Deps struct {
 	Settings  Settings
 	Sessions  Sessions
 	Passports Passports
+	// Documents — nil выключает приём документов.
+	Documents Documents
 	// Metrics — nil выключает метрики.
 	Metrics *metrics.Metrics
 	// RateStore — хранилище пределов; nil — память процесса.
@@ -149,7 +159,12 @@ func New(cfg *config.Config, deps Deps, log zerolog.Logger) *Server {
 			return err
 		},
 	}))
-	e.Use(middleware.BodyLimit(MaxBody))
+	// Документ (POST /api/ocr) больше общего предела: свой предел у него
+	// в обработчике (EB_OCR_MAX_BYTES).
+	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{
+		Limit:   MaxBody,
+		Skipper: func(c echo.Context) bool { return isOCRUpload(c.Request()) },
+	}))
 
 	// CORS нужен только тем, кто зовёт API из браузера напрямую: фронт
 	// ходит через свой прокси на том же origin. Пустой список — CORS
@@ -186,12 +201,21 @@ func (s *Server) routes() {
 	settingsLimit := s.limiter(ratelimit.Rule{Name: "settings", PerPeriod: l.SettingsPerMinute, Period: time.Minute, Burst: l.SettingsBurst},
 		"Слишком много запросов к настройкам — подождите минуту")
 
+	// Документ — до десяти мегабайт в памяти и, для фото, платный запрос
+	// к vision-модели. Свой предел — чтобы не отнимать вопросы и заявки.
+	ocrLimit := s.limiter(ratelimit.Rule{Name: "ocr", PerPeriod: l.OCRPerHour, Period: time.Hour, Burst: l.OCRBurst},
+		"Слишком много документов подряд — попробуйте позже")
+
 	api := s.echo.Group("/api", s.requireToken)
 	api.GET("/health", s.health)
 	api.GET("/kb", s.kb)
 	api.POST("/chat", s.chat, chatLimit)
 	api.POST("/lead", s.lead, leadLimit)
 	api.POST("/feedback", s.feedback, feedbackLimit)
+	// Документы (T9): что принимается — и сам документ → текст на проверку
+	// клиенту. В чат текст уходит только отдельным действием клиента.
+	api.GET("/ocr", s.ocrInfo)
+	api.POST("/ocr", s.ocr, ocrLimit)
 	// Настройки RAG: читать может каждый (страница /settings и песочница),
 	// менять для всех — только администратор (EB_ADMIN_TOKEN). Песочница
 	// идёт полем overrides в /api/chat и общих настроек не трогает.
