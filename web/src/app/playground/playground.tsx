@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, MessageSquare, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { ChevronDown, Download, FileJson, PanelRightClose, PanelRightOpen, Pencil, Trash2 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell, PageBar } from "@/components/app-shell";
@@ -10,6 +10,13 @@ import { DebugPanel } from "@/components/debug/debug-panel";
 import { ChunkSheet } from "@/components/kb/chunk-sheet";
 import { exportSession, SessionsList } from "@/components/sessions-sidebar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
@@ -31,6 +38,8 @@ export function Playground() {
   const [leadOpen, setLeadOpen] = useState(false);
   const [debugPref, setDebugPref] = useState(true);
   const [debugSheet, setDebugSheet] = useState(false);
+  const [query, setQuery] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -79,8 +88,61 @@ export function Playground() {
   );
   const hasMessages = !!chat.active?.messages.length;
 
+  const active = chat.active;
+  const commitRename = (value: string) => {
+    if (active && value.trim()) chat.rename(active.id, value.trim());
+    setRenaming(null);
+  };
+  // Название диалога открывает меню действий — как заголовок чата в Claude.
+  const title =
+    hasMessages && active ? (
+      renaming === active.id ? (
+        <input
+          autoFocus
+          defaultValue={active.title}
+          onBlur={(e) => commitRename(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename(e.currentTarget.value);
+            if (e.key === "Escape") setRenaming(null);
+          }}
+          aria-label="Название диалога"
+          className="h-8 w-[min(28rem,100%)] rounded-lg border border-input bg-background px-2.5 text-[14px] font-medium outline-none focus:border-ring"
+        />
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                className="-ml-1 flex h-8 min-w-0 items-center gap-1 rounded-lg px-2 text-[14px] font-medium outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-muted"
+                aria-label={`Действия с диалогом «${active.title}»`}
+              />
+            }
+          >
+            <span className="truncate">{active.title}</span>
+            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuItem onClick={() => setRenaming(active.id)}>
+              <Pencil /> Переименовать
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => exportSession(active, "md")}>
+              <Download /> Экспорт в Markdown
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => exportSession(active, "json")}>
+              <FileJson /> Экспорт с отладкой (JSON)
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={() => chat.remove(active.id)}>
+              <Trash2 /> Удалить
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )
+    ) : undefined;
+
   const bar = (
-    <PageBar icon={MessageSquare} title={hasMessages ? chat.active?.title : undefined}>
+    <PageBar title={title}>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -100,24 +162,6 @@ export function Playground() {
           предложить передать запрос менеджеру.
         </TooltipContent>
       </Tooltip>
-      {hasMessages && (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon"
-                className="hidden text-muted-foreground sm:inline-flex"
-                onClick={() => exportSession(chat.active!, "md")}
-                aria-label="Экспорт диалога в Markdown"
-              />
-            }
-          >
-            <Download />
-          </TooltipTrigger>
-          <TooltipContent>Экспорт диалога в Markdown</TooltipContent>
-        </Tooltip>
-      )}
       {hasMessages && (
         <Tooltip>
           <TooltipTrigger
@@ -162,7 +206,11 @@ export function Playground() {
   );
 
   return (
-    <AppShell onNew={() => chat.create()} sidebar={chat.ready ? <SessionsList chat={chat} /> : null}>
+    <AppShell
+      onNew={() => chat.create()}
+      search={{ value: query, onChange: setQuery }}
+      sidebar={chat.ready ? <SessionsList chat={chat} query={query} /> : null}
+    >
       {wide ? (
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
           <ResizablePanel defaultSize="60%" minSize="40%">
@@ -172,7 +220,7 @@ export function Playground() {
             <>
               <ResizableHandle />
               <ResizablePanel defaultSize="40%" minSize="28%">
-                <div className="h-full bg-surface">{debug}</div>
+                <div className="h-full bg-background">{debug}</div>
               </ResizablePanel>
             </>
           )}
@@ -184,7 +232,7 @@ export function Playground() {
             <SheetContent
               side="right"
               showCloseButton={false}
-              className="w-full gap-0 bg-surface p-0 data-[side=right]:w-[min(560px,100vw)] data-[side=right]:sm:max-w-none"
+              className="w-full gap-0 bg-background p-0 data-[side=right]:w-[min(560px,100vw)] data-[side=right]:sm:max-w-none"
             >
               <SheetTitle className="sr-only">Отладка ответа</SheetTitle>
               {debug}

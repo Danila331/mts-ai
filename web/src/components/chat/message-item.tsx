@@ -8,6 +8,7 @@ import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand";
 import { AnswerText, SourcesRow } from "./answer-text";
+import { ThinkingLine } from "./thinking-line";
 
 export function BotAvatar({ className }: { className?: string }) {
   return <BrandMark round className={className} />;
@@ -62,28 +63,6 @@ function Tag({ tone, children }: { tone: "warning" | "danger" | "neutral"; child
   );
 }
 
-function Pending({ message, compact }: { message: Message; compact?: boolean }) {
-  const found = message.retrieval?.hits.filter((h) => h.in_context).length;
-  const searching = message.stage !== "generation";
-  return (
-    <div className="flex min-h-7 items-center gap-2.5 text-[14px] text-muted-foreground" role="status" aria-live="polite">
-      <span className="dot-wave flex items-center gap-1" aria-hidden>
-        <span className="size-1.5 rounded-full bg-brand" />
-        <span className="size-1.5 rounded-full bg-brand" />
-        <span className="size-1.5 rounded-full bg-brand" />
-      </span>
-      {searching ? (
-        <span>{found ? `Нашёл ${found} разделов в базе знаний` : "Ищу в базе знаний"}</span>
-      ) : (
-        <span>
-          {!compact && found ? `${found} разделов из базы · ` : ""}
-          Формулирую ответ
-        </span>
-      )}
-    </div>
-  );
-}
-
 export function MessageItem({
   message,
   kb,
@@ -106,6 +85,8 @@ export function MessageItem({
   const [copied, setCopied] = useState(false);
   // Анимация только у новых сообщений: история при открытии чата появляется сразу.
   const [fresh] = useState(() => Date.now() - message.createdAt < 4000);
+  // Ответ, который мы ждали на глазах у человека, проявляется на месте строки «думает».
+  const [waited] = useState(() => !!message.pending);
 
   if (message.role === "user") {
     return (
@@ -145,7 +126,7 @@ export function MessageItem({
       }}
     >
       {message.pending ? (
-        <Pending message={message} compact={compact} />
+        <ThinkingLine message={message} compact={compact} />
       ) : message.error ? (
         <div className="flex flex-wrap items-center gap-2 text-[14px]">
           <span className="flex items-center gap-1.5 text-destructive">
@@ -163,7 +144,7 @@ export function MessageItem({
           )}
         </div>
       ) : (
-        <>
+        <div className={cn(waited && "answer-in")}>
           <AnswerText
             answer={a}
             text={message.content}
@@ -212,7 +193,7 @@ export function MessageItem({
               </span>
             )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );

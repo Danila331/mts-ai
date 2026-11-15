@@ -4,6 +4,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
+  // Значок dev-сервера справа: слева внизу — строка стенда в сайдбаре, он её перекрывал.
+  devIndicators: { position: "bottom-right" },
 };
 
 export default nextConfig;

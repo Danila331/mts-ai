@@ -82,11 +82,12 @@
   --popover: #ffffff;
   --popover-foreground: #1d2023;
 
-  --brand: #ff0032;
+  /* Мягкий красный: приглушённый кирпично-коралловый вместо кислотного #ff0032 (решение владельца, ноябрь 2026). */
+  --brand: #d9474d;
   --brand-foreground: #ffffff;
-  --brand-soft: #fff0f2;
-  --brand-text: #d9002b;
-  --primary: #e0002c;
+  --brand-soft: #fbeeee;
+  --brand-text: #c23a41;
+  --primary: #cc3d44;
   --primary-foreground: #ffffff;
 
   --secondary: #f2f3f7;
@@ -95,7 +96,7 @@
   --muted-foreground: #626c77;
   --accent: #eceef2;
   --accent-foreground: #1d2023;
-  --destructive: #d9002b;
+  --destructive: #c23a41;
 
   --success: #0b7f45;
   --warning: #a35400;
@@ -106,7 +107,7 @@
   --warning-soft: #fbefdf;
   --info-soft: #e4eefb;
   --destructive-soft: #fde7eb;
-  --mark: #ffd2da;
+  --mark: #f6d4d5;
   --field: #ffffff;
   /* Приглушённые точки, дорожки индикаторов, неактивные сегменты. */
   --dim: #c3c8d0;
@@ -114,25 +115,26 @@
   --tone-success: #0b7f45;
   --tone-warning: #a35400;
   --tone-info: #0063cc;
-  --tone-danger: #d9002b;
+  --tone-danger: #c4373f;
 
   --border: #e4e6eb;
   --input: #d6dae0;
   --ring: #9aa1ab;
 
   --chart-1: #0063cc;
-  --chart-2: #ff0032;
+  --chart-2: #d9474d;
   --chart-3: #6b4fe0;
   --chart-4: #c27000;
   --chart-5: #626c77;
 
-  --sidebar: #f7f8fa;
+  /* Сайдбар нейтральный, как в Claude: серый без синевы, плашка выбора чуть темнее. */
+  --sidebar: #f8f8f7;
   --sidebar-foreground: #1d2023;
   --sidebar-primary: #1d2023;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eaecf0;
+  --sidebar-accent: #ebebea;
   --sidebar-accent-foreground: #1d2023;
-  --sidebar-border: #e4e6eb;
+  --sidebar-border: #e8e8e6;
   --sidebar-ring: #9aa1ab;
 
   --shadow-float: 0 1px 2px rgb(29 32 35 / 0.04), 0 4px 16px rgb(29 32 35 / 0.06);
@@ -263,27 +265,85 @@
   animation: kb-flash 2.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* «Бот думает»: три точки, мягкая волна */
-@keyframes dot-wave {
-  0%,
-  60%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
+/*
+ * «Консультант думает» — как у Claude и ChatGPT: стрелка прибора качается маятником,
+ * по тексту медленно идёт мягкий блик, фразы сменяются по очереди: старая гаснет, затем проявляется новая.
+ */
+@keyframes gauge-swing {
+  from {
+    transform: rotate(-88deg);
   }
-  30% {
-    opacity: 1;
+  to {
+    transform: rotate(14deg);
+  }
+}
+.gauge-needle {
+  transform-box: view-box;
+  transform-origin: 14px 17px;
+  animation: gauge-swing 1.3s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+
+@keyframes shimmer-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+.shimmer-text {
+  color: var(--muted-foreground);
+  background: linear-gradient(
+      90deg,
+      var(--muted-foreground) 0%,
+      var(--muted-foreground) 35%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 65%,
+      var(--muted-foreground) 100%
+    )
+    0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 2.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Без filter: blur — вместе с background-clip: text Chromium рисует вместо букв плашку. */
+@keyframes think-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+@keyframes think-out {
+  to {
+    opacity: 0;
     transform: translateY(-2px);
   }
 }
-.dot-wave > span {
-  animation: dot-wave 1.2s ease-in-out infinite;
+@keyframes think-fade {
+  from {
+    opacity: 0;
+  }
 }
-.dot-wave > span:nth-child(2) {
-  animation-delay: 0.15s;
+.think-in {
+  animation: think-in 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.dot-wave > span:nth-child(3) {
-  animation-delay: 0.3s;
+.think-out {
+  animation: think-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+.think-fade {
+  animation: think-fade 0.6s ease-out both;
+}
+/* Готовый ответ проявляется на месте строки «думает», а не выскакивает. */
+@keyframes answer-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.answer-in {
+  animation: answer-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Появление нового сообщения */
@@ -300,7 +360,16 @@
 @media (prefers-reduced-motion: reduce) {
   .kb-flash,
   .msg-in,
-  .dot-wave > span {
+  .gauge-needle,
+  .think-in,
+  .think-out,
+  .think-fade,
+  .answer-in,
+  .shimmer-text {
     animation: none;
+  }
+  .shimmer-text {
+    background: none;
+    -webkit-text-fill-color: currentColor;
   }
 }
