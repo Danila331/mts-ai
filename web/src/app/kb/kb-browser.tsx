@@ -7,6 +7,7 @@ import { AppShell, PageBar, SidebarLabel } from "@/components/app-shell";
 import { DocView, docNumber } from "@/components/kb/doc-view";
 import { Skeleton } from "@/components/ui/skeleton";
 import { GROUPS, useKb } from "@/hooks/use-kb";
+import { parseHl } from "@/lib/line-match";
 import type { KbDoc } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +21,7 @@ export function KbBrowser() {
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
 
   const chunkId = params.get("chunk") ?? undefined;
+  const hl = parseHl(params.get("hl"));
   const docParam = params.get("doc");
   const entry = chunkId ? kb?.byId.get(chunkId) : undefined;
   const doc = entry?.doc ?? (docParam ? kb?.byDoc.get(docParam) : undefined) ?? kb?.data.docs[0];
@@ -232,6 +234,7 @@ export function KbBrowser() {
               doc={doc}
               kb={kb}
               focusId={chunkId}
+              focusLine={hl}
               onDoc={(d) => go({ doc: d })}
               query={query || undefined}
               scrollRoot={scroller}

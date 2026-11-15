@@ -48,6 +48,7 @@ export const GROUPS: Record<string, string> = {
   "20-products": "Продукты",
 };
 
-export function kbHref(chunkId: string) {
-  return `/kb?chunk=${chunkId}`;
+/** hl — номер строки раздела, на которую опирается ответ (lib/line-match.ts); без текста и ПДн. */
+export function kbHref(chunkId: string, hl?: number) {
+  return hl == null ? `/kb?chunk=${chunkId}` : `/kb?chunk=${chunkId}&hl=${hl}`;
 }
