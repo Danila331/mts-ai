@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,4 +105,13 @@ func TestVerifyProduction(t *testing.T) {
 	cfg.Limits.LeadBurst = 3
 	cfg.Retention.LeadsDays = 0
 	assert.ErrorContains(t, cfg.Verify(), "EB_RETENTION", "бессрочное хранение заявок в бою не проходит")
+
+	cfg.Retention.LeadsDays = 90
+	cfg.HTTP.AdminToken = "short"
+	assert.ErrorContains(t, cfg.Verify(), "EB_ADMIN_TOKEN короче", "короткий токен администратора подбирается")
+	cfg.HTTP.AdminToken = strings.Repeat("a", MinSecretLen)
+	cfg.HTTP.ManagerToken = "short"
+	assert.ErrorContains(t, cfg.Verify(), "EB_MANAGER_TOKEN короче")
+	cfg.HTTP.ManagerToken = ""
+	assert.NoError(t, cfg.Verify(), "пустой токен — закрытый доступ, это допустимо")
 }

@@ -208,6 +208,9 @@ func (c *Config) ShutdownBudget() time.Duration {
 	return c.Core.Timeout + 15*time.Second
 }
 
+// MinSecretLen — минимальная длина токенов администратора и менеджера в бою.
+const MinSecretLen = 32
+
 // Verify отказывается запускать бой без того, без чего он не работает
 // или работает открытым для всех.
 //
@@ -239,6 +242,14 @@ func (c *Config) Verify() error {
 	}
 	if c.HTTP.Token == "" {
 		errs = append(errs, errors.New("EB_API_TOKEN не задан: API, тратящий деньги на модель, открыт всем"))
+	}
+	// Пустые — значит закрыто; заданные, но короткие — подбираются перебором.
+	for _, s := range []struct{ name, value string }{
+		{"EB_ADMIN_TOKEN", c.HTTP.AdminToken}, {"EB_MANAGER_TOKEN", c.HTTP.ManagerToken},
+	} {
+		if s.value != "" && len(s.value) < MinSecretLen {
+			errs = append(errs, fmt.Errorf("%s короче %d знаков", s.name, MinSecretLen))
+		}
 	}
 	r := c.Retention
 	if r.LeadsDays <= 0 || r.AnswersDays <= 0 || r.FeedbackDays <= 0 {
