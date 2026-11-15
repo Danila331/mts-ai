@@ -227,6 +227,7 @@ func newServerWithMetrics(t *testing.T, coreURL string, mutate func(*config.Conf
 		Settings:  cc,
 		Sessions:  store,
 		Passports: store,
+		Board:     store,
 		Metrics:   m,
 	}, zerolog.Nop()), store, m
 }

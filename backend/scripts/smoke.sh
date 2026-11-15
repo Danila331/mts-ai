@@ -43,8 +43,10 @@ echo "$stream" | grep -q '^event: done' || fail "/api/chat: нет событи�
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$auth" -H "Content-Type: application/json" \
   --data '{"name":"Смоук","phone":"+70000000000","messages":[]}' "$api/api/lead")
 [ "$code" = 400 ] || fail "/api/lead без согласия: $code, ожидался 400"
-call POST /api/lead '{"name":"Смоук","phone":"+70000000000","company":"","comment":"","consent":true,"messages":[{"role":"user","content":"Нужен АСКУЭ"}]}' \
-  | grep -q '"summary"' || fail "/api/lead: нет summary"
+created=$(call POST /api/lead '{"name":"Смоук","phone":"+70000000000","company":"","comment":"","consent":true,"messages":[{"role":"user","content":"Нужен АСКУЭ"}]}')
+echo "$created" | grep -q '"summary"' || fail "/api/lead: нет summary"
+lead_code=$(echo "$created" | sed -n 's/.*"id":"\([0-9a-f]*\)".*/\1/p')
+[ -n "$lead_code" ] || fail "/api/lead: нет номера заявки: $created"
 call POST /api/feedback '{"session_id":"s","message_id":"m","rating":1}' \
   | grep -q '"ok":true' || fail "/api/feedback"
 
@@ -62,6 +64,17 @@ if [ -n "${SMOKE_MANAGER_TOKEN:-}" ]; then
   n=$(echo "$history" | grep -o '"role":"user"' | wc -l | tr -d ' ')
   [ "$n" = 2 ] || fail "/api/sessions/$sid: реплик клиента $n, ожидалось 2: $(echo "$history" | head -c 500)"
   echo "$history" | grep -q '"channel":"embed"' || fail "/api/sessions/$sid: канал не embed"
+fi
+
+# Экран менеджера (T5): список заявок и карточка — только с токеном менеджера,
+# и созданная выше заявка в списке есть.
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "$auth" "$api/api/leads")
+[ "$code" = 401 ] || fail "/api/leads без токена менеджера: $code, ожидался 401"
+if [ -n "${SMOKE_MANAGER_TOKEN:-}" ]; then
+  leads=$(curl -sS -H "$auth" -H "X-Manager-Token: $SMOKE_MANAGER_TOKEN" "$api/api/leads?limit=200")
+  echo "$leads" | grep -q "\"code\":\"$lead_code\"" || fail "/api/leads: заявки $lead_code нет в списке: $(echo "$leads" | head -c 500)"
+  curl -sS -H "$auth" -H "X-Manager-Token: $SMOKE_MANAGER_TOKEN" "$api/api/leads/$lead_code" \
+    | grep -q '"status":"new"' || fail "/api/leads/$lead_code: нет карточки со статусом new"
 fi
 
 # Глобальные настройки RAG — только администратору: токена прокси мало.

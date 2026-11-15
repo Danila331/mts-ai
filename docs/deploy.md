@@ -210,12 +210,13 @@ sh backend/scripts/smoke.sh https://<api>.up.railway.app <EB_API_TOKEN>
 | `EB_CORE_TIMEOUT` | `3m` | потолок на один ответ ядра |
 | `EB_API_TOKEN` | — | общий секрет с прокси Next; в бою обязателен |
 | `EB_ADMIN_TOKEN` | — | токен администратора: только с ним `POST /api/settings` меняет настройки RAG для всех; пусто — закрыто для всех |
-| `EB_MANAGER_TOKEN` | — | токен менеджера: разговоры клиентов `GET /api/sessions/:id` (и экран менеджера, T5); пусто — закрыто для всех |
+| `EB_MANAGER_TOKEN` | — | токен менеджера: разговоры клиентов `GET /api/sessions/:id` (и заявки `/api/leads`, T5); пусто — закрыто для всех. Тот же токен задайте службе web (Vercel): `/manager` — демо без входа, токен подставляет сервер Next |
 | `EB_ALLOWED_ORIGINS` | — | CORS, только для вызовов из браузера напрямую |
 | `EB_LIMIT_CHAT_PER_MINUTE` / `_BURST` | 20 / 5 | вопросов с адреса |
 | `EB_LIMIT_LEAD_PER_HOUR` / `_BURST` | 10 / 3 | заявок с адреса |
 | `EB_LIMIT_FEEDBACK_PER_MINUTE` / `_BURST` | 30 / 10 | оценок с адреса |
 | `EB_LIMIT_SETTINGS_PER_MINUTE` / `_BURST` | 10 / 5 | запросов к настройкам и попыток входа администратора с адреса |
+| `EB_LIMIT_MANAGER_PER_MINUTE` / `_BURST` | 120 / 30 | запросов экрана менеджера (`/manager`: опрос списка раз в 10 с, карточки, статусы) с адреса |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | — | модель для резюме заявок; без неё резюме — список вопросов |
 | `EB_SUMMARY_TIMEOUT` | `30s` | тайм-аут одного запроса резюме |
 | `EB_REDIS_URL` / `REDIS_URL` | — | Redis для пределов частоты; без него — память реплики |

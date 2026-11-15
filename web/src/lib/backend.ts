@@ -20,6 +20,18 @@ export const ADMIN_HEADER = "X-Admin-Token";
 const ADMIN_COOKIE = "eb_admin";
 const ADMIN_TTL_SEC = 12 * 60 * 60;
 
+// EB_MANAGER_TOKEN — тот же секрет, что у api: с ним серверные обработчики /api/manager/* читают заявки и разговоры
+// клиентов (T5). Вход на экране менеджера на стенде не нужен — это демо с тестовыми данными, — поэтому токен
+// подставляет сервер Next, а в браузер он не попадает. Пусто — экран менеджера честно просит его задать.
+const MANAGER_TOKEN = process.env.EB_MANAGER_TOKEN ?? "";
+export const MANAGER_HEADER = "X-Manager-Token";
+export const managerEnabled = () => MANAGER_TOKEN.length > 0;
+
+/** Заголовки запроса к Go-API от имени менеджера: токен прокси, адрес посетителя и токен менеджера. */
+export function managerHeaders(request: Request): Record<string, string> {
+  return { ...backendHeaders(request), [MANAGER_HEADER]: MANAGER_TOKEN };
+}
+
 /** Адрес посетителя: API считает по нему пределы частоты. Без него все посетители — один адрес Vercel. */
 export function clientIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();

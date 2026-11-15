@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS leads_status_idx;
+ALTER TABLE leads DROP COLUMN IF EXISTS status_changed_at;
+ALTER TABLE leads DROP CONSTRAINT IF EXISTS leads_status_ck;
+ALTER TABLE leads DROP COLUMN IF EXISTS status;
