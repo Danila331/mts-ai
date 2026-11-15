@@ -65,8 +65,35 @@ export interface Guard {
   [key: string]: unknown;
 }
 
+/** Из чего сложилась уверенность (T12): retrieval — по выдаче поиска до генерации, support — по опоре ответа. */
+export interface ConfidencePart {
+  key: "lexical" | "rerank" | "support" | string;
+  part: "retrieval" | "support";
+  label: string;
+  value: number;
+  detail?: string;
+}
+
+export interface Confidence {
+  /** Итог 0..1: среднее поиска и опоры (только поиск, если опору считать не по чему). */
+  score: number;
+  /** Порог EB_CONFIDENCE_THRESHOLD; сравнивается с retrieval до генерации. */
+  threshold: number;
+  retrieval: number;
+  support: number | null;
+  stage: "bm25" | "rrf" | "rerank" | "none" | string;
+  parts: ConfidencePart[];
+  /** Порог применялся к этому ответу: режим chat и EB_CONFIDENCE_GATE=1. */
+  gate: boolean;
+  /** Поиск ниже порога — вместо ответа уточняющий вопрос. */
+  gated: boolean;
+  explain: string;
+}
+
 export interface AnswerPayload {
   id: string;
+  /** answer — обычный ответ, clarify — уточняющий вопрос ниже порога уверенности (T12). */
+  route?: "answer" | "clarify";
   text: string;
   fallback: boolean;
   error: string;
@@ -83,6 +110,7 @@ export interface AnswerPayload {
   model: string;
   /** Настройки песочницы, с которыми построен этот ответ; пусто — общие настройки стенда. */
   overrides?: Record<string, SettingValue>;
+  confidence?: Confidence;
 }
 
 export interface LlmCall {
@@ -104,6 +132,8 @@ export interface Health {
   docs: number;
   kb_fingerprint: string;
   mode: ChatMode;
+  confidence_gate?: boolean;
+  confidence_threshold?: number;
 }
 
 export interface KbChunk {
