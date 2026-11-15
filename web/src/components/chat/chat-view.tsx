@@ -1,18 +1,21 @@
 "use client";
 
-import { CheckCircle2, ChevronRight, Headset } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { CheckCircle2, ChevronRight, FileText, Headset } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ChatController } from "@/hooks/use-chat";
 import type { KbIndex } from "@/hooks/use-kb";
 import { sendFeedback } from "@/lib/api";
+import { canSummarize } from "@/lib/consultation-summary";
 import { cn } from "@/lib/utils";
 import { Composer } from "./composer";
+import { SummaryPanel } from "./consultation-summary";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
 import { InlineLead } from "./inline-lead";
 import { PassportCard } from "./passport-card";
 import { type Starter, Starters } from "./starters";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const GREETING =
   "Подберу решение по базе знаний МТС EnergyTool: учёт электроэнергии, поиск потерь, солнечная генерация, оптовый рынок и тарифы. Опишите задачу своими словами.";
@@ -68,6 +71,38 @@ function LeadButton({ done, onClick, compact }: { done?: string; onClick: () => 
   );
 }
 
+/** «Итоги консультации» (T10): на стенде — пилюля рядом с заявкой, в виджете — квадрат справа от строки заявки. */
+function SummaryButton({ onClick, compact }: { onClick: () => void; compact?: boolean }) {
+  if (compact) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={onClick}
+              aria-label="Итоги консультации (PDF)"
+              className="flex w-[54px] shrink-0 items-center justify-center rounded-[18px] border bg-surface text-muted-foreground transition-colors hover:border-input hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            />
+          }
+        >
+          <FileText className="size-[18px]" />
+        </TooltipTrigger>
+        <TooltipContent>Итоги консультации (PDF)</TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-8 items-center gap-1.5 rounded-full border bg-background px-3.5 text-[13px] font-medium shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-colors hover:bg-muted dark:bg-card"
+    >
+      <FileText className="size-3.5 text-muted-foreground" /> Итоги консультации
+    </button>
+  );
+}
+
 export function ChatView({
   chat,
   kb,
@@ -81,6 +116,7 @@ export function ChatView({
   starters,
   prefill,
   disabled,
+  summary,
 }: {
   chat: ChatController;
   kb: KbIndex | null;
@@ -96,8 +132,11 @@ export function ChatView({
   starters?: Starter[];
   prefill?: { text: string; nonce: number };
   disabled?: boolean;
+  /** Кнопка «Итоги консультации» после первого ответа — для клиента на стенде и в виджете (не в копилоте). */
+  summary?: boolean;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
+  const [summaryFor, setSummaryFor] = useState<string | null>(null);
   const messages = chat.active?.messages ?? [];
   const last = messages[messages.length - 1];
 
@@ -131,6 +170,9 @@ export function ChatView({
   const hasPassport = !!passport?.fields.some((f) => f.value);
   const showInlineLead = !!session && !!passport?.ready_for_lead && !session.lead && !chat.busy;
   const leadDone = (lead: { id: string; summary: string }) => chat.setLead(lead);
+  const showSummary = !!summary && canSummarize(session);
+  // Итоги открыты для конкретного диалога: переключился на другой — экран итогов закрывается сам.
+  const summaryOpen = showSummary && !!session && summaryFor === session.id;
   const composer = (
     <Composer
       onSend={send}
@@ -168,7 +210,7 @@ export function ChatView({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div
           className={cn(
@@ -219,9 +261,14 @@ export function ChatView({
         </div>
       </div>
       <div className={cn("shrink-0", compact ? "px-3 pt-1 pb-2" : "mx-auto w-full max-w-[720px] px-4 pb-3 sm:px-6")}>
-        {onLead && hasAnswers && (
-          <div className={cn("flex justify-center", compact ? "mb-2" : "mb-2.5")}>
-            <LeadButton done={chat.active?.lead?.id} onClick={onLead} compact={compact} />
+        {((onLead && hasAnswers) || showSummary) && (
+          <div className={cn("flex gap-2", compact ? "mb-2 items-stretch" : "mb-2.5 flex-wrap justify-center")}>
+            {onLead && hasAnswers && (
+              <div className={cn(compact && "min-w-0 flex-1")}>
+                <LeadButton done={chat.active?.lead?.id} onClick={onLead} compact={compact} />
+              </div>
+            )}
+            {showSummary && session && <SummaryButton onClick={() => setSummaryFor(session.id)} compact={compact} />}
           </div>
         )}
         {composer}
@@ -231,6 +278,9 @@ export function ChatView({
           </p>
         )}
       </div>
+      {summaryOpen && session && (
+        <SummaryPanel session={session} kb={kb} compact={compact} onClose={() => setSummaryFor(null)} />
+      )}
     </div>
   );
 }

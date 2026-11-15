@@ -189,6 +189,7 @@ export function EmbedChat() {
               starters={topic?.starters}
               onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
               onLead={() => setLeadOpen(true)}
+              summary
             />
           </div>
         )}
