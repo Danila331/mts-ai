@@ -131,7 +131,16 @@ export function BusinessView() {
               Минимум и максимум можно не заполнять: тогда берётся база. Доли вводятся в процентах.
             </p>
             <div className="overflow-x-auto rounded-xl ring-1 ring-border">
-              <table className="w-full min-w-[760px] border-collapse text-left text-[13px]">
+              {/* Без принудительной ширины 760 px: на экране с сайдбаром и отладкой колонка источников обрезалась (QA).
+                  Ширины колонок заданы, источник переносится по словам, поля ввода сжимаются. */}
+              <table className="w-full min-w-[620px] table-fixed border-collapse text-left text-[13px]">
+                <colgroup>
+                  <col className="w-[26%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[35%]" />
+                </colgroup>
                 <thead className="bg-surface text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 font-medium">Параметр</th>
@@ -164,7 +173,7 @@ export function BusinessView() {
                               onChange={(e) => {
                                 set(p.key, f, e.target.value);
                               }}
-                              className="h-8 w-24 rounded-md border border-input bg-field px-2 text-[13px]"
+                              className="h-8 w-full min-w-0 rounded-md border border-input bg-field px-2 text-[13px]"
                             />
                           </td>
                         ))}
