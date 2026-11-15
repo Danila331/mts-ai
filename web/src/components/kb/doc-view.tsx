@@ -12,10 +12,10 @@ export function Tag({ tone, children }: { tone: "neutral" | "warning" | "info"; 
   return (
     <span
       className={cn(
-        "inline-flex h-5 shrink-0 items-center rounded-md px-1.5 text-[11px] font-medium",
+        "inline-flex h-[18px] shrink-0 items-center rounded-[4px] px-1.5 text-[11px] font-medium",
         tone === "neutral" && "bg-muted text-muted-foreground",
-        tone === "warning" && "bg-tone-warning text-white",
-        tone === "info" && "bg-tone-info text-white",
+        tone === "warning" && "bg-warning-soft text-warning",
+        tone === "info" && "bg-info-soft text-info",
       )}
     >
       {children}
@@ -55,6 +55,8 @@ export function DocView({
   query,
   scrollRoot,
   toc,
+  onSection,
+  focusKey,
 }: {
   doc: KbDoc;
   kb: KbIndex | null;
@@ -64,13 +66,23 @@ export function DocView({
   query?: string;
   scrollRoot?: HTMLElement | null;
   toc?: boolean;
+  /** Переход к разделу из оглавления — страница базы кладёт его в адрес (?chunk=), чтобы раздел подсветился. */
+  onSection?: (id: string) => void;
+  /** Меняется при каждом переходе к разделу — повторный переход к тому же разделу снова его подсвечивает. */
+  focusKey?: number;
 }) {
   const refs = useRef(new Map<string, HTMLElement>());
   const [copied, setCopied] = useState("");
   const [current, setCurrent] = useState<string>("");
+  // Раздел, выбранный кликом или ссылкой, держит подсветку в оглавлении, пока человек сам не прокрутит страницу:
+  // последние разделы не доезжают до верха экрана, и по одной прокрутке их не отличить.
+  const pinned = useRef<string>("");
 
   useEffect(() => {
     if (!focusId) return;
+    pinned.current = focusId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- оглавление сразу показывает выбранный раздел
+    setCurrent(focusId);
     const el = refs.current.get(focusId);
     if (!el) return;
     const t = setTimeout(() => {
@@ -80,12 +92,16 @@ export function DocView({
       el.classList.add("kb-flash");
     }, 60);
     return () => clearTimeout(t);
-  }, [focusId, doc.doc, scrollRoot]);
+  }, [focusId, focusKey, doc.doc, scrollRoot]);
 
   // Оглавление: подсвечиваем раздел, который сейчас вверху экрана.
   useEffect(() => {
     if (!toc || !scrollRoot) return;
     const onScroll = () => {
+      if (pinned.current) {
+        setCurrent(pinned.current);
+        return;
+      }
       const top = scrollRoot.getBoundingClientRect().top + 120;
       let id = doc.chunks[0]?.id ?? "";
       for (const c of doc.chunks) {
@@ -94,10 +110,31 @@ export function DocView({
       }
       setCurrent(id);
     };
+    const release = () => {
+      pinned.current = "";
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(e.key)) release();
+    };
     onScroll();
     scrollRoot.addEventListener("scroll", onScroll, { passive: true });
-    return () => scrollRoot.removeEventListener("scroll", onScroll);
+    scrollRoot.addEventListener("wheel", release, { passive: true });
+    scrollRoot.addEventListener("touchmove", release, { passive: true });
+    window.addEventListener("keydown", onKey);
+    return () => {
+      scrollRoot.removeEventListener("scroll", onScroll);
+      scrollRoot.removeEventListener("wheel", release);
+      scrollRoot.removeEventListener("touchmove", release);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [toc, scrollRoot, doc]);
+
+  const jump = (id: string) => {
+    if (onSection) return onSection(id);
+    pinned.current = id;
+    setCurrent(id);
+    refs.current.get(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
 
   const copyLink = (id: string) => {
     const url = `${window.location.origin}/kb?chunk=${id}`;
@@ -121,22 +158,17 @@ export function DocView({
   return (
     <div className={cn("mx-auto flex gap-14", showToc ? "max-w-[1000px]" : "max-w-[720px]")}>
       <article className="min-w-0 max-w-[720px] flex-1">
-        <header className="mb-8">
-          <div className="flex items-start gap-4 sm:gap-6">
-            <span
-              aria-label={`Документ ${num}`}
-              className="tnum shrink-0 font-mono text-[44px] leading-[0.95] font-medium tracking-[-0.06em] text-brand-text select-none sm:text-[56px]"
-            >
+        <header className="mb-6 border-b pb-5">
+          <h1 className="text-[24px] leading-[1.2] font-semibold tracking-[-0.022em] text-balance">
+            {doc.title}
+          </h1>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-muted-foreground">
+            <span className="tnum font-mono text-[12px] text-foreground/80" aria-label={`Документ ${num}`}>
               {num}
             </span>
-            <h1 className="min-w-0 pt-0.5 text-[28px] leading-[1.12] font-semibold tracking-[-0.025em] text-balance sm:pt-1 sm:text-[32px]">
-              {doc.title}
-            </h1>
-          </div>
-          <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-y py-3 text-[13px] text-muted-foreground">
             <span className="flex items-center gap-1.5">
               <FolderOpen className="size-3.5" />
-              <span className="text-foreground/85">{GROUPS[doc.group] ?? doc.group}</span>
+              <span>{GROUPS[doc.group] ?? doc.group}</span>
               {position && (
                 <span className="tnum">
                   · {position.index} из {position.total}
@@ -179,20 +211,20 @@ export function DocView({
                   if (el) refs.current.set(c.id, el);
                 }}
                 className={cn(
-                  "group/sec relative -mx-5 scroll-mt-6 rounded-2xl px-5 py-5 transition-colors",
-                  focused && "bg-surface ring-1 ring-primary",
+                  "group/sec relative -mx-5 scroll-mt-6 rounded-xl px-5 py-4 transition-colors",
+                  focused && "bg-surface ring-1 ring-foreground/15",
                 )}
               >
                 {!isIntro && (
                   <div className="mb-3 flex items-start gap-3">
-                    <h2 className="relative min-w-0 flex-1 text-[18px] leading-snug font-semibold tracking-[-0.01em]">
+                    <h2 className="relative min-w-0 flex-1 text-[15px] leading-snug font-semibold tracking-[-0.01em]">
                       <button
                         type="button"
                         onClick={() => copyLink(c.id)}
                         className={cn(
-                          "tnum font-mono text-[12px] font-medium text-muted-foreground transition-colors hover:text-brand-text",
+                          "tnum font-mono text-[11px] font-normal text-muted-foreground transition-colors hover:text-foreground",
                           toc
-                            ? "absolute top-[3px] -left-[4.25rem] hidden w-12 justify-end xl:flex"
+                            ? "absolute top-[3px] -left-[5.5rem] hidden w-12 justify-end xl:flex"
                             : "mr-2.5 inline-flex -translate-y-px align-middle",
                         )}
                         aria-label={`Скопировать ссылку на раздел ${sectionNo.get(c.id)}`}
@@ -201,7 +233,7 @@ export function DocView({
                         {copied === c.id ? <Check className="size-3.5 text-success" /> : sectionNo.get(c.id)}
                       </button>
                       {toc && (
-                        <span className="tnum mr-2.5 inline-flex -translate-y-px align-middle font-mono text-[12px] font-medium text-muted-foreground xl:hidden">
+                        <span className="tnum mr-2.5 inline-flex -translate-y-px align-middle font-mono text-[11px] font-normal text-muted-foreground xl:hidden">
                           {sectionNo.get(c.id)}
                         </span>
                       )}
@@ -232,7 +264,7 @@ export function DocView({
                   highlight={query}
                   className={cn(
                     "text-pretty",
-                    isIntro ? "text-[16px] leading-[1.7] text-foreground" : "text-[15px] leading-[1.7] text-foreground/90",
+                    isIntro ? "text-[15px] leading-[1.7] text-foreground" : "text-[15px] leading-[1.7] text-foreground/90",
                   )}
                 />
               </section>
@@ -243,7 +275,7 @@ export function DocView({
 
       {showToc && (
         <nav aria-label="Оглавление документа" className="sticky top-2 hidden w-[200px] shrink-0 self-start pt-1 xl:block">
-          <div className="mb-3 text-[13px] font-medium">На странице</div>
+          <div className="mb-2 text-[12px] font-medium text-muted-foreground">На странице</div>
           <ol className="space-y-px border-l">
             {sections.map((c) => {
               const active = current === c.id || (!current && focusId === c.id);
@@ -251,11 +283,11 @@ export function DocView({
                 <li key={c.id}>
                   <button
                     type="button"
-                    onClick={() => refs.current.get(c.id)?.scrollIntoView({ block: "start", behavior: "smooth" })}
+                    onClick={() => jump(c.id)}
                     className={cn(
-                      "-ml-px flex w-full gap-2 border-l py-1 pr-1 pl-3 text-left text-[12.5px] leading-snug transition-colors",
+                      "-ml-px flex w-full gap-2 border-l py-1 pr-1 pl-3 text-left text-[12px] leading-snug transition-colors",
                       active
-                        ? "border-brand font-medium text-foreground"
+                        ? "border-foreground text-foreground"
                         : "border-transparent text-muted-foreground hover:text-foreground",
                     )}
                   >

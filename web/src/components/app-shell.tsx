@@ -2,28 +2,51 @@
 
 import {
   BookOpen,
-  ChevronDown,
+  Check,
+  ChevronsUpDown,
   Code2,
+  FileText,
   Menu,
   MessageSquare,
+  Monitor,
+  Moon,
   PanelLeft,
-  Plus,
   RefreshCw,
   Search,
   SlidersHorizontal,
-  X,
+  SquarePen,
+  Sun,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useTheme } from "next-themes";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLockup } from "@/components/brand";
+import { Shortcut } from "@/components/shortcut";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandShortcut,
+} from "@/components/ui/command";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useKb } from "@/hooks/use-kb";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { getHealth } from "@/lib/api";
-import type { Health } from "@/lib/types";
+import type { Health, Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -33,68 +56,138 @@ const NAV = [
   { href: "/settings", label: "Настройки RAG", icon: SlidersHorizontal },
 ];
 
-/** Пункт сайдбара как в Claude: 36px, тонкая иконка в цвет текста, нейтральная плашка при наведении и у текущего. */
-const ITEM =
-  "flex h-9 w-full items-center gap-3 rounded-lg px-2.5 text-[14px] text-sidebar-foreground outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50";
+const SESSIONS_KEY = "eb.playground.sessions.v1";
+const COLLAPSE_KEY = "eb.sidebar.collapsed";
+
+/** Пункт сайдбара: 32px, иконка 16px в тон текста, нейтральная плашка при наведении и у текущего. */
+export const SIDEBAR_ITEM =
+  "group/item flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-[13px] text-sidebar-foreground/90 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring/50 aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium aria-[current=page]:text-sidebar-foreground";
+const ICON = "size-4 shrink-0 text-muted-foreground group-hover/item:text-sidebar-foreground";
 
 interface ShellState {
   desktop: boolean;
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
+  openPalette: () => void;
 }
 
-const ShellContext = createContext<ShellState>({ desktop: true, sidebarOpen: true, setSidebarOpen: () => {} });
+const ShellContext = createContext<ShellState>({
+  desktop: true,
+  sidebarOpen: true,
+  setSidebarOpen: () => {},
+  openPalette: () => {},
+});
 export const useShell = () => useContext(ShellContext);
 
-const COLLAPSE_KEY = "eb.sidebar.collapsed";
+// ---------- Палитра команд ⌘K ----------
 
-/** Поиск по диалогам: в покое выглядит как обычный пункт «Поиск», по клику — поле ввода. */
-export interface SidebarSearch {
-  value: string;
-  onChange: (value: string) => void;
+function readSessions(): Session[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(SESSIONS_KEY) || "[]") as Session[];
+    return list.filter((s) => s.messages.length > 0).sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch {
+    return [];
+  }
 }
 
-function SearchItem({ search }: { search: SidebarSearch }) {
-  const input = useRef<HTMLInputElement>(null);
+const THEMES = [
+  { value: "light", label: "Светлая тема", icon: Sun },
+  { value: "dark", label: "Тёмная тема", icon: Moon },
+  { value: "system", label: "Тема как в системе", icon: Monitor },
+] as const;
+
+function PaletteBody({
+  close,
+  onNew,
+  onSelectSession,
+}: {
+  close: () => void;
+  onNew?: () => void;
+  onSelectSession?: (id: string) => void;
+}) {
+  const router = useRouter();
+  const { setTheme } = useTheme();
+  const [sessions] = useState(readSessions);
+  const { kb } = useKb();
+  const run = (fn: () => void) => {
+    close();
+    fn();
+  };
+
   return (
-    <label className={cn(ITEM, "cursor-text focus-within:bg-sidebar-accent")}>
-      <Search className="size-[18px] shrink-0 text-sidebar-foreground/80" strokeWidth={1.75} />
-      <input
-        ref={input}
-        value={search.value}
-        onChange={(e) => search.onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            search.onChange("");
-            input.current?.blur();
-          }
-        }}
-        placeholder="Поиск"
-        aria-label="Поиск по диалогам"
-        className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-sidebar-foreground focus:placeholder:text-muted-foreground"
-      />
-      {search.value && (
-        <button
-          type="button"
-          onClick={() => search.onChange("")}
-          aria-label="Очистить поиск"
-          className="-mr-1 flex size-6 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button>
-      )}
-    </label>
+    <>
+      <CommandInput placeholder="Найти диалог, документ или команду…" />
+      <CommandList className="max-h-[min(60vh,420px)]">
+        <CommandEmpty>Ничего не нашлось</CommandEmpty>
+        <CommandGroup heading="Действия">
+          <CommandItem value="новый диалог" onSelect={() => run(() => (onNew ? onNew() : router.push("/playground?new=1")))}>
+            <SquarePen /> Новый диалог
+            <CommandShortcut>
+              <Shortcut keys={["mod", "shift", "O"]} />
+            </CommandShortcut>
+          </CommandItem>
+          {THEMES.map(({ value, label, icon: Icon }) => (
+            <CommandItem key={value} value={label} onSelect={() => run(() => setTheme(value))}>
+              <Icon /> {label}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+        <CommandGroup heading="Разделы">
+          {NAV.map(({ href, label, icon: Icon }) => (
+            <CommandItem key={href} value={label} onSelect={() => run(() => router.push(href))}>
+              <Icon /> {label}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+        {sessions.length > 0 && (
+          <CommandGroup heading="Диалоги">
+            {sessions.slice(0, 30).map((s) => (
+              <CommandItem
+                key={s.id}
+                value={`${s.title} ${s.id}`}
+                keywords={s.messages.slice(0, 4).map((m) => m.content.slice(0, 80))}
+                onSelect={() =>
+                  run(() => (onSelectSession ? onSelectSession(s.id) : router.push(`/playground?s=${s.id}`)))
+                }
+              >
+                <MessageSquare /> <span className="min-w-0 flex-1 truncate">{s.title}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+        {kb && (
+          <CommandGroup heading="База знаний">
+            {kb.data.docs.map((d) => (
+              <CommandItem
+                key={d.doc}
+                value={`${d.title} ${d.doc}`}
+                onSelect={() => run(() => router.push(`/kb?doc=${encodeURIComponent(d.doc)}`))}
+              >
+                <FileText /> <span className="min-w-0 flex-1 truncate">{d.title}</span>
+                {/* data-slot прячет пустую галочку пункта, и имя файла встаёт ровно к правому краю */}
+                <span data-slot="command-shortcut" className="ml-auto shrink-0 pl-3 text-right font-mono text-[11px] text-muted-foreground">
+                  {d.doc.split("/").pop()?.replace(/\.md$/, "")}
+                </span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+      </CommandList>
+    </>
   );
 }
 
+// ---------- Статус стенда ----------
+
 /**
- * Нижняя строка сайдбара — на месте аккаунта в Claude: знак, название стенда и модель со статусом.
- * По клику — сводка о подключённом API.
+ * Нижняя строка сайдбара — на месте аккаунта в Claude: модель и состояние API.
+ * По клику — сводка о модели, поиске и базе и выбор темы.
  */
 function StandStatus() {
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState("");
   const alive = useRef(true);
+  const { theme, setTheme } = useTheme();
 
   const load = useCallback(() => {
     getHealth()
@@ -118,7 +211,18 @@ function StandStatus() {
 
   const ok = health && !error;
   const tone = ok ? (health.llm ? "bg-success" : "bg-warning") : error ? "bg-destructive" : "bg-dim";
-  const label = ok ? (health.llm ? health.model.split("/").pop() : "без модели") : error ? "API недоступен" : "проверяю API…";
+  const model = ok ? (health.llm ? health.model.split("/").pop() : "без модели") : error ? "API недоступен" : "проверяю API…";
+  const rows = ok
+    ? [
+        { label: "Модель", value: health.llm ? health.model : "не настроена", mono: true },
+        {
+          label: "Поиск",
+          value: ["BM25", health.dense && "эмбеддинги", health.reranker && "реранкер"].filter(Boolean).join(" + "),
+        },
+        { label: "Схема", value: health.arch, mono: true },
+        { label: "База", value: `${health.docs} док. · ${health.chunks} разд.` },
+      ]
+    : [];
 
   return (
     <DropdownMenu>
@@ -126,85 +230,77 @@ function StandStatus() {
         render={
           <button
             type="button"
-            className="flex h-12 w-full items-center gap-2.5 rounded-lg px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-sidebar-accent"
-            aria-label="Состояние стенда"
+            className="flex h-10 w-full items-center gap-2.5 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-sidebar-accent"
+            aria-label={`Состояние стенда: ${model}`}
           />
         }
       >
-        {/* как аватар аккаунта в Claude: нейтральный кружок с буквой, статус API — точкой на углу */}
-        <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background">
-          E
-          <span
-            className={cn("absolute -right-0.5 -bottom-0.5 size-3 rounded-full border-2 border-sidebar", tone)}
-            aria-hidden
-          />
+        <span className={cn("size-2 shrink-0 rounded-full", tone)} aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] leading-tight font-medium">Стенд EnergyTool</span>
+          <span className="mt-0.5 block truncate font-mono text-[11px] leading-tight text-muted-foreground">{model}</span>
         </span>
-        <span className="flex min-w-0 items-baseline gap-1.5 text-[14px]">
-          <span className="shrink-0 font-medium">Стенд</span>
-          <span className="truncate text-muted-foreground">· {label}</span>
-        </span>
-        <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+        <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" sideOffset={6}>
-        <dl className="space-y-2 px-2 pt-1.5 pb-2 text-[13px]">
-          {ok ? (
-            <>
-              <div>
-                <dt className="text-xs text-muted-foreground">Модель</dt>
-                <dd className="font-mono text-[12px] break-all">{health.llm ? health.model : "не настроена — ответ выдержкой из базы"}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Поиск</dt>
-                <dd>
-                  BM25{health.dense ? " + эмбеддинги" : ""}
-                  {health.reranker ? " + реранкер" : ""} · схема {health.arch}
+      <DropdownMenuContent side="top" align="start" sideOffset={6} className="w-[248px]">
+        {ok ? (
+          <dl className="px-2 pt-1.5 pb-2 text-[12px]">
+            {rows.map((r) => (
+              <div key={r.label} className="flex items-baseline justify-between gap-3 py-[3px]">
+                <dt className="shrink-0 text-muted-foreground">{r.label}</dt>
+                <dd className={cn("min-w-0 truncate text-right", r.mono && "font-mono text-[11px]")} title={r.value}>
+                  {r.value}
                 </dd>
               </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">База знаний</dt>
-                <dd className="tnum">
-                  {health.docs} документов, {health.chunks} разделов
-                </dd>
-              </div>
-            </>
-          ) : (
-            <div className="text-muted-foreground">{error ? `${error}. Запустите: docker compose up` : "Проверяю API…"}</div>
-          )}
-        </dl>
+            ))}
+          </dl>
+        ) : (
+          <p className="px-2 py-2 text-[12px] text-muted-foreground">
+            {error ? `${error}. Запустите: docker compose up` : "Проверяю API…"}
+          </p>
+        )}
         <DropdownMenuItem onClick={load} closeOnClick={false}>
           <RefreshCw /> Проверить ещё раз
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {THEMES.map(({ value, label, icon: Icon }) => (
+          <DropdownMenuItem key={value} onClick={() => setTheme(value)} closeOnClick={false}>
+            <Icon /> {label}
+            {theme === value && <Check className="ml-auto" />}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
+// ---------- Сайдбар ----------
+
 function SidebarBody({
   onNew,
-  search,
   children,
   onNavigate,
 }: {
   onNew?: () => void;
-  search?: SidebarSearch;
   children?: React.ReactNode;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
-  const { desktop, setSidebarOpen } = useShell();
-  const newLabel = (
+  const { desktop, setSidebarOpen, openPalette } = useShell();
+  const newChat = (
     <>
-      <Plus className="size-[18px] shrink-0 text-sidebar-foreground/80" strokeWidth={1.75} />
-      Новый диалог
+      <SquarePen className={ICON} />
+      <span className="flex-1 text-left">Новый диалог</span>
+      <Shortcut keys={["mod", "shift", "O"]} />
     </>
   );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2.5 pr-2 pl-3.5">
+      <div className="flex h-12 shrink-0 items-center gap-2 pr-2 pl-3">
         <Link
           href="/playground"
-          className="min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={onNavigate}
         >
           <BrandLockup />
@@ -216,7 +312,7 @@ function SidebarBody({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className="ml-auto text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  className="ml-auto size-7 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
                   onClick={() => setSidebarOpen(false)}
                   aria-label="Скрыть боковую панель"
                 />
@@ -224,44 +320,58 @@ function SidebarBody({
             >
               <PanelLeft />
             </TooltipTrigger>
-            <TooltipContent>Скрыть боковую панель</TooltipContent>
+            <TooltipContent>
+              Скрыть панель <Shortcut keys={["mod", "B"]} className="ml-1" />
+            </TooltipContent>
           </Tooltip>
         )}
       </div>
 
-      <nav className="shrink-0 space-y-px px-2" aria-label="Разделы стенда">
+      <div className="shrink-0 space-y-px px-2 pt-1">
         {onNew ? (
           <button
             type="button"
-            className={ITEM}
+            className={SIDEBAR_ITEM}
             onClick={() => {
               onNew();
               onNavigate?.();
             }}
           >
-            {newLabel}
+            {newChat}
           </button>
         ) : (
-          <Link href="/playground?new=1" className={ITEM} onClick={onNavigate}>
-            {newLabel}
+          <Link href="/playground?new=1" className={SIDEBAR_ITEM} onClick={onNavigate}>
+            {newChat}
           </Link>
         )}
-        {search && <SearchItem search={search} />}
-        {NAV.map(({ href, label, icon: Icon }) => {
-          const active = pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              onClick={onNavigate}
-              aria-current={active ? "page" : undefined}
-              className={cn(ITEM, active && "bg-sidebar-accent")}
-            >
-              <Icon className="size-[18px] shrink-0 text-sidebar-foreground/80" strokeWidth={1.75} />
-              {label}
-            </Link>
-          );
-        })}
+        <button
+          type="button"
+          className={SIDEBAR_ITEM}
+          onClick={() => {
+            onNavigate?.();
+            openPalette();
+          }}
+        >
+          <Search className={ICON} />
+          <span className="flex-1 text-left">Поиск</span>
+          <Shortcut keys={["mod", "K"]} />
+        </button>
+      </div>
+
+      <nav className="mt-4 shrink-0 space-y-px px-2" aria-label="Разделы стенда">
+        <SidebarLabel>Стенд</SidebarLabel>
+        {NAV.map(({ href, label, icon: Icon }) => (
+          <Link
+            key={href}
+            href={href}
+            onClick={onNavigate}
+            aria-current={pathname.startsWith(href) ? "page" : undefined}
+            className={SIDEBAR_ITEM}
+          >
+            <Icon className={ICON} />
+            {label}
+          </Link>
+        ))}
       </nav>
 
       <div className="mt-4 flex min-h-0 flex-1 flex-col">{children}</div>
@@ -274,29 +384,30 @@ function SidebarBody({
 }
 
 /**
- * Каркас как в Claude / ChatGPT: слева одна панель (новый диалог, поиск, разделы, недавние, статус стенда),
- * справа рабочая область.
- * На широких экранах панель можно свернуть, на узких она выезжает поверх.
+ * Каркас как в Claude: слева одна панель (новый диалог, поиск ⌘K, разделы, недавние, статус стенда),
+ * справа рабочая область. На широких экранах панель сворачивается (⌘B), на узких выезжает поверх.
  */
 export function AppShell({
   sidebar,
   onNew,
-  search,
+  onSelectSession,
   children,
   wide,
 }: {
   sidebar?: React.ReactNode;
   onNew?: () => void;
-  /** Пункт «Поиск» в навигации — только там, где есть что искать (диалоги). */
-  search?: SidebarSearch;
+  /** Выбор диалога из палитры ⌘K; без него палитра ведёт на /playground?s=<id>. */
+  onSelectSession?: (id: string) => void;
   children: React.ReactNode;
   /** Широкая панель — для дерева базы знаний с длинными названиями. */
   wide?: boolean;
 }) {
-  const width = wide ? 300 : 264;
+  const width = wide ? 288 : 256;
   const desktop = useMediaQuery("(min-width: 1024px)", true);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [palette, setPalette] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- настройка хранится в браузере
@@ -304,13 +415,40 @@ export function AppShell({
   }, []);
 
   const sidebarOpen = desktop ? !collapsed : mobileOpen;
-  const setSidebarOpen = (open: boolean) => {
-    if (desktop) {
-      setCollapsed(!open);
-      localStorage.setItem(COLLAPSE_KEY, open ? "0" : "1");
-    } else setMobileOpen(open);
-  };
-  const state = { desktop, sidebarOpen, setSidebarOpen };
+  const setSidebarOpen = useCallback(
+    (open: boolean) => {
+      if (desktop) {
+        setCollapsed(!open);
+        localStorage.setItem(COLLAPSE_KEY, open ? "0" : "1");
+      } else setMobileOpen(open);
+    },
+    [desktop],
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "k" && !e.shiftKey) {
+        e.preventDefault();
+        setPalette((v) => !v);
+      } else if (key === "b" && !e.shiftKey) {
+        e.preventDefault();
+        setSidebarOpen(!sidebarOpen);
+      } else if (key === "o" && e.shiftKey) {
+        e.preventDefault();
+        if (onNew) onNew();
+        else router.push("/playground?new=1");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onNew, router, setSidebarOpen, sidebarOpen]);
+
+  const state = useMemo(
+    () => ({ desktop, sidebarOpen, setSidebarOpen, openPalette: () => setPalette(true) }),
+    [desktop, sidebarOpen, setSidebarOpen],
+  );
 
   return (
     <ShellContext.Provider value={state}>
@@ -318,15 +456,15 @@ export function AppShell({
         {desktop ? (
           <aside
             className={cn(
-              "h-full shrink-0 overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-out",
+              // max-lg:hidden — до гидрации сервер рисует десктопную раскладку; на телефоне панель не мелькает.
+              "h-full shrink-0 overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] max-lg:hidden",
               !sidebarOpen && "border-r-0",
             )}
             style={{ width: sidebarOpen ? width : 0 }}
+            inert={!sidebarOpen}
           >
             <div className="h-full" style={{ width }}>
-              <SidebarBody onNew={onNew} search={search}>
-                {sidebar}
-              </SidebarBody>
+              <SidebarBody onNew={onNew}>{sidebar}</SidebarBody>
             </div>
           </aside>
         ) : (
@@ -337,7 +475,7 @@ export function AppShell({
               className="w-[288px] max-w-[85vw] gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground data-[side=left]:w-[288px]"
             >
               <SheetTitle className="sr-only">Навигация</SheetTitle>
-              <SidebarBody onNew={onNew} search={search} onNavigate={() => setMobileOpen(false)}>
+              <SidebarBody onNew={onNew} onNavigate={() => setMobileOpen(false)}>
                 {sidebar}
               </SidebarBody>
             </SheetContent>
@@ -345,36 +483,48 @@ export function AppShell({
         )}
         <main className="relative flex min-w-0 flex-1 flex-col bg-background">{children}</main>
       </div>
+      <CommandDialog
+        open={palette}
+        onOpenChange={setPalette}
+        title="Поиск и команды"
+        description="Диалоги, документы базы знаний, разделы стенда и действия"
+        className="top-[16vh] sm:max-w-[580px]"
+      >
+        {palette && (
+          <Command className="rounded-none! bg-transparent p-1">
+            <PaletteBody close={() => setPalette(false)} onNew={onNew} onSelectSession={onSelectSession} />
+          </Command>
+        )}
+      </CommandDialog>
     </ShellContext.Provider>
   );
 }
 
-/** Верхняя строка рабочей области: кнопка панели (если она скрыта), заголовок, действия справа. */
+/** Верхняя строка рабочей области, 48px: кнопка панели (если скрыта), заголовок, действия справа. */
 export function PageBar({
   title,
   subtitle,
-  icon: Icon,
   children,
   className,
 }: {
   title?: React.ReactNode;
   /** Короткое пояснение рядом с заголовком, приглушённое. */
   subtitle?: React.ReactNode;
-  /** Иконка раздела в плашке слева от заголовка. */
+  /** Устарело: иконка раздела больше не рисуется (оставлено для совместимости). */
   icon?: React.ElementType;
   children?: React.ReactNode;
   className?: string;
 }) {
   const { sidebarOpen, setSidebarOpen, desktop } = useShell();
   return (
-    <div className={cn("flex h-14 shrink-0 items-center gap-2 px-3 sm:px-4", className)}>
+    <div className={cn("flex h-12 shrink-0 items-center gap-2 px-3", className)}>
       {!sidebarOpen && (
         <Tooltip>
           <TooltipTrigger
             render={
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 className="text-muted-foreground"
                 onClick={() => setSidebarOpen(true)}
                 aria-label="Показать боковую панель"
@@ -383,30 +533,25 @@ export function PageBar({
           >
             {desktop ? <PanelLeft /> : <Menu />}
           </TooltipTrigger>
-          <TooltipContent>Показать боковую панель</TooltipContent>
+          <TooltipContent>
+            Показать панель <Shortcut keys={["mod", "B"]} className="ml-1" />
+          </TooltipContent>
         </Tooltip>
       )}
-      <div className="flex min-w-0 flex-1 items-center gap-2.5 pl-1">
-        {Icon && title && (
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border bg-background text-muted-foreground shadow-[0_1px_2px_rgb(0_0_0/0.04)] dark:bg-card">
-            <Icon className="size-[15px]" />
-          </span>
-        )}
-        <div className="flex min-w-0 items-baseline gap-2">
-          {typeof title === "string" ? (
-            <span className="truncate text-[15px] font-semibold tracking-[-0.01em]">{title}</span>
-          ) : (
-            title
-          )}
-          {subtitle && <span className="hidden truncate text-[13px] text-muted-foreground md:inline">{subtitle}</span>}
-        </div>
+      <div className="flex min-w-0 flex-1 items-baseline gap-2 pl-1">
+        {typeof title === "string" ? <h1 className="truncate text-[14px] font-medium">{title}</h1> : title}
+        {subtitle && <span className="hidden truncate text-[13px] text-muted-foreground md:inline">{subtitle}</span>}
       </div>
       {children && <div className="flex shrink-0 items-center gap-1">{children}</div>}
     </div>
   );
 }
 
-/** Заголовок секции в сайдбаре (Недавние, Документы…). */
+/** Заголовок группы в сайдбаре (Стенд, Недавние, Документы…). */
 export function SidebarLabel({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn("px-2.5 pt-2 pb-1.5 text-xs font-medium text-muted-foreground", className)}>{children}</div>;
+  return (
+    <div className={cn("flex h-7 items-center px-2 text-[12px] font-medium text-muted-foreground", className)}>
+      {children}
+    </div>
+  );
 }

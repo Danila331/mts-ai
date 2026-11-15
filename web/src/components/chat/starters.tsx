@@ -1,4 +1,4 @@
-import { Factory, Gauge, Search, Sun, TrendingDown, Zap } from "lucide-react";
+import { ArrowUpRight, Factory, Gauge, Search, Sun, TrendingDown, Zap } from "lucide-react";
 
 // Стартовые вопросы — по одному на продукт и типовые ситуации клиента (формулировки свои, не из демо-набора жюри).
 export const STARTERS = [
@@ -14,15 +14,17 @@ export const STARTERS = [
 export function Starters({ onPick, compact }: { onPick: (text: string) => void; compact?: boolean }) {
   if (compact) {
     return (
-      <ul className="grid gap-1.5" aria-label="Примеры вопросов">
-        {STARTERS.slice(0, 4).map(({ label, text }) => (
+      <ul className="divide-y border-y" aria-label="Примеры вопросов">
+        {STARTERS.slice(0, 4).map(({ icon: Icon, label, text }) => (
           <li key={label}>
             <button
               type="button"
               onClick={() => onPick(text)}
-              className="w-full rounded-2xl border bg-background px-3.5 py-2.5 text-left text-[13.5px] leading-snug transition-colors hover:border-input hover:bg-muted"
+              className="group/q -mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-md px-2 py-2.5 text-left text-[13px] leading-snug outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
             >
-              {text}
+              <Icon className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+              <span className="min-w-0 flex-1">{text}</span>
+              <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/q:opacity-100 group-focus-visible/q:opacity-100" />
             </button>
           </li>
         ))}
@@ -37,9 +39,9 @@ export function Starters({ onPick, compact }: { onPick: (text: string) => void; 
             type="button"
             onClick={() => onPick(text)}
             title={text}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border/80 px-3 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[13px] text-muted-foreground transition-colors outline-none hover:border-input hover:bg-surface hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
           >
-            <Icon className="size-[15px]" strokeWidth={1.75} />
+            <Icon className="size-3.5" strokeWidth={1.75} />
             {label}
           </button>
         </li>

@@ -43,3 +43,6 @@ next-env.d.ts
 # локальные заявки и оценки веб-чата, собранный виджет
 /.data/
 /public/widget.js
+
+# снимки для ревью impeccable
+.impeccable/review/
