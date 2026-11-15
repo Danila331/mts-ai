@@ -16,7 +16,9 @@
     GET  /core/kb               база знаний разделами (те же фрагменты, что видит модель)
     POST /core/chat             {"messages": [{"role", "content"}], "mode": "chat"|"eval"|"copilot", "overrides": {…}}
                                 → SSE: stage, answer, done. overrides — настройки RAG только для этого ответа
-                                (песочница стенда), те же ключи и пределы, что у /core/settings
+                                (песочница стенда), те же ключи и пределы, что у /core/settings.
+                                В answer — confidence (уверенность: поиск + опора, порог) и route:
+                                answer | clarify (уточнение ниже порога, только chat при EB_CONFIDENCE_GATE=1)
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
     POST /core/settings         {"values": {ключ: значение}} — поменять на лету для всех ответов (до перезапуска)
     POST /core/settings/reset   вернуть значения из окружения
@@ -27,6 +29,7 @@ from __future__ import annotations
 import hmac
 import io
 import json
+import math
 import os
 import re
 import socket
@@ -67,7 +70,8 @@ from energybot.dialog import search_queries  # noqa: E402
 from energybot.guard import SENTENCE, numbers  # noqa: E402
 from energybot.kb import KnowledgeBase  # noqa: E402
 from energybot.llm import Api, env, env_num  # noqa: E402
-from energybot.pipeline import FALLBACK, Consultant  # noqa: E402
+from energybot.pipeline import FALLBACK, Answer, Consultant, tidy  # noqa: E402
+from energybot.prompts import CLARIFY_SYSTEM, render_dialog  # noqa: E402
 from energybot.text import tokens  # noqa: E402
 
 MAX_BODY = 256_000
@@ -164,6 +168,9 @@ class Trace(threading.local):
         self.chunks = []  # отдельные разделы контекста
         self.queries = {}
         self.calls = []  # все вызовы модели за ответ: промпт, ответ, время
+        self.confidence = None  # retrieval-часть уверенности по последней выдаче (retrieval_confidence)
+        self.prefetched = None  # выдача, найденная до ответа для порога уверенности (WebConsultant.prefetch)
+        self.retrieval_ms = 0.0
 
 
 TRACE = Trace()
@@ -270,6 +277,9 @@ class WebConsultant(Consultant):
         self.api.chat = recording_chat
 
     def retrieve(self, turns, *args, **kwargs):
+        cached = self._take_prefetched("retrieve", turns, args, kwargs)
+        if cached is not None:
+            return cached[0]
         result = super().retrieve(turns, *args, **kwargs)
         if len(result) == 3:  # (выдача, документы целиком, фрагменты)
             TRACE.docs, TRACE.chunks = list(result[1]), list(result[2])
@@ -279,6 +289,12 @@ class WebConsultant(Consultant):
         return result
 
     def fm_search(self, turns, *args, **kwargs):  # схема factmap (есть не во всех версиях ядра)
+        cached = self._take_prefetched("fm_search", turns, args, kwargs)
+        if cached is not None:
+            top, guard = cached
+            if isinstance(kwargs.get("guard"), dict):
+                kwargs["guard"].update(guard)
+            return top
         top = super().fm_search(turns, *args, **kwargs)
         TRACE.docs, TRACE.chunks = [], list(top)
         self._after_search(turns)
@@ -287,8 +303,69 @@ class WebConsultant(Consultant):
     def _after_search(self, turns):
         lexical, semantic, last = search_queries(turns)
         TRACE.queries = {"lexical": lexical, "semantic": semantic, "last": last}
+        TRACE.confidence = self.retrieval_confidence(turns)
         if TRACE.emit:
             TRACE.emit("stage", {"name": "retrieval", **self.retrieval_payload()})
+
+    # ---------- уверенность и уточнение (T12) ----------
+    def retrieval_confidence(self, turns) -> dict:
+        """retrieval-часть уверенности по последней выдаче этого потока (TRACE.ranked)."""
+        vocab = self.__dict__.setdefault("_vocab", {})  # основы слов раздела: считаются один раз на раздел
+
+        def chunk_vocab(chunk) -> set:
+            words = vocab.get(chunk.id)
+            if words is None:
+                words = vocab[chunk.id] = set(tokens(f"{chunk.path} {chunk.title} {chunk.text}"))
+            return words
+
+        return retrieval_confidence(turns, TRACE.ranked, self.retriever.bm25.idf, chunk_vocab)
+
+    def prefetch(self, turns) -> dict | None:
+        """Поиск до генерации — чтобы решить по порогу, отвечать ли вообще. Выдача запоминается, и answer()
+        берёт её же, а не ищет заново: эмбеддинги и реранкер — платные вызовы. Возвращает retrieval-часть."""
+        t0 = time.perf_counter()
+        if self.arch == "factmap":
+            guard = {}
+            kind, value = "fm_search", (self.fm_search(turns, None, fast=False, guard=guard), guard)
+        else:
+            kind, value = "retrieve", (self.retrieve(turns),)
+        TRACE.prefetched = (kind, [dict(t) for t in turns], value)
+        TRACE.retrieval_ms = (time.perf_counter() - t0) * 1000
+        return TRACE.confidence
+
+    def _take_prefetched(self, kind: str, turns, args: tuple, kwargs: dict):
+        """Выдача из prefetch, если ядро ищет то же самое: те же реплики, без вектора запроса и без «быстрого»
+        режима (тот — другой поиск: без реранкера и с урезанным контекстом). Отдаётся один раз."""
+        item = TRACE.prefetched
+        if item is None or item[0] != kind or item[1] != turns:
+            return None
+        extra = list(args) + [v for k, v in kwargs.items() if k != "guard"]
+        if any(v is not None and v is not False for v in extra):
+            return None
+        TRACE.prefetched = None
+        return item[2]
+
+    def clarify(self, turns) -> Answer:
+        """Ответ ниже порога уверенности: честное «точного ответа нет» и один уточняющий вопрос.
+
+        Вопрос пишет модель (CLARIFY_SYSTEM — без материалов базы, только диалог и названия ближайших тем);
+        нет модели, сбой или ответ не по форме — вопрос по умолчанию. Фраза про специалиста — всегда без модели.
+        """
+        t0 = time.perf_counter()
+        question, guard = "", {"route": "clarify"}
+        if self.api.configured:
+            topics = list(dict.fromkeys(h.chunk.title for h in TRACE.ranked[:CONFIDENCE_TOP]))[:3]
+            try:
+                question = clarify_question(self.api.chat(clarify_messages(turns, topics), max_tokens=160), turns)
+            except Exception as exc:  # noqa: BLE001 — без модели остаётся вопрос по умолчанию
+                guard["clarify_error"] = f"{type(exc).__name__}: {exc}"
+                print(f"[consultant] уточняющий вопрос: {guard['clarify_error']}", file=sys.stderr)
+        if not question:
+            guard["clarify_default"] = True
+        generation = time.perf_counter() - t0
+        timings = {"retrieval": TRACE.retrieval_ms / 1000, "generation": generation,
+                   "total": TRACE.retrieval_ms / 1000 + generation}
+        return Answer(f"{CLARIFY_LEAD} {question or CLARIFY_QUESTION}", [], timings, "", guard)
 
     # ---------- представление для фронтенда ----------
     @property
@@ -377,6 +454,116 @@ def attribute(answer: str, chunks: list) -> list:
             "unsupported_numbers": sorted(n for n in nums if not any(n in s["numbers"] for s in support)),
         })
     return result
+
+
+# ---------- уверенность ответа (T12) ----------
+# Две части. retrieval — до генерации, по выдаче поиска: доля слов вопроса (с весом idf BM25), которые есть в
+# лучшем из первых CONFIDENCE_TOP разделов выдачи; если выдачу упорядочил реранкер — среднее с его оценкой
+# лучшего раздела. support — после генерации, по опоре (attribute): доля утверждений ответа, у которых нашёлся
+# раздел и нет чисел без опоры. Итог — среднее частей (только retrieval, если опору считать не по чему).
+# Порог сравнивается с retrieval: решение «уточнить вместо ответа» принимается до вызова модели.
+#
+# Порог по умолчанию — осторожный из eval/confidence_calibration.py на dev, офлайн (BM25, без эмбеддингов и
+# реранкера — это платные API): в уточнение уходит не больше 5 % вопросов, ответ на которые в базе есть.
+# Различение слабое (ROC AUC ≈ 0,64; максимум F1 ≈ 0,29 при пороге 0,28 и отказе на трети хороших вопросов),
+# поэтому гейт выключен по умолчанию (EB_CONFIDENCE_GATE=0). С реранкером шкала retrieval другая — порог
+# калибруется заново.
+CONFIDENCE_TOP = 5
+CONFIDENCE_THRESHOLD = 0.16
+
+CLARIFY_LEAD = ("В моих материалах нет точного ответа на этот вопрос, поэтому не буду гадать — "
+                "уточню его у специалиста МТС EnergyTool.")
+CLARIFY_QUESTION = "Чтобы передать вопрос точнее, расскажите, пожалуйста, что у вас за объект и какую задачу хотите решить?"
+
+
+def question_terms(turns: list) -> set:
+    """Основы слов последней реплики клиента; короткое «да» или «а сколько?» — по всем его репликам.
+    Числа не в счёт: «200 счётчиков» — подробность клиента, а не тема, которой нет в базе."""
+    def words(text: str) -> set:
+        return {t for t in tokens(text) if not t[0].isdigit()}
+
+    users = [t["content"] for t in turns if t.get("role") == "user"]
+    terms = words(users[-1]) if users else set()
+    return terms or words(" ".join(users))
+
+
+def retrieval_confidence(turns: list, ranked: list, idf: dict, vocab) -> dict:
+    """retrieval-часть уверенности: 0..1 и из чего сложилась. vocab(chunk) → множество основ слов раздела.
+
+    Слова, которых нет во всей базе, весят как самые редкие слова базы: «ветряк», «WhatsApp», «Новосибирск»
+    в вопросе — признак того, что ответа в материалах может не быть.
+    """
+    terms = question_terms(turns)
+    rare = max(idf.values(), default=1.0)
+    weights = {t: idf.get(t, rare) for t in terms}
+    total = sum(weights.values())
+    top = list(ranked[:CONFIDENCE_TOP])
+    lexical, best = 0.0, None
+    for h in top:
+        covered = sum(w for t, w in weights.items() if t in vocab(h.chunk)) / total if total else 0.0
+        if best is None or covered > lexical:
+            lexical, best = covered, h
+    found = vocab(best.chunk) if best else set()
+    missing = sorted((t for t in terms if t not in found), key=lambda t: -weights[t])[:6]
+    detail = f"в разделе «{best.chunk.path}»" if best else "выдача пуста"
+    if missing:
+        detail += f"; нет основ: {', '.join(missing)}"
+    parts = [{"key": "lexical", "label": "Слова вопроса в лучшем разделе", "value": round(lexical, 3),
+              "detail": detail}]
+    stage = top[0].stage if top else "none"
+    score = lexical
+    if stage == "rerank":
+        raw = float(top[0].score)
+        rerank = min(1.0, max(0.0, raw)) if math.isfinite(raw) else 0.0
+        parts.append({"key": "rerank", "label": "Оценка реранкера", "value": round(rerank, 3),
+                      "detail": f"лучший раздел «{top[0].chunk.path}»"})
+        score = (lexical + rerank) / 2
+    return {"score": round(score, 3), "stage": stage, "parts": parts}
+
+
+def support_confidence(citations: list) -> dict | None:
+    """support-часть: доля утверждений (не вопросов клиенту) с опорой и без чисел вне базы."""
+    claims = [c for c in citations if not c["question"]]
+    if not claims:
+        return None
+    grounded = sum(1 for c in claims if c["support"] and not c["unsupported_numbers"])
+    return {"score": round(grounded / len(claims), 3), "grounded": grounded, "claims": len(claims)}
+
+
+def answer_confidence(retrieval: dict, support: dict | None, threshold: float, gate: bool, gated: bool) -> dict:
+    """Поле confidence события answer: итог 0..1, части, порог и сработал ли он."""
+    r = retrieval["score"]
+    s = support["score"] if support else None
+    score = r if s is None else (r + s) / 2
+    parts = [dict(p, part="retrieval") for p in retrieval["parts"]]
+    if support:
+        parts.append({"key": "support", "part": "support", "label": "Утверждения с опорой в базе", "value": s,
+                      "detail": f"{support['grounded']} из {support['claims']}"})
+    how = f"поиск {r:.2f}" + (f" и опора {s:.2f} поровну" if s is not None else "; опору считать не по чему")
+    rule = (f"поиск ниже порога {threshold:.2f} — вместо ответа уточняющий вопрос" if gated else
+            f"порог {threshold:.2f} проверяется по поиску до генерации" if gate else
+            "порог не применяется (только чат при EB_CONFIDENCE_GATE=1)")
+    return {"score": round(score, 3), "threshold": threshold, "retrieval": r, "support": s,
+            "stage": retrieval["stage"], "parts": parts, "gate": gate, "gated": gated,
+            "explain": f"Итог {score:.2f}: {how}; {rule}."}
+
+
+def clarify_messages(turns: list, topics: list) -> list:
+    near = f"\n\nБлижайшие темы базы знаний (могут не подходить): {'; '.join(topics)}" if topics else ""
+    return [{"role": "system", "content": CLARIFY_SYSTEM},
+            {"role": "user", "content": f"{render_dialog(turns)}{near}\n\nЗадай один уточняющий вопрос клиенту."}]
+
+
+def clarify_question(raw: str, turns: list) -> str:
+    """Первый вопрос из ответа модели; пусто, если вопроса нет, он длинный или в нём числа не из диалога."""
+    said = numbers(" ".join(t["content"] for t in turns))
+    for sentence in SENTENCE.split(tidy(raw or "")):
+        sentence = sentence.strip()
+        if sentence.endswith("?"):
+            if len(sentence) > 300 or numbers(sentence) - said:
+                return ""
+            return sentence
+    return ""
 
 
 # ---------- настройки RAG на лету ----------
@@ -536,9 +723,9 @@ class Settings:
 
 # ---------- приложение ----------
 class App:
-    def __init__(self):
+    def __init__(self, api: WebApi | None = None):
         kb_path = Path(env("EB_KB_PATH", str(ROOT / "knowledge-base")))
-        self.api = WebApi()
+        self.api = api or WebApi()
         t0 = time.perf_counter()
         index_dir, from_cache = self.index_dir(kb_path)
         self.bot = WebConsultant(kb_path, index_dir=index_dir, api=self.api)
@@ -547,6 +734,10 @@ class App:
         log("info", "индекс готов", dense=self.bot.dense, from_cache=from_cache, saved=bool(saved),
             took_ms=round((time.perf_counter() - t0) * 1000), cache=str(index_dir or ""))
         self.mode = env("EB_WEB_MODE", "chat")
+        # Порог уверенности (T12): ниже него — уточняющий вопрос вместо ответа. Только режим chat и только под
+        # флагом; автопроверка (eval) и копилот отвечают как раньше при любых значениях.
+        self.gate = env("EB_CONFIDENCE_GATE", "0") == "1"
+        self.threshold = env_num("EB_CONFIDENCE_THRESHOLD", CONFIDENCE_THRESHOLD, 0.0, 1.0, float)
         self.settings = Settings(self.bot, self.api)
         self.kb_path = kb_path
         if self.wants_dense() and not self.bot.dense:
@@ -606,6 +797,8 @@ class App:
             "docs": len(docs),
             "kb_fingerprint": self.bot.kb.fingerprint,
             "mode": self.mode,
+            "confidence_gate": self.gate,
+            "confidence_threshold": self.threshold,
         }
 
     def kb(self) -> dict:
@@ -632,7 +825,13 @@ class App:
     def _chat(self, turns: list, mode: str, emit) -> dict:
         TRACE.reset(emit)
         t0 = time.perf_counter()
-        answer = self.bot.answer(turns, mode=mode)
+        # Порог решается по поиску до генерации и только в чате: в eval и copilot путь ответа прежний.
+        gate = self.gate and mode == "chat"
+        gated = False
+        if gate:
+            retrieval = self.bot.prefetch(turns)
+            gated = retrieval is not None and retrieval["score"] < self.threshold
+        answer = self.bot.clarify(turns) if gated else self.bot.answer(turns, mode=mode)
         total = (time.perf_counter() - t0) * 1000
         chunks = self.bot.context_chunks()
         by_id = {c.id: c for c in self.bot.kb.chunks}
@@ -654,13 +853,17 @@ class App:
             "output": c["output"][:3000],
             "error": c["error"],
         } for i, c in enumerate(TRACE.calls)]
+        timings = {k: round(v * 1000) for k, v in answer.timings.items()}
+        if TRACE.retrieval_ms and not gated:  # поиск был в prefetch, answer() взял готовую выдачу
+            timings["retrieval"] = max(timings.get("retrieval", 0), round(TRACE.retrieval_ms))
         payload = {
             "id": uuid.uuid4().hex,
+            "route": "clarify" if gated else "answer",
             "text": answer.text,
             "fallback": answer.text == FALLBACK or bool(answer.error),
             "error": answer.error,
             "mode": mode,
-            "timings": {k: round(v * 1000) for k, v in answer.timings.items()} | {"server_total": round(total)},
+            "timings": timings | {"server_total": round(total)},
             "guard": answer.guard,
             "trace": getattr(answer, "trace", ""),
             "sources": sources,
@@ -675,6 +878,10 @@ class App:
         for cite in payload["citations"]:
             for s in cite["support"]:
                 s["title"] = by_id[s["id"]].title if s["id"] in by_id else s["doc"]
+        # Опору у запасного ответа и у уточнения не считаем: там нет утверждений по существу.
+        support = None if gated or payload["fallback"] else support_confidence(payload["citations"])
+        retrieval = TRACE.confidence or self.bot.retrieval_confidence(turns)
+        payload["confidence"] = answer_confidence(retrieval, support, self.threshold, gate, gated)
         return payload
 
 

@@ -8,6 +8,7 @@ import {
   Copy,
   Cpu,
   FileText,
+  Gauge,
   Info,
   Loader2,
   MessageCircleQuestion,
@@ -20,7 +21,7 @@ import { toast } from "sonner";
 import { citationOrder, SourceNumber } from "@/components/chat/answer-text";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { KbIndex } from "@/hooks/use-kb";
-import type { AnswerPayload, Citation, Hit, Message, Retrieval } from "@/lib/types";
+import type { AnswerPayload, Citation, Confidence, Hit, Message, Retrieval } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const STAGES: Record<string, { label: string; color: string }> = {
@@ -153,6 +154,79 @@ function Overlap({ value }: { value: number }) {
   );
 }
 
+// ---------- Уверенность (T12) ----------
+const pct = (v: number) => `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%`;
+const num = (v: number) => v.toFixed(2).replace(".", ",");
+
+/** Шкала 0..1; тонкая вертикальная черта — порог. Цвет только у проблемы: ниже порога. */
+function Meter({ value, threshold, low }: { value: number; threshold?: number; low?: boolean }) {
+  return (
+    <span className="relative block h-1.5 w-full rounded-full bg-muted">
+      <span
+        className={cn("absolute inset-y-0 left-0 rounded-full", low ? "bg-warning" : "bg-foreground/60")}
+        style={{ width: pct(value) }}
+      />
+      {threshold !== undefined && (
+        <span
+          className="absolute -top-1 -bottom-1 w-0.5 -translate-x-1/2 rounded-full bg-foreground"
+          style={{ left: pct(threshold) }}
+          aria-hidden
+        />
+      )}
+    </span>
+  );
+}
+
+function ConfidenceBlock({ c }: { c: Confidence }) {
+  const low = c.retrieval < c.threshold;
+  const rows = [
+    { key: "retrieval", label: "Поиск", hint: "до ответа", value: c.retrieval, threshold: c.threshold, low },
+    ...(c.support === null ? [] : [{ key: "support", label: "Опора", hint: "после ответа", value: c.support }]),
+  ];
+  return (
+    <section className="space-y-3 rounded-xl bg-surface px-3.5 py-3">
+      <div className="flex items-baseline gap-2">
+        <span className="text-[13px] font-medium text-muted-foreground">Уверенность</span>
+        <span className="tnum text-[18px] leading-none font-semibold tracking-tight">{num(c.score)}</span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {c.gated ? (
+            <span className="text-warning">ниже порога — уточняющий вопрос</span>
+          ) : c.gate ? (
+            "порог включён"
+          ) : (
+            "порог выключен"
+          )}
+        </span>
+      </div>
+      <dl className="space-y-2.5">
+        {rows.map((r) => (
+          <div key={r.key} className="grid grid-cols-[88px_1fr_36px] items-center gap-x-3">
+            <dt className="text-[13px]">
+              {r.label} <span className="text-xs text-muted-foreground">{r.hint}</span>
+            </dt>
+            <dd>
+              <Meter value={r.value} threshold={"threshold" in r ? r.threshold : undefined} low={"low" in r && r.low} />
+            </dd>
+            <dd className="tnum text-right font-mono text-[11.5px] text-muted-foreground">{num(r.value)}</dd>
+          </div>
+        ))}
+      </dl>
+      <ul className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+        {c.parts.map((p) => (
+          <li key={p.key}>
+            <span className="text-foreground/80">{p.label}</span> <span className="tnum font-mono">{num(p.value)}</span>
+            {p.detail && <> · {p.detail}</>}
+          </li>
+        ))}
+        <li className="flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-0.5 rounded-full bg-foreground" aria-hidden />
+          порог {num(c.threshold)} — по поиску, до генерации; только чат при EB_CONFIDENCE_GATE=1
+        </li>
+      </ul>
+    </section>
+  );
+}
+
 // ---------- Опора ----------
 type Verdict = "strong" | "weak" | "none" | "numbers" | "question";
 
@@ -185,6 +259,7 @@ function SupportTab({ a, kb, onOpen }: { a: AnswerPayload; kb: KbIndex | null; o
 
   return (
     <div className="space-y-5 p-5">
+      {a.confidence && <ConfidenceBlock c={a.confidence} />}
       <div className="space-y-2.5">
         <div className="flex items-baseline gap-2">
           <span className="tnum text-[22px] leading-none font-semibold tracking-tight">
@@ -780,6 +855,24 @@ export function DebugPanel({
               {r ? "Поиск готов, модель пишет ответ" : "Идёт поиск по базе знаний"}
             </li>
           ) : null}
+          {a?.confidence && (
+            <li className="flex items-center gap-3" title={a.confidence.explain}>
+              <Gauge className="size-4 shrink-0 text-muted-foreground" aria-label="Уверенность ответа" />
+              <span className="shrink-0 whitespace-nowrap">
+                Уверенность <span className="tnum font-mono text-[12.5px]">{num(a.confidence.score)}</span>
+              </span>
+              <span className="w-24 shrink-0">
+                <Meter
+                  value={a.confidence.retrieval}
+                  threshold={a.confidence.threshold}
+                  low={a.confidence.retrieval < a.confidence.threshold}
+                />
+              </span>
+              <span className="truncate text-xs text-muted-foreground">
+                поиск {num(a.confidence.retrieval)} · порог {num(a.confidence.threshold)}
+              </span>
+            </li>
+          )}
           {a && (
             <li className="flex items-center gap-3">
               <Timer className="size-4 shrink-0 text-muted-foreground" aria-label="Время и режим" />
@@ -794,6 +887,11 @@ export function DebugPanel({
                       .join("\n")}
                   >
                     ответ с вашими настройками
+                  </span>
+                )}
+                {a.route === "clarify" && (
+                  <span className="inline-flex h-5 items-center rounded-md bg-warning-soft px-1.5 text-[11px] font-medium text-warning">
+                    уточнение ниже порога
                   </span>
                 )}
                 {a.fallback && (
