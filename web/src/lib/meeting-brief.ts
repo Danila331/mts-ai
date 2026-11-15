@@ -7,6 +7,7 @@
 
 import { kindInfo } from "./lead-kinds.ts";
 import type { LeadKind } from "./lead-kinds.ts";
+import { humanizeCallbackLabel } from "./callback.ts";
 import type { PassportGroup } from "./types.ts";
 
 /** Раздел базы, откуда взята формулировка; items — дословные фрагменты текста этого раздела. */
@@ -206,6 +207,24 @@ export interface BriefInput {
   passport: { fields?: { label: string; value?: string; group: PassportGroup }[] };
 }
 
+/** Ключ для сравнения пунктов: регистр, пробелы и пунктуация не важны. */
+const normalize = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/g, " ").trim();
+
+/**
+ * Без повторов: «тип организации и объекта» (общий чек-лист) и «тип организации» (платформа) — один пункт.
+ * Пункт, чей текст входит в уже стоящий (по границам слов), считается дублем; остаётся более полная формулировка.
+ */
+export function uniqueItems(items: readonly string[]): string[] {
+  const out: { text: string; key: string }[] = [];
+  for (const text of items) {
+    const key = ` ${normalize(text)} `;
+    const same = out.findIndex((o) => o.key.includes(key) || key.includes(o.key));
+    if (same === -1) out.push({ text, key });
+    else if (key.length > out[same].key.length) out[same] = { text, key };
+  }
+  return out.map((o) => o.text);
+}
+
 const source = (f: KbFacts) => `${f.doc}, «${f.section}»`;
 
 /** Продукт заявки; contacts и неизвестное — общие сведения. */
@@ -222,7 +241,7 @@ export function buildBrief(input: BriefInput): Brief {
   known.push(`Тип заявки: ${kind.label} — ${kind.hint}`);
   known.push(
     input.callback_label
-      ? `Удобное время по словам клиента: ${input.callback_label} (пожелание, не договорённость)`
+      ? `Удобное время по словам клиента: ${humanizeCallbackLabel(input.callback_label)} (пожелание, не договорённость)`
       : "Удобное время клиент не указал",
   );
   for (const f of input.passport.fields ?? []) {
@@ -244,7 +263,7 @@ export function buildBrief(input: BriefInput): Brief {
   sections.push({
     id: "prepare",
     title: "Что подготовить и запросить у клиента",
-    items: prepare.flatMap((p) => p.items),
+    items: uniqueItems(prepare.flatMap((p) => p.items)),
     sources: prepare.map(source),
   });
 

@@ -12,6 +12,7 @@ import {
   briefHtml,
   briefText,
   buildBrief,
+  uniqueItems,
   type BriefInput,
   type KbFacts,
 } from "./meeting-brief.ts";
@@ -113,5 +114,23 @@ describe("T25: шпаргалка к встрече", () => {
     const text = briefText(brief);
     assert.match(text, /ЧЕГО НЕ ОБЕЩАТЬ/);
     assert.match(text, /00-reference\/03-calculation-and-requests\.md/);
+  });
+});
+
+describe("шпаргалка: без дублей", () => {
+  test("«тип организации» из общего чек-листа и платформы — один пункт", () => {
+    const items = buildBrief(sample()).sections.find((s) => s.id === "prepare")!.items;
+    assert.equal(items.filter((i) => i.toLowerCase().startsWith("тип организации")).length, 1);
+    assert.equal(new Set(items.map((i) => i.toLowerCase())).size, items.length);
+  });
+  test("uniqueItems сравнивает без регистра и пунктуации, оставляя полную формулировку", () => {
+    assert.deepEqual(uniqueItems(["Регион", "регион и характеристики объекта", "Площадь", "площадь."]), [
+      "регион и характеристики объекта",
+      "Площадь",
+    ]);
+  });
+  test("время клиента в шпаргалке — с городом, а не IANA", () => {
+    const known = buildBrief(sample()).sections.find((s) => s.id === "known")!.items.join("\n");
+    assert.match(known, /вечер, Москва \(UTC\+3\)/);
   });
 });

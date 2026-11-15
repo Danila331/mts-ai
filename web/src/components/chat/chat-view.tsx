@@ -268,7 +268,7 @@ export function ChatView({
     setFreshLead(lead.id);
   };
   // Кнопки быстрых ответов — под последним ответом бота; свой текст клиента или новый вопрос их убирает.
-  const suggestions = chat.busy ? [] : suggestionsFor(messages, passport);
+  const suggestions = chat.busy ? [] : suggestionsFor(messages, passport, !!session?.lead);
   // «Связаться с менеджером» в ленте не предлагаем до первого полезного ответа; кнопка в шапке виджета есть всегда.
   const offerLead = hasUsefulAnswer(messages);
   const showSummary = !!summary && canSummarize(session);

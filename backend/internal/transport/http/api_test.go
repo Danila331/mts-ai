@@ -916,7 +916,7 @@ func TestLeadFromChatWithConsent(t *testing.T) {
 	assert.Equal(t, "sess-lead-1", store.leads[0].SessionID)
 	assert.Contains(t, string(store.leads[0].Passport), "ООО Учебный склад", "паспорт сессии ушёл в заявку")
 	assert.Equal(t, lead.Callback{Time: "morning", Timezone: "Europe/Moscow"}, store.leads[0].Callback)
-	assert.Contains(t, string(store.leads[0].Passport), "утро, часовой пояс Europe/Moscow")
+	assert.Contains(t, string(store.leads[0].Passport), "утро, Москва (UTC+3)")
 	// T4: в ответе API нет обещаний точного времени, срока звонка или имени.
 	assert.NotRegexp(t, `\d{1,2}:\d{2}|через \d+|в течение|сегодня|завтра`, rec.Body.String())
 }

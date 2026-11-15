@@ -3,6 +3,7 @@ package lead
 import (
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,9 +24,9 @@ func TestCallbackNormalize(t *testing.T) {
 		label string
 	}{
 		{Callback{Time: "morning", Timezone: "Europe/Moscow"}, Callback{Time: "morning", Timezone: "Europe/Moscow"},
-			"утро, часовой пояс Europe/Moscow"},
+			"утро, Москва (UTC+3)"},
 		{Callback{Time: " evening ", Timezone: "Asia/Yekaterinburg"}, Callback{Time: "evening", Timezone: "Asia/Yekaterinburg"},
-			"вечер, часовой пояс Asia/Yekaterinburg"},
+			"вечер, Екатеринбург (UTC+5)"},
 		{Callback{Time: "any"}, Callback{Time: "any"}, "любое время"},
 		{Callback{Time: "day", Timezone: "<script>"}, Callback{Time: "day"}, "день"},
 		{Callback{Time: "day", Timezone: strings.Repeat("A", 80)}, Callback{Time: "day"}, "день"},
@@ -63,4 +64,21 @@ func TestCallbackTextsPromiseNothing(t *testing.T) {
 	for _, ok := range []string{"Менеджер учтёт удобное время", "Менеджер МТС свяжется с вами"} {
 		assert.False(t, promise.MatchString(ok), ok)
 	}
+}
+
+// Список поясов совпадает с RU_TIMEZONES веба (web/src/lib/callback.ts): подпись менеджеру одна и та же.
+func TestRUTimezonesMatchWeb(t *testing.T) {
+	raw, err := os.ReadFile("../../../web/src/lib/callback.ts")
+	require.NoError(t, err)
+	re := regexp.MustCompile(`\{ zone: "([^"]+)", city: "([^"]+)", utc: (\d+) \}`)
+	found := re.FindAllStringSubmatch(string(raw), -1)
+	require.Len(t, found, len(RUTimezones))
+	for i, m := range found {
+		z := RUTimezones[i]
+		assert.Equal(t, z.Zone, m[1])
+		assert.Equal(t, z.City, m[2])
+		assert.Equal(t, strconv.Itoa(z.UTC), m[3])
+	}
+	assert.Equal(t, "Москва (UTC+3)", TimezoneLabel("Europe/Moscow"))
+	assert.Equal(t, "America/Buenos Aires", TimezoneLabel("America/Buenos_Aires"))
 }

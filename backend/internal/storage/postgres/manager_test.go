@@ -53,7 +53,7 @@ func TestLeadBoard(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "sess-board-1", c.SessionID)
 		assert.Equal(t, []string{"Схема сбора"}, c.Score.Missing)
-		assert.Equal(t, "вечер, часовой пояс Europe/Moscow", c.CallbackLabel)
+		assert.Equal(t, "вечер, Москва (UTC+3)", c.CallbackLabel)
 		assert.Equal(t, "Платформа учёта", c.ProductLabel)
 		assert.Nil(t, c.StatusChanged)
 

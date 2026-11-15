@@ -158,3 +158,14 @@ export const STATUS_LABEL: Record<LeadStatus, string> = {
 
 /** Пустые строки списка вместо «undefined»: у старых заявок нет ни компании, ни имени. */
 export const leadTitle = (l: Pick<LeadItem, "company" | "name">) => l.company || l.name || "Без названия";
+
+/**
+ * Телефон для показа и копирования: «+79000000000» → «+7 900 000-00-00». Российский номер (11 цифр, 7 или 8
+ * в начале) форматируется, остальное возвращается как есть: чужой формат не угадываем.
+ */
+export function formatPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  const ru = digits.length === 11 && (digits[0] === "7" || digits[0] === "8") ? digits.slice(1) : digits.length === 10 ? digits : "";
+  if (!ru) return raw.trim();
+  return `+7 ${ru.slice(0, 3)} ${ru.slice(3, 6)}-${ru.slice(6, 8)}-${ru.slice(8)}`;
+}

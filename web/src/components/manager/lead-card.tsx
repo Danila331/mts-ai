@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Copy, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -15,11 +15,13 @@ import {
   type LeadStatus,
   ManagerError,
   STATUS_LABEL,
+  formatPhone,
   getLead,
   leadTitle,
   setLeadStatus,
   waiting,
 } from "@/lib/manager";
+import { humanizeCallbackLabel } from "@/lib/callback";
 import { cn } from "@/lib/utils";
 
 const STATUSES: LeadStatus[] = ["new", "in_progress", "done", "rejected"];
@@ -126,10 +128,24 @@ export function LeadCardView({
       <Block title="Контакты и время">
         <dl className="grid grid-cols-[130px_1fr] gap-x-3 gap-y-1.5 text-[14px]">
           <Row label="Имя" value={card.name} />
-          <Row label="Телефон" value={card.phone} />
+          <Row label="Телефон" value={formatPhone(card.phone)}>
+            {card.phone && (
+              <button
+                type="button"
+                aria-label="Скопировать телефон"
+                onClick={() => {
+                  void navigator.clipboard.writeText(formatPhone(card.phone));
+                  toast.success("Телефон скопирован");
+                }}
+                className="ml-2 inline-flex size-6 items-center justify-center rounded-md align-middle text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
+                <Copy className="size-3.5" aria-hidden />
+              </button>
+            )}
+          </Row>
           <Row label="Компания" value={card.company} />
           <Row label="Тип заявки" value={card.kind_label} />
-          <Row label="Удобное время" value={card.callback_label} empty="не указано" />
+          <Row label="Удобное время" value={humanizeCallbackLabel(card.callback_label)} empty="не указано" />
           {card.comment && <Row label="Комментарий" value={card.comment} />}
         </dl>
         <p className="mt-2 text-[12px] text-muted-foreground">
@@ -138,7 +154,7 @@ export function LeadCardView({
       </Block>
 
       <Block title={card.summary_source === "llm" ? "Резюме для менеджера" : "Резюме (список вопросов клиента, модель не ответила)"}>
-        <p className="text-[14px] leading-relaxed whitespace-pre-wrap">{card.summary}</p>
+        <p className="text-[14px] leading-relaxed whitespace-pre-wrap">{humanizeCallbackLabel(card.summary)}</p>
       </Block>
 
       <Block title="Паспорт задачи">
@@ -214,11 +230,23 @@ export function LeadCardView({
   );
 }
 
-function Row({ label, value, empty = "—" }: { label: string; value: string; empty?: string }) {
+function Row({
+  label,
+  value,
+  empty = "—",
+  children,
+}: {
+  label: string;
+  value: string;
+  empty?: string;
+  children?: React.ReactNode;
+}) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className={cn("min-w-0 break-words", !value && "text-muted-foreground")}>{value || empty}</dd>
+      <dd className={cn("min-w-0 break-words", !value && "text-muted-foreground")}>{value || empty}
+        {children}
+      </dd>
     </>
   );
 }
