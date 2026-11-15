@@ -12,7 +12,7 @@
 | `GET /api/health` | состояние ядра как есть + `db` |
 | `GET /api/kb` | база знаний разделами — байт в байт как у ядра |
 | `POST /api/chat` `{messages, mode}` | SSE ядра насквозь: `stage` → `stage` → `answer` → `done`; ответ ложится в `answers` |
-| `POST /api/lead` | заявка с резюме модели (без модели — список вопросов) → `leads`; ответ `{id, summary}` |
+| `POST /api/lead` | заявка с резюме модели (без модели — список вопросов) и оценкой правилами (`leads.score`: hot/warm/cold, причины, что спросить) → `leads`; `callback: {time: morning\|day\|evening\|any, timezone}` — удобное время, пожелание, а не запись (`leads.callback_preference`); `kind: callback\|assessment\|demo\|pilot` — тип заявки, демо и пилот только если в разговоре была платформа учёта (`leads.kind`, первая строка резюме); ответ `{id, summary, kind}` — оценку клиент не видит |
 | `POST /api/feedback` | 👍/👎 → `feedback` |
 | `GET /api/settings` | настройки RAG ядра: текущие, из окружения, пределы |
 | `POST /api/settings` | `{"values": {...}}` — глобально, до перезапуска ядра; проверяет ядро |
@@ -36,6 +36,7 @@ internal/
   dialog/                       предмет: реплики, их чистка, пересказ
   chat/        chat/usecase/    ответ: поток ядра → клиенту, ответ → журнал
   lead/        lead/usecase/    заявка: контакты, резюме моделью, номер
+  lead/score/                   оценка заявки правилами с причинами и «что спросить» (ADR 0005)
   feedback/    feedback/usecase/ оценка
   health/                       живость для хостинга и состояние для фронта
   document/                     T9: фото/PDF → текст (сигнатура, пределы, vision-модель только как OCR)

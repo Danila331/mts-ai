@@ -18,7 +18,7 @@
 | [0002](adr/0002-hybrid-search-and-reranker.md) | гибридный поиск BM25 + bge-m3 через RRF, затем реранкер | принято, реализовано |
 | [0003](adr/0003-sse-for-answer-stream.md) | SSE для потока ответа | принято, реализовано частично: этапы есть, токенов нет (T13) |
 | [0004](adr/0004-go-api-and-python-core.md) | Go-API отдельно от Python-ядра | принято, реализовано |
-| [0005](adr/0005-deterministic-lead-scoring.md) | детерминированный скоринг заявки | принято, не реализовано (T3) |
+| [0005](adr/0005-deterministic-lead-scoring.md) | детерминированный скоринг заявки | принято, реализовано (T3) |
 | [0006](adr/0006-vision-only-as-ocr.md) | vision-модель только как OCR перед Qwen | принято, не реализовано (T9) |
 
 Связанные документы: [`docs/deploy.md`](../deploy.md) (службы на Vercel и Railway, переменные),

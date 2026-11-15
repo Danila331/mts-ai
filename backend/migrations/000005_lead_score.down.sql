@@ -1,0 +1,2 @@
+ALTER TABLE leads DROP COLUMN IF EXISTS callback_preference;
+ALTER TABLE leads DROP COLUMN IF EXISTS score;

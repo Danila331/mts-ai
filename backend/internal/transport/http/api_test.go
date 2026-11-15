@@ -524,9 +524,18 @@ func TestLeadAndFeedback(t *testing.T) {
 	var l struct{ ID, Summary string }
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &l))
 	assert.Len(t, l.ID, 10)
-	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", l.Summary, "без модели — список вопросов")
+	assert.True(t, strings.HasPrefix(l.Summary, "Тип заявки: Обратный звонок\nВопросы клиента: Нужен АСКУЭ\nЧто уточнить менеджеру: "),
+		"без модели — список вопросов и что уточнить: %q", l.Summary)
 	require.Len(t, store.leads, 1)
 	assert.Equal(t, "Иван", store.leads[0].Name)
+	assert.NotEmpty(t, store.leads[0].Score.Grade, "оценка сохранена с заявкой")
+	assert.NotContains(t, rec.Body.String(), "grade", "оценку видит менеджер, а не клиент")
+	assert.Equal(t, lead.KindCallback, store.leads[0].Kind, "без типа — обратный звонок")
+
+	rec = do(s, http.MethodPost, "/api/lead",
+		`{"name": "Иван", "phone": "+7 900", "consent": true, "kind": "demo", "messages": [{"role": "user", "content": "Нужен АСКУЭ"}]}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "без разговора о платформе учёта демо-кабинета нет")
+	assert.Len(t, store.leads, 1)
 
 	rec = do(s, http.MethodPost, "/api/feedback", `{"session_id": "s", "message_id": "m", "rating": -1, "comment": "мимо"}`)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -879,18 +888,28 @@ func TestLeadFromChatWithConsent(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(evs[1].data), &v))
 	assert.True(t, v.ReadyForLead, "есть имя, телефон и компания — карточка заявки")
 
-	lead := `{"name": "Тестов Тест", "phone": "+7 900 000 00 00", "company": "ООО Учебный склад",
+	form := `{"name": "Тестов Тест", "phone": "+7 900 000 00 00", "company": "ООО Учебный склад",
 		"messages": [{"role": "user", "content": "q"}], "session_id": "sess-lead-1"`
-	rec = do(s, http.MethodPost, "/api/lead", lead+`}`)
+	rec = do(s, http.MethodPost, "/api/lead", form+`}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "без согласия заявки нет")
 	assert.Contains(t, rec.Body.String(), "согласие")
 	assert.Empty(t, store.leads)
 
-	rec = do(s, http.MethodPost, "/api/lead", lead+`, "consent": true}`)
+	rec = do(s, http.MethodPost, "/api/lead", form+`, "consent": true, "callback": {"time": "15:00"}}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "точное время — не вариант выбора")
+	assert.Empty(t, store.leads)
+
+	rec = do(s, http.MethodPost, "/api/lead", form+`, "consent": true, "kind": "pilot",
+		"callback": {"time": "morning", "timezone": "Europe/Moscow"}}`)
 	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"kind":"pilot"`, "платформу учёта обсуждали — пилот можно")
 	require.Len(t, store.leads, 1)
 	assert.Equal(t, "sess-lead-1", store.leads[0].SessionID)
 	assert.Contains(t, string(store.leads[0].Passport), "ООО Учебный склад", "паспорт сессии ушёл в заявку")
+	assert.Equal(t, lead.Callback{Time: "morning", Timezone: "Europe/Moscow"}, store.leads[0].Callback)
+	assert.Contains(t, string(store.leads[0].Passport), "утро, часовой пояс Europe/Moscow")
+	// T4: в ответе API нет обещаний точного времени, срока звонка или имени.
+	assert.NotRegexp(t, `\d{1,2}:\d{2}|через \d+|в течение|сегодня|завтра`, rec.Body.String())
 }
 
 func TestPatchPassportByClient(t *testing.T) {

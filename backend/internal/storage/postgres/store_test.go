@@ -15,6 +15,7 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/lead/score"
 	"github.com/Danila331/mts-ai/backend/internal/privacy"
 	"github.com/Danila331/mts-ai/backend/internal/session"
 )
@@ -74,9 +75,39 @@ func TestStore(t *testing.T) {
 		dup := lead.Lead{Code: "0123456789", Summary: "s"}
 		assert.ErrorIs(t, s.CreateLead(ctx, &dup), lead.ErrCodeTaken)
 
-		var source string
-		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT summary_source FROM leads WHERE id = $1", l.ID).Scan(&source))
+		var source, scored string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT summary_source, score::text FROM leads WHERE id = $1", l.ID).
+			Scan(&source, &scored))
 		assert.Equal(t, "digest", source, "без источника — список вопросов")
+		assert.Equal(t, "{}", scored, "заявка без оценки — пустой объект")
+
+		withScore := lead.Lead{Code: "9876543210", Summary: "s", Score: score.Score{Grade: score.Warm, Points: 55,
+			Reasons: []string{"Подходит: Платформа учёта"}, Missing: []string{"схема сбора данных"}, Product: "platform"}}
+		require.NoError(t, s.CreateLead(ctx, &withScore))
+		var raw []byte
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT score FROM leads WHERE id = $1", withScore.ID).Scan(&raw))
+		var back score.Score
+		require.NoError(t, json.Unmarshal(raw, &back))
+		assert.Equal(t, withScore.Score, back, "оценка лежит в заявке как есть")
+
+		var callback string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT callback_preference::text FROM leads WHERE id = $1", l.ID).Scan(&callback))
+		assert.Equal(t, "{}", callback, "время не выбрано — пустой объект")
+		withCallback := lead.Lead{Code: "5555555555", Summary: "s",
+			Contacts: lead.Contacts{Callback: lead.Callback{Time: "day", Timezone: "Europe/Moscow"}}}
+		require.NoError(t, s.CreateLead(ctx, &withCallback))
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT callback_preference FROM leads WHERE id = $1", withCallback.ID).Scan(&raw))
+		assert.JSONEq(t, `{"time": "day", "timezone": "Europe/Moscow"}`, string(raw))
+
+		var kind string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT kind FROM leads WHERE id = $1", l.ID).Scan(&kind))
+		assert.Equal(t, "callback", kind, "без типа — обратный звонок")
+		demo := lead.Lead{Code: "7777777777", Summary: "s", Contacts: lead.Contacts{Kind: lead.KindDemo}}
+		require.NoError(t, s.CreateLead(ctx, &demo))
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT kind FROM leads WHERE id = $1", demo.ID).Scan(&kind))
+		assert.Equal(t, "demo", kind)
+		bad := lead.Lead{Code: "8888888888", Summary: "s", Contacts: lead.Contacts{Kind: "meeting"}}
+		assert.Error(t, s.CreateLead(ctx, &bad), "тип вне списка не пройдёт и мимо сервиса: CHECK в базе")
 
 		l.Summary, l.SummarySource = "резюме моделью", lead.SummaryLLM
 		require.NoError(t, s.UpdateLeadSummary(ctx, &l))
