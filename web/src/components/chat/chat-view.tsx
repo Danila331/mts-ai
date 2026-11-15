@@ -1,12 +1,14 @@
 "use client";
 
 import { CheckCircle2, ChevronRight, Headset } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ChatController } from "@/hooks/use-chat";
 import type { KbIndex } from "@/hooks/use-kb";
 import { sendFeedback } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { type WizardAnswers, type WizardFlow, chatReplica, passportValues } from "@/lib/wizards/engine";
+import { WizardEntry, WizardRunner, WizardSummary } from "@/components/wizard/wizard";
 import { Composer } from "./composer";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
@@ -81,6 +83,7 @@ export function ChatView({
   starters,
   prefill,
   disabled,
+  wizards,
 }: {
   chat: ChatController;
   kb: KbIndex | null;
@@ -96,6 +99,8 @@ export function ChatView({
   starters?: Starter[];
   prefill?: { text: string; nonce: number };
   disabled?: boolean;
+  /** Мастера (T7), которые предлагаются в пустом чате. Только клиентский режим chat: им нужен паспорт. */
+  wizards?: readonly WizardFlow[];
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const messages = chat.active?.messages ?? [];
@@ -125,6 +130,20 @@ export function ChatView({
 
   const hasAnswers = messages.some((m) => m.role === "assistant" && m.answer);
   const session = chat.active;
+
+  // Открытый мастер привязан к диалогу: переключились на другой — мастер не тянется следом.
+  const [wizardOpen, setWizardOpen] = useState<{ session: string; flow: string } | null>(null);
+  const openFlow = wizardOpen?.session === chat.activeId ? wizards?.find((f) => f.id === wizardOpen.flow) : undefined;
+  const record = session?.wizard;
+  const recordFlow = record ? wizards?.find((f) => f.id === record.flow) : undefined;
+  const startWizard = (flow: WizardFlow) => setWizardOpen({ session: chat.activeId, flow: flow.id });
+  // Ответы мастера уходят в чат репликой клиента и в паспорт задачи (как правка клиента) — после ответа бота.
+  const finishWizard = (flow: WizardFlow, answers: WizardAnswers, intent: "continue" | "handoff") => {
+    chat.setWizard({ flow: flow.id, answers }, passportValues(flow, answers));
+    setWizardOpen(null);
+    send(chatReplica(flow, answers, intent));
+  };
+
   const passport = session?.passport;
   // Паспорт показываем, когда в нём что-то есть; карточку заявки — когда есть контакты или согласие
   // и заявка ещё не отправлена, и только после ответа (не посреди генерации).
@@ -145,6 +164,23 @@ export function ChatView({
   );
 
   // Пустой стенд — как в Claude: знак и вопрос одной строкой, поле ввода, тихие подсказки под ним.
+  if (!messages.length && !compact && openFlow) {
+    return (
+      <div className="h-full min-h-0 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[680px] px-5 pt-8 pb-16 sm:px-6">
+          <WizardRunner
+            key={`${chat.activeId}-${openFlow.id}`}
+            flow={openFlow}
+            kb={kb}
+            onOpenChunk={onOpenChunk}
+            onClose={() => setWizardOpen(null)}
+            onFinish={(answers, intent) => finishWizard(openFlow, answers, intent)}
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (!messages.length && !compact) {
     return (
       <div className="h-full min-h-0 overflow-y-auto">
@@ -162,6 +198,13 @@ export function ChatView({
           <div className="mt-4">
             <Starters onPick={send} items={starters} />
           </div>
+          {!!wizards?.length && (
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {wizards.map((flow) => (
+                <WizardEntry key={flow.id} flow={flow} onStart={() => startWizard(flow)} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -176,7 +219,18 @@ export function ChatView({
             compact ? "gap-5 px-4 pt-4 pb-6" : "max-w-[720px] gap-7 px-5 pt-4 pb-10 sm:px-6",
           )}
         >
-          {!messages.length && compact && (
+          {!messages.length && compact && openFlow && (
+            <WizardRunner
+              key={`${chat.activeId}-${openFlow.id}`}
+              flow={openFlow}
+              kb={kb}
+              compact
+              onOpenChunk={onOpenChunk}
+              onClose={() => setWizardOpen(null)}
+              onFinish={(answers, intent) => finishWizard(openFlow, answers, intent)}
+            />
+          )}
+          {!messages.length && compact && !openFlow && (
             <div className="space-y-4">
               <div className="flex items-start gap-2.5">
                 <BotAvatar className="mt-0.5 size-6" />
@@ -184,7 +238,10 @@ export function ChatView({
                   {greeting ?? GREETING}
                 </p>
               </div>
-              <div className="pl-8.5">
+              <div className="space-y-1.5 pl-8.5">
+                {wizards?.map((flow) => (
+                  <WizardEntry key={flow.id} flow={flow} onStart={() => startWizard(flow)} compact />
+                ))}
                 <Starters onPick={send} compact items={starters} />
               </div>
             </div>
@@ -193,6 +250,16 @@ export function ChatView({
             <div className={cn("sticky top-0 z-10 -mt-1 bg-background/95 pb-1 backdrop-blur", !compact && "pt-1")}>
               <PassportCard key={session?.id} passport={passport} onEdit={chat.editPassport} compact={compact} />
             </div>
+          )}
+          {record && recordFlow && messages.length > 0 && (
+            <WizardSummary
+              key={session?.id}
+              flow={recordFlow}
+              answers={record.answers}
+              kb={kb}
+              onOpenChunk={onOpenChunk}
+              compact={compact}
+            />
           )}
           {messages.map((m) => (
             <MessageItem

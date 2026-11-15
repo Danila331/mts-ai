@@ -1,3 +1,5 @@
+import type { WizardRecord } from "@/lib/wizards/engine";
+
 // Контракт API (Go-служба backend/, ответ строит ядро scripts/core_api.py). Поля — как в JSON сервера.
 
 export type Role = "user" | "assistant";
@@ -207,6 +209,8 @@ export interface Session {
   messages: Message[];
   lead?: { id: string; summary: string };
   passport?: Passport;
+  /** Пройденный мастер (T7): итог пересчитывается по ответам, паспорт получает их после первого ответа бота. */
+  wizard?: WizardRecord;
 }
 
 // ---------- настройки RAG (GET/POST /api/settings) ----------
