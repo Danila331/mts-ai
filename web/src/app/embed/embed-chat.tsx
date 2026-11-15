@@ -158,18 +158,15 @@ export function EmbedChat({ allowedOrigins = NO_ORIGINS }: { allowedOrigins?: st
           <>
             <BotAvatar className="size-9" />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-[15px] leading-tight font-semibold">{title}</span>
-                <span className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-muted px-1.5 text-[10.5px] font-medium text-muted-foreground">
-                  {AI_LABEL}
-                </span>
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+              <div className="truncate text-[15px] leading-tight font-semibold">{title}</div>
+              <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="relative flex size-1.5 shrink-0">
                   <span className="absolute inset-0 animate-ping rounded-full bg-success motion-reduce:hidden" />
                   <span className="relative size-1.5 rounded-full bg-success" />
                 </span>
-                <span className="truncate">{subtitle}</span>
+                <span className="truncate">
+                  <span className="font-medium text-foreground/70">{AI_LABEL}</span> · {subtitle}
+                </span>
               </div>
             </div>
           </>

@@ -57,6 +57,7 @@ export function Copilot() {
             onOpenChunk={openChunk}
             heading="Что подготовить к клиенту?"
             greeting="Для менеджеров МТС: сравнение продуктов, черновик письма, ответ на возражение — только по базе знаний EnergyTool, с источниками."
+            placeholder="Спросите базу: сравнение, письмо клиенту, возражение…"
             starters={SCENARIOS}
           />
         )}

@@ -17,15 +17,18 @@ export function Starters({
   onPick,
   compact,
   items = STARTERS,
+  limit = 4,
 }: {
   onPick: (text: string) => void;
   compact?: boolean;
   items?: Starter[];
+  /** Сколько вопросов показать в компактном виде (виджет: пустой экран короче, чтобы не прятать приветствие). */
+  limit?: number;
 }) {
   if (compact) {
     return (
       <ul className="grid gap-1.5" aria-label="Примеры вопросов">
-        {items.slice(0, 4).map(({ label, text }) => (
+        {items.slice(0, limit).map(({ label, text }) => (
           <li key={label}>
             <button
               type="button"

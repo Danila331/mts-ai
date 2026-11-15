@@ -6,7 +6,14 @@ import {
   ChevronDown,
   Code2,
   Copy,
+  FileCode2,
+  Globe,
+  Headset,
+  Layers,
   Lock,
+  Braces,
+  LoaderCircle,
+  TriangleAlert,
   MessageCircle,
   Monitor,
   MousePointerClick,
@@ -18,7 +25,7 @@ import {
   Smartphone,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -28,6 +35,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { TOPICS, type TopicName, topicByName } from "@/components/chat/topics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { matchTopic } from "@/lib/page-context";
+import {
+  failMessage,
+  initialPreview,
+  isMixedContent,
+  LOAD_TIMEOUT_MS,
+  previewReducer,
+  probeStand,
+  standLabel,
+  type PreviewState,
+} from "@/lib/site-preview";
 import { cn } from "@/lib/utils";
 
 /** Строка data-topics: префикс пути страницы сайта → тема приветствия и первых вопросов в чате. */
@@ -345,115 +362,42 @@ function Segmented<T extends string>({
   );
 }
 
-/** Точка на шкале: угол в градусах (0 — вправо, против часовой), центр 130/130. */
-const dialPoint = (deg: number, r: number) => {
-  const a = (deg * Math.PI) / 180;
-  return [130 + r * Math.cos(a), 130 - r * Math.sin(a)] as const;
-};
-const DIAL_FROM = 200;
-const DIAL_TO = -20;
-const DIAL_ACTIVE = 52;
-
-/**
- * Фигура справа от заголовка: шкала прибора учёта (знак EnergyTool крупно) со стрелкой в красной зоне,
- * поверх — уменьшенные подсказка и кнопка виджета в текущих настройках.
- */
-function HeroFigure({ s }: { s: Settings }) {
-  const [settled, setSettled] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setSettled(true), 120);
-    return () => clearTimeout(t);
-  }, []);
-  const color = isHex(s.color) ? s.color : DEFAULTS.color;
-  const [sx, sy] = dialPoint(DIAL_FROM, 100);
-  const [ex, ey] = dialPoint(DIAL_TO, 100);
-  const [ax, ay] = dialPoint(DIAL_ACTIVE, 100);
-  // Стрелка уходит в красную зону: виджет «включён».
-  const needle = settled ? 90 - 16 : 90 - DIAL_FROM;
-  const ticks = Array.from({ length: 12 }, (_, k) => DIAL_FROM - k * 20);
-  const quick = quickList(s)[0];
-
+/** Сводка справа от тега: строки «иконка · подпись · значение» на одной сетке, значения одним шрифтом. */
+function Summary({ state, scriptSize }: { state: PreviewState; scriptSize: string | null }) {
+  const dot =
+    state.phase === "probing" ? "bg-dim animate-pulse" : state.phase === "failed" ? "bg-destructive" : "bg-success";
+  const rows: { icon: React.ElementType; label: string; value: React.ReactNode; title?: string }[] = [
+    {
+      icon: FileCode2,
+      label: "widget.js",
+      value: scriptSize ? `${scriptSize} gzip · без зависимостей` : "без зависимостей",
+    },
+    { icon: Layers, label: "Изоляция", value: "Shadow DOM + iframe", title: FACTS[0].text },
+    { icon: Smartphone, label: "На телефоне", value: "во весь экран", title: FACTS[1].text },
+    { icon: Headset, label: "Заявка", value: "с резюме диалога", title: FACTS[2].text },
+    { icon: Braces, label: "JS API", value: "open · close · ask" },
+    {
+      icon: Globe,
+      label: "Копия сайта МТС",
+      value: (
+        <span className="inline-flex items-center gap-1.5">
+          <span className={cn("size-1.5 rounded-full", dot)} />
+          {standLabel(state)}
+        </span>
+      ),
+    },
+  ];
   return (
-    <div aria-hidden className="relative hidden h-[376px] select-none lg:block">
-      <div className="absolute top-0 right-0 size-[280px] rounded-[48px] border bg-surface shadow-[var(--shadow-float)]">
-        <svg viewBox="0 0 260 260" className="absolute inset-[10px] size-[260px]">
-          {ticks.map((t, k) => {
-            const [x1, y1] = dialPoint(t, 118);
-            const [x2, y2] = dialPoint(t, k % 2 ? 123 : 128);
-            return (
-              <line
-                key={t}
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
-                stroke={t <= DIAL_ACTIVE + 4 && t >= DIAL_TO ? color : "var(--dim)"}
-                strokeWidth={k % 2 ? 2 : 3}
-                strokeLinecap="round"
-              />
-            );
-          })}
-          <path
-            d={`M${sx} ${sy}A100 100 0 1 1 ${ex} ${ey}`}
-            stroke="var(--border)"
-            strokeWidth="16"
-            strokeLinecap="round"
-            fill="none"
-          />
-          <path
-            d={`M${ax} ${ay}A100 100 0 0 1 ${ex} ${ey}`}
-            stroke={color}
-            strokeWidth="16"
-            strokeLinecap="round"
-            fill="none"
-            className="transition-[stroke] duration-300"
-          />
-          <g
-            style={{ transform: `rotate(${needle}deg)`, transformOrigin: "130px 130px", transformBox: "view-box" }}
-            className="transition-transform duration-[1400ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none"
-          >
-            <line x1="130" y1="130" x2="130" y2="48" stroke="var(--foreground)" strokeWidth="5" strokeLinecap="round" />
-          </g>
-          <circle cx="130" cy="130" r="11" fill="var(--foreground)" />
-          <circle cx="130" cy="130" r="4" fill="var(--surface)" />
-          <text x="130" y="186" textAnchor="middle" className="fill-foreground font-sans text-[30px] font-semibold tracking-tight">
-            1
-          </text>
-          <text x="130" y="206" textAnchor="middle" className="fill-muted-foreground font-sans text-[12px]">
-            строка кода
-          </text>
-        </svg>
-      </div>
-
-      <div className="absolute bottom-0 left-0 w-[232px] rounded-[20px] rounded-br-[6px] border bg-background p-3.5 shadow-[var(--shadow-pop)] dark:bg-card">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full text-white" style={{ background: color }}>
-            <svg viewBox="0 0 28 28" fill="none" className="size-6">
-              <path d="M7.42 19.39A7 7 0 1 1 20.58 19.39" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-              <path d="M14 17 17.6 12.7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-              <circle cx="14" cy="17" r="1.7" fill="currentColor" />
-            </svg>
-          </span>
-          <span className="min-w-0 leading-tight">
-            <span className="block truncate text-[13px] font-semibold">{s.title || "Консультант"}</span>
-            <span className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
-              <span className="size-1.5 rounded-full bg-success" /> на связи
-            </span>
-          </span>
+    <dl className="grid content-start self-start border-y py-2 lg:border-y-0 lg:border-l lg:py-0 lg:pl-6">
+      <div className="flex h-8 items-center text-[12px] font-medium text-muted-foreground">Как устроено</div>
+      {rows.map(({ icon: Icon, label, value, title }) => (
+        <div key={label} className="flex h-9 items-center gap-2.5 text-[13px]" title={title}>
+          <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <dt className="min-w-0 truncate">{label}</dt>
+          <dd className="tnum ml-auto shrink-0 text-right text-[13px] text-muted-foreground">{value}</dd>
         </div>
-        <p className="mt-2.5 line-clamp-2 text-[12.5px] leading-snug">{s.greeting}</p>
-        {quick && (
-          <div className="mt-2.5 truncate rounded-[10px] bg-muted px-2.5 py-1.5 text-[12px] font-medium">{quick}</div>
-        )}
-      </div>
-
-      <span
-        className="absolute top-[244px] right-[-12px] flex size-14 items-center justify-center rounded-full text-white shadow-[0_2px_4px_rgb(29_32_35/0.12),0_10px_28px_rgb(29_32_35/0.22)] transition-colors duration-300"
-        style={{ background: color }}
-      >
-        <MessageCircle className="size-6" />
-      </span>
-    </div>
+      ))}
+    </dl>
   );
 }
 
@@ -463,13 +407,17 @@ const FACTS = [
   { title: "Заявка менеджеру", text: "Контакты и резюме диалога уходят менеджеру — клиенту не нужно повторять задачу." },
 ];
 
-export function WidgetStudio({ standUrl }: { standUrl: string }) {
+export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string; scriptSize?: string | null }) {
   const [s, setS] = useState<Settings>(DEFAULTS);
   const [origin, setOrigin] = useState("https://energytool-ai.example");
   const [device, setDevice] = useState<"desktop" | "phone">("desktop");
   const [source, setSource] = useState<"mts" | "blank">("mts");
-  const [standUp, setStandUp] = useState<boolean | null>(null);
-  const [src, setSrc] = useState("");
+  const [pv, dispatch] = useReducer(previewReducer, initialPreview);
+  const [probeRun, setProbeRun] = useState(0);
+  // Адрес превью вместе с источником, для которого он собран: чужой адрес в iframe не попадает.
+  const [built, setBuilt] = useState<{ mts: boolean; url: string }>({ mts: false, url: "" });
+  const [seenKey, setSeenKey] = useState("");
+  const [loadedSrc, setLoadedSrc] = useState("");
   const [nonce, setNonce] = useState(0);
   const [previewPath, setPreviewPath] = useState("/");
   const frame = useRef<HTMLIFrameElement>(null);
@@ -486,16 +434,33 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- адрес стенда известен только в браузере
     setOrigin(window.location.origin);
-    // Запущен ли стенд с копией сайта МТС; если нет — превью на пустой странице.
-    fetch(stand, { mode: "no-cors", cache: "no-store" })
-      .then(() => setStandUp(true))
-      .catch(() => {
-        setStandUp(false);
-        setSource("blank");
-      });
-  }, [stand]);
+  }, []);
 
-  const mts = source === "mts" && standUp !== false;
+  // Доступна ли копия сайта МТС: тайм-аут, смешанное содержимое http/https, отмена при повторе и размонтировании.
+  useEffect(() => {
+    let alive = true;
+    if (isMixedContent(window.location.protocol, stand)) {
+      dispatch({ type: "probeFail", reason: "mixed" });
+      return;
+    }
+    void probeStand(stand).then((ok) => {
+      if (alive) dispatch(ok ? { type: "probeOk" } : { type: "probeFail", reason: "down" });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [stand, probeRun]);
+
+  const retry = () => {
+    setSource("mts");
+    dispatch({ type: "retry" });
+    setProbeRun((n) => n + 1);
+    setNonce((n) => n + 1);
+  };
+
+  const probing = source === "mts" && pv.phase === "probing";
+  const mts = source === "mts" && pv.phase !== "failed";
+  const siteFailed = source === "mts" && pv.phase === "failed";
 
   // Страница превью: главная или одна из страниц с темой — виджет видит этот путь и берёт тему из data-topics.
   const topics = useMemo(() => topicsMap(s), [s]);
@@ -505,7 +470,7 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
 
   // Превью — настоящий widget.js: на копии сайта МТС (стенд принимает настройки в адресе) или на заглушке.
   useEffect(() => {
-    if (standUp === null) return;
+    if (probing) return;
     const t = setTimeout(() => {
       const cfg: Record<string, string> = {
         title: s.title,
@@ -521,17 +486,29 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
         const q = new URLSearchParams(Object.entries(cfg).map(([k, v]) => [`w_${k}`, v]));
         q.set("w_preview", "1");
         q.set("n", String(nonce));
-        setSrc(`${stand}/?${q}`);
+        setBuilt({ mts: true, url: `${stand}/?${q}` });
       } else {
-        setSrc(`/widget-preview.html?${new URLSearchParams({ ...cfg, n: String(nonce) })}`);
+        setBuilt({ mts: false, url: `/widget-preview.html?${new URLSearchParams({ ...cfg, n: String(nonce) })}` });
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [s, nonce, mts, stand, standUp, path, topics]);
+  }, [s, nonce, mts, probing, stand, path, topics]);
+
+  const src = !probing && built.mts === mts ? built.url : "";
+  const frameKey = `${device}-${mts}`;
+  const frameReady = src !== "" && seenKey === frameKey;
+  const loaded = src !== "" && loadedSrc === src;
+
+  // Копия сайта не загрузилась за отведённое время — переходим на пустую страницу с предложением повторить.
+  useEffect(() => {
+    if (!mts || !src || loaded) return;
+    const t = setTimeout(() => dispatch({ type: "loadTimeout" }), LOAD_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [mts, src, loaded]);
 
   const command = (action: "ask" | "toggle", text?: string) => {
     const win = frame.current?.contentWindow;
-    if (!win) return;
+    if (!win || !frameReady) return;
     if (mts) win.postMessage({ type: "eb:preview", action, text }, standOrigin);
     else if (action === "ask") win.EnergyToolChat?.ask(text ?? "");
     else win.EnergyToolChat?.toggle();
@@ -550,7 +527,7 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
       </PageBar>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1180px] px-5 pt-6 pb-24 sm:px-8">
-          <header className="grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_400px]">
+          <header className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-12">
             <div className="grid gap-5">
             <h1 className="text-[34px] leading-[1.08] font-semibold tracking-[-0.03em] sm:text-[40px]">
               Консультант на любом сайте —
@@ -564,7 +541,7 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
             </p>
             <OneLine origin={origin} full={code} />
            </div>
-            <HeroFigure s={s} />
+            <Summary state={pv} scriptSize={scriptSize} />
           </header>
 
           <div className="mt-12 grid gap-8 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-10">
@@ -741,10 +718,10 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                 </h2>
                 <Segmented
                   label="Страница для превью"
-                  value={mts ? "mts" : "blank"}
-                  onChange={setSource}
+                  value={source === "mts" && !siteFailed ? "mts" : "blank"}
+                  onChange={(v) => (v === "mts" && pv.phase === "failed" ? retry() : setSource(v))}
                   options={[
-                    { value: "mts", label: "Сайт МТС", disabled: standUp === false },
+                    { value: "mts", label: "Сайт МТС" },
                     { value: "blank", label: "Пустая страница" },
                   ]}
                 />
@@ -779,7 +756,7 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                       render={
                         <button
                           type="button"
-                          onClick={() => setNonce((n) => n + 1)}
+                          onClick={() => (pv.phase === "failed" ? retry() : setNonce((n) => n + 1))}
                           aria-label="Обновить страницу"
                           className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                         />
@@ -790,20 +767,48 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                     <TooltipContent>Обновить: снова показать подсказку</TooltipContent>
                   </Tooltip>
                 </div>
-                <div className="flex justify-center bg-muted">
-                  {src ? (
+                {siteFailed && (
+                  <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-surface px-3.5 py-2.5 text-[13px]">
+                    <TriangleAlert className="size-4 shrink-0 text-warning" aria-hidden />
+                    <span className="min-w-0 flex-1 basis-56 text-muted-foreground">
+                      {failMessage(pv.reason)} Показываю пустую страницу — виджет работает и на ней.
+                    </span>
+                    <Button size="sm" variant="outline" onClick={retry}>
+                      <RotateCcw /> Повторить
+                    </Button>
+                  </div>
+                )}
+                <div className="relative flex justify-center bg-muted">
+                  {src && (
                     <iframe
                       ref={frame}
-                      key={`${device}-${mts}`}
+                      key={frameKey}
                       src={src}
+                      onLoad={() => {
+                        setLoadedSrc(src);
+                        setSeenKey(frameKey);
+                        if (mts) dispatch({ type: "loaded" });
+                      }}
                       title={mts ? "Превью: сайт МТС EnergyTool с виджетом" : "Превью виджета на странице сайта"}
                       className={cn(
                         "block h-[clamp(600px,calc(100dvh-170px),780px)] border-0 bg-white",
                         device === "phone" ? "w-[390px] border-x" : "w-full",
                       )}
                     />
-                  ) : (
-                    <div className="h-[clamp(600px,calc(100dvh-170px),780px)] w-full animate-pulse bg-muted" />
+                  )}
+                  {!frameReady && (
+                    <div
+                      role="status"
+                      className={cn(
+                        "flex items-center justify-center gap-2 bg-muted text-[13px] text-muted-foreground",
+                        src
+                          ? "absolute inset-0"
+                          : "h-[clamp(600px,calc(100dvh-170px),780px)] w-full",
+                      )}
+                    >
+                      <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+                      {probing ? "Проверяю копию сайта МТС…" : mts ? "Загружаю копию сайта МТС…" : "Загружаю превью…"}
+                    </div>
                   )}
                 </div>
               </div>
@@ -838,9 +843,9 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                   Открыть / закрыть чат
                 </Button>
               </div>
-              {standUp === false && (
+              {siteFailed && (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Стенд с сайтом МТС не запущен — превью на пустой странице. Запуск:{" "}
+                  Запуск копии сайта:{" "}
                   <code className="font-mono">node web/scripts/stand.mjs --site &lt;папка сайта&gt;</code>
                 </p>
               )}
