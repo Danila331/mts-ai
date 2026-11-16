@@ -698,7 +698,7 @@
 - `.github/dependabot.yml`: gomod, npm, pip, docker, github-actions.
 - В CI добавить: `govulncheck ./...`, `npm audit --audit-level=high`, `pip-audit -r solution-requirements.txt`, `trivy fs` и `trivy image` по трём образам; SBOM `trivy fs --format cyclonedx` как артефакт.
 - Actions зафиксировать по SHA; базовые образы — по digest.
-- В README — раздел «Зависимости и их проверка».
+- В docs/development.md — раздел «Зависимости и их проверка» (был в README).
 
 ### T37, T38, T39 — отменены
 
