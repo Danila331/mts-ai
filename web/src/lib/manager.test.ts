@@ -156,3 +156,13 @@ describe("карточка заявки: всё, что собрано в чат
     assert.deepEqual(pickTranscript(null, undefined, "sent"), []);
   });
 });
+
+test("паспорт у менеджера: телефон в читаемом виде, как в карточке заявки", () => {
+  const fields = filledFields({
+    fields: [
+      { key: "phone", label: "Телефон", group: "contacts", value: "+79000000000", source: "client" },
+      { key: "region", label: "Регион", group: "general", value: "" },
+    ],
+  });
+  assert.deepEqual(fields.map((f) => f.value), ["+7 900 000-00-00"]);
+});

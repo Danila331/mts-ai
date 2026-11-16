@@ -263,7 +263,10 @@ export function pickTranscript(
  * контактов скрывалась — и сказанное клиентом в чате пропадало из карточки.
  */
 export function filledFields(passport: Partial<Passport> | null | undefined): PassportField[] {
-  return (passport?.fields ?? []).filter((f) => f.value?.trim());
+  // Телефон — в том же виде, что в карточке заявки: «+7 900 000-00-00», а не «+79000000000».
+  return (passport?.fields ?? [])
+    .filter((f) => f.value?.trim())
+    .map((f) => (f.key === "phone" && f.value ? { ...f, value: formatPhone(f.value) } : f));
 }
 
 /** Роль собеседника для менеджера: «Бизнес»; неизвестная или пустая роль — пустая строка. */
