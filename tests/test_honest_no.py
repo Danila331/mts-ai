@@ -217,24 +217,22 @@ class RulesFireOnDialogs(unittest.TestCase):
 class ChatOnly(unittest.TestCase):
     def test_block_only_in_chat_prompt(self):
         """Режим автопроверки не меняется: блок «честных нет» не попадает ни в один eval-промпт."""
-        from energybot.factmap import build_fm_messages
-        from energybot.prompts import HONEST_NO_MODE, build_messages, build_write_messages
+        from energybot.prompts import HONEST_NO_MODE, build_write_messages, system_prompt
         block = HONEST_NO_MODE.strip()
         turns = user("Мы энергосбыт, нужен поиск хищений")
-        for style in ("tight", "full", "recipe", "jury", "jury2"):
-            for plan in (0, 1, 2):
-                for full_kb in (False, True):
-                    msgs = build_messages("СПР", "МАТ", turns, "eval", style=style, plan=plan, full_kb=full_kb, near=2)
-                    self.assertNotIn(block, "\n".join(m["content"] for m in msgs), style)
-                    self.assertNotIn("ЧЕСТНОЕ «НЕ ПОДОЙДЁТ»", "\n".join(m["content"] for m in msgs), style)
-            chat = "\n".join(m["content"] for m in build_messages("СПР", "МАТ", turns, "chat", style=style))
-            self.assertIn(block, chat, style)
-            copilot = "\n".join(m["content"] for m in build_messages("СПР", "МАТ", turns, "copilot", style=style))
-            self.assertNotIn(block, copilot, style)
-        for builder in (lambda m: build_write_messages("МАТ", turns, "черновик", m),
-                        lambda m: build_fm_messages("КАРТА", "МАТ", turns, m)):
-            self.assertNotIn(block, "\n".join(x["content"] for x in builder("eval")))
-            self.assertIn(block, "\n".join(x["content"] for x in builder("chat")))
+        for examples in (None, ""):
+            ev = system_prompt("МАТ", "eval", examples)
+            self.assertNotIn(block, ev)
+            self.assertNotIn("ЧЕСТНОЕ «НЕ ПОДОЙДЁТ»", ev)
+            self.assertIn(block, system_prompt("МАТ", "chat", examples))
+            self.assertNotIn(block, system_prompt("МАТ", "copilot", examples))
+        for use_examples in (True, False):
+            texts = {m: "\n".join(x["content"] for x in build_write_messages(
+                "МАТ", turns, "черновик", m, use_examples=use_examples)) for m in ("eval", "chat", "copilot")}
+            self.assertNotIn(block, texts["eval"])
+            self.assertNotIn("ЧЕСТНОЕ «НЕ ПОДОЙДЁТ»", texts["eval"])
+            self.assertIn(block, texts["chat"])
+            self.assertNotIn(block, texts["copilot"])
         self.assertIn("скорее всего, не подойдёт", block)
         self.assertIn("Не отговаривай, если база говорит «может»", block)
 

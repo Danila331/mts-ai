@@ -74,16 +74,22 @@ class ModelDown(unittest.TestCase):
             self.assertFalse(chunk.is_guard)
             self.assertIn(s["excerpt"].rstrip("…")[:40], " ".join(chunk.text.split()))
 
-    def test_eval_mode_keeps_fallback(self):
+    def test_eval_mode_keeps_core_answer(self):
         with MockApi(fail_chat=True) as model:
             payload, _ = ask(make_app(model.url), "eval")
-        self.assertEqual(payload["text"], FALLBACK)
+        # v28: при сбое модели ядро само отдаёт выдержку из базы (extractive) — стенд её не подменяет.
+        self.assertNotEqual(payload["text"], core_api.DEGRADED_TEXT)
+        self.assertTrue(payload["text"].strip())
+        self.assertTrue(payload["text"].endswith("подскажет специалист.") or payload["text"] == FALLBACK)
         self.assertNotIn("degraded", payload)
 
-    def test_copilot_mode_keeps_fallback(self):
+    def test_copilot_mode_keeps_core_answer(self):
         with MockApi(fail_chat=True) as model:
             payload, _ = ask(make_app(model.url), "copilot")
-        self.assertEqual(payload["text"], FALLBACK)
+        # v28: при сбое модели ядро само отдаёт выдержку из базы (extractive) — стенд её не подменяет.
+        self.assertNotEqual(payload["text"], core_api.DEGRADED_TEXT)
+        self.assertTrue(payload["text"].strip())
+        self.assertTrue(payload["text"].endswith("подскажет специалист.") or payload["text"] == FALLBACK)
         self.assertNotIn("degraded", payload)
 
     def test_no_model_at_all(self):

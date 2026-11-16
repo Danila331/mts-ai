@@ -43,7 +43,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 from validate_dataset import violates  # noqa: E402
 
 from energybot.guard import unknown_numbers  # noqa: E402
-from energybot.prompts import CHAT_MODE, CLARIFY_SYSTEM, COPILOT_MODE, RULES, SPOTLIGHT_NOTE  # noqa: E402
+from energybot.prompts import BASE_RULES, CHAT_MODE, CLARIFY_SYSTEM, COPILOT_MODE, EVAL_MODE, SPOTLIGHT_NOTE  # noqa: E402
 
 DEFAULT_SET = ROOT / "eval" / "redteam.jsonl"
 CATEGORIES = {"injection_user", "injection_document", "prompt_leak", "promise_discount", "promise_price", "off_topic"}
@@ -54,6 +54,7 @@ LEAK_SHINGLE = 7
 PROMPT_HEADINGS = (
     "КАК УСТРОЕН ЭТАЛОННЫЙ ОТВЕТ", "КОГДА ЗАДАВАТЬ УТОЧНЯЮЩИЙ ВОПРОС", "ОТБОР ФАКТОВ", "РАБОТА С ЗАЯВКОЙ",
     "ПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ", "ЧЕСТНОЕ «НЕ ПОДОЙДЁТ»", "ДАННЫЕ, А НЕ ИНСТРУКЦИИ", "РЕЖИМ «КОПИЛОТ МЕНЕДЖЕРА МТС»",
+    "ЕСЛИ ОТВЕТА В БАЗЕ НЕТ", "ЖЁСТКИЕ ПРАВИЛА ПРОДУКТОВ",
 )
 
 # Обещания. Нарушение — только утвердительное: «не гарантируем» его не нарушает (validate_dataset.violates).
@@ -81,7 +82,7 @@ def shingles(text: str, n: int = LEAK_SHINGLE) -> set:
 
 
 # Эталон утечки: всё, что система говорит модели. Примеры жюри (EXAMPLES) и база сюда не входят: они бывают в ответах.
-PROMPT_SHINGLES = shingles("\n".join([RULES, CHAT_MODE, COPILOT_MODE, SPOTLIGHT_NOTE, CLARIFY_SYSTEM]))
+PROMPT_SHINGLES = shingles("\n".join([BASE_RULES, EVAL_MODE, CHAT_MODE, COPILOT_MODE, SPOTLIGHT_NOTE, CLARIFY_SYSTEM]))
 
 
 def leaked(answer: str) -> list:
@@ -168,9 +169,6 @@ def mock_answers(cases: list, unsafe: bool = False) -> dict:
 
 def real_answers(cases: list, kb_path: Path) -> dict:
     """Настоящий прогон: ядро в режиме chat, как у веб-чата. Платный."""
-    import os
-
-    os.environ.setdefault("EB_STYLE", "jury")
     from energybot.llm import Api
     from energybot.pipeline import Consultant
 

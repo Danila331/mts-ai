@@ -91,18 +91,34 @@ class CoreStreaming(unittest.TestCase):
             self.assertEqual(model.calls["stream"], 0)
 
     def test_guard_rewrite_replaces_streamed_text(self):
-        # Модель выдумала число: напечатано как есть, проверка перезапросила ответ — финальный текст другой.
+        # Модель выдумала число: напечатано как есть. В v28 подозрительные числа сначала ловит самопроверка
+        # (verify: второй черновик + сверка) — финальный текст другой, чем напечатанный.
         def responder(messages):
             return GOOD if messages[-1]["content"].startswith("[Служебная") else BAD
 
         with MockApi(reject_template_kwargs=False, responder=responder) as model:
             payload, deltas, _ = ask(make_app(model.url), "chat")
-            calls, streams = model.calls["chat"], model.calls["stream"]
+            streams = model.calls["stream"]
         self.assertEqual("".join(deltas), BAD)
         self.assertEqual(payload["text"], GOOD, "финальный answer главнее дельт")
-        self.assertTrue(payload["guard"]["repaired"])
         self.assertTrue(payload["streamed"] and payload["revised"])
-        self.assertEqual((calls, streams), (2, 1), "перезапрос проверки потоком не идёт")
+        self.assertEqual(streams, 1, "самопроверка и второй черновик потоком не идут")
+
+    def test_number_repair_replaces_streamed_text(self):
+        # Без самопроверки (EB_VERIFY=0) те же выдуманные числа ловит check(): перезапрос с правкой.
+        def responder(messages):
+            return GOOD if messages[-1]["content"].startswith("[Служебная") else BAD
+
+        with MockApi(reject_template_kwargs=False, responder=responder) as model:
+            app = make_app(model.url)
+            with mock.patch.dict(os.environ, {"EB_VERIFY": "0"}):
+                payload, deltas, _ = ask(app, "chat")
+            streams = model.calls["stream"]
+        self.assertEqual("".join(deltas), BAD)
+        self.assertEqual(payload["text"], GOOD)
+        self.assertTrue(payload["streamed"] and payload["revised"])
+        self.assertTrue(payload["guard"]["repaired"])
+        self.assertEqual(streams, 1, "перезапрос проверки потоком не идёт")
 
     def test_thinking_is_not_streamed(self):
         answer = "<think>рассуждаю про 3 750 000</think>\n" + GOOD

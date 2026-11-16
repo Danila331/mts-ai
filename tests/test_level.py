@@ -25,24 +25,25 @@ import core_api  # noqa: E402
 os.environ.clear()
 os.environ.update(_saved_env)
 
-from energybot.factmap import build_fm_messages  # noqa: E402
-from energybot.prompts import LEVEL_HINT, LEVELS, ROLES, build_messages, build_write_messages, level_hint  # noqa: E402
+from energybot.prompts import LEVEL_HINT, LEVELS, ROLES, build_write_messages, level_hint, system_prompt  # noqa: E402
 
 TURNS = [{"role": "user", "content": "Чем мощность отличается от энергии?"}]
-STYLES = ("tight", "full", "recipe", "jury", "jury2")
 MARK = "Уровень объяснения:"
 
 
 def prompts(mode: str, level: str, role: str = "") -> list:
-    """Все сборки промпта ответа: обычная (по стилям, с планом и заданием опоры), двухшаговая и factmap."""
-    out = []
-    for style in STYLES:
-        out.append(build_messages("СПР", "МАТ", TURNS, mode, style=style, near=2, role=role, level=level))
-        out.append(build_messages("СПР", "МАТ", TURNS, mode, style=style, plan=2, full_kb=True, role=role, level=level))
-        out.append(build_messages("СПР", "МАТ", TURNS, mode, style=style, task="ОПОРА", role=role, level=level))
-    out.append(build_write_messages("МАТ", TURNS, "черновик", mode, role=role, level=level))
-    out.append(build_fm_messages("КАРТА", "МАТ", TURNS, mode, role=role, level=level))
-    return ["\n".join(m["content"] for m in msgs) for msgs in out]
+    """Все сборки промпта ответа: системный (с примерами блоком и без них) и двухшаговая запись."""
+    out = [system_prompt("МАТ", mode, role=role, level=level),
+           system_prompt("МАТ", mode, examples="", role=role, level=level)]
+    for use_examples in (True, False):
+        out.append("\n".join(m["content"] for m in build_write_messages(
+            "МАТ", TURNS, "черновик", mode, use_examples=use_examples, role=role, level=level)))
+    return out
+
+
+def rules_part(system: str) -> str:
+    """Системный промпт до материалов: подсказки — последние строки правил."""
+    return system.split("\nМАТЕРИАЛЫ\n", 1)[0]
 
 
 class LevelHintPrompt(unittest.TestCase):
@@ -65,22 +66,21 @@ class LevelHintPrompt(unittest.TestCase):
         self.assertEqual(prompts("chat", "expert"), plain)
 
     def test_levels_differ_only_by_the_level_block(self):
-        # Два уровня: промпты различаются только строкой уровня — правила, справочник, материалы и диалог те же.
-        for style in STYLES:
-            sys_s, user_s = build_messages("СПР", "МАТ", TURNS, "chat", style=style, near=2, level="simple")
-            sys_t, user_t = build_messages("СПР", "МАТ", TURNS, "chat", style=style, near=2, level="technical")
-            self.assertEqual(user_s["content"], user_t["content"])
-            base = build_messages("СПР", "МАТ", TURNS, "chat", style=style, near=2)[0]["content"]
-            self.assertEqual(sys_s["content"], base + level_hint("chat", "simple"))
-            self.assertEqual(sys_t["content"], base + level_hint("chat", "technical"))
+        # Два уровня: промпты различаются только строкой уровня — правила, примеры, материалы и диалог те же.
+        for examples in (None, ""):
+            sys_s = system_prompt("МАТ", "chat", examples, level="simple")
+            sys_t = system_prompt("МАТ", "chat", examples, level="technical")
+            base = system_prompt("МАТ", "chat", examples)
+            self.assertEqual(sys_s.replace(level_hint("chat", "simple"), ""), base)
+            self.assertEqual(sys_t.replace(level_hint("chat", "technical"), ""), base)
         simple, technical = level_hint("chat", "simple"), level_hint("chat", "technical")
         self.assertNotEqual(simple, technical)
 
     def test_level_goes_after_role_at_the_end(self):
-        system = build_messages("СПР", "МАТ", TURNS, "chat", near=2, role="grid", level="simple")[0]["content"]
-        self.assertTrue(system.endswith(level_hint("chat", "simple")))
-        self.assertIn("Собеседник, вероятно:", system)
-        self.assertLess(system.index("Собеседник, вероятно:"), system.index(MARK))
+        rules = rules_part(system_prompt("МАТ", "chat", role="grid", level="simple"))
+        self.assertTrue(rules.rstrip("\n").endswith(level_hint("chat", "simple").strip()))
+        self.assertIn("Собеседник, вероятно:", rules)
+        self.assertLess(rules.index("Собеседник, вероятно:"), rules.index(MARK))
 
     def test_hint_brings_no_facts(self):
         # Ни одного числа и ни одного названия продукта сверх «только по базе».
@@ -118,11 +118,12 @@ class LevelThroughCore(unittest.TestCase):
     def ask(self, body: dict) -> tuple:
         seen = []
 
-        def generate(messages, *a, **kw):
-            seen.append("\n".join(m["content"] for m in messages))
-            return "Мощность это то, сколько вы способны потреблять одновременно.", ""
+        def chat(messages, *a, **kw):
+            if kw.get("observe_final"):  # основной вызов ответа ядра v28
+                seen.append("\n".join(m["content"] for m in messages))
+            return "Мощность это то, сколько вы способны потреблять одновременно."
 
-        with mock.patch.object(self.app.bot, "generate", side_effect=generate):
+        with mock.patch.object(self.app.bot.api, "chat", side_effect=chat):
             payload = self.app.chat({"messages": TURNS, **body}, lambda *a: None)
         return payload, seen
 

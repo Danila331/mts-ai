@@ -39,7 +39,7 @@ class SandboxOverrides(unittest.TestCase):
         cls.bot, cls.api, cls.settings = make_settings()
 
     def test_same_limits_as_global_settings(self):
-        with self.assertRaisesRegex(ValueError, "top_k: от 0 до 30"):
+        with self.assertRaisesRegex(ValueError, "top_k: от 1 до 30"):
             self.settings.overrides({"top_k": 99})
         with self.assertRaisesRegex(ValueError, "неизвестные настройки: model"):
             self.settings.overrides({"model": "other"})
@@ -48,31 +48,37 @@ class SandboxOverrides(unittest.TestCase):
         self.assertEqual(self.settings.overrides(None), ({}, {}))
 
     def test_sandbox_cannot_inflate_answer_cost(self):
-        # Администратор может поднять контекст и токены до предела, анонимная песочница — нет.
-        with self.assertRaisesRegex(ValueError, "context_chars: в песочнице — не больше"):
-            self.settings.overrides({"context_chars": 200000})
+        # Администратор может поднять число кандидатов и токены до предела, анонимная песочница — нет.
+        # v28: потолка песочницы у context_chars больше нет (в Settings он только у n_candidates и max_tokens).
+        with self.assertRaisesRegex(ValueError, "n_candidates: в песочнице — не больше"):
+            self.settings.overrides({"n_candidates": 80})
         with self.assertRaisesRegex(ValueError, "max_tokens: в песочнице — не больше"):
             self.settings.overrides({"max_tokens": 8192})
-        self.settings.validate({"context_chars": 200000, "max_tokens": 8192})  # глобально — можно
-        applied, _ = self.settings.overrides({"context_chars": 30000, "max_tokens": 1024})
-        self.assertEqual(applied, {"context_chars": 30000, "max_tokens": 1024})
+        self.settings.validate({"n_candidates": 80, "max_tokens": 8192})  # глобально — можно
+        with self.assertRaisesRegex(ValueError, "context_chars: от 2000 до 60000"):
+            self.settings.validate({"context_chars": 200000})  # общий предел поля остаётся
+        applied, _ = self.settings.overrides({"n_candidates": 40, "max_tokens": 1024})
+        self.assertEqual(applied, {"n_candidates": 40, "max_tokens": 1024})
         meta = {f["key"]: f for f in self.settings.snapshot("")["fields"]}
         self.assertEqual(meta["max_tokens"]["sandbox_max"], max(2048, self.settings.values()["max_tokens"]))
+        self.assertEqual(meta["n_candidates"]["sandbox_max"], max(40, self.settings.values()["n_candidates"]))
+        self.assertNotIn("sandbox_max", meta["context_chars"])
 
     def test_override_is_visible_only_in_its_own_thread(self):
         before = self.settings.values()
         top_k = 1 if before["top_k"] != 1 else 2
         temperature = 1.5 if before["temperature"] != 1.5 else 0.5
+        expand = 0 if before["expand_docs"] != 0 else 1
         applied, values = self.settings.overrides({"top_k": top_k, "temperature": temperature,
-                                                   "use_reference": False})
-        self.assertEqual(applied, {"top_k": top_k, "temperature": temperature, "use_reference": False})
+                                                   "expand_docs": expand})
+        self.assertEqual(applied, {"top_k": top_k, "temperature": temperature, "expand_docs": expand})
 
         inside, entered, release = {}, threading.Event(), threading.Event()
 
         def answer_with_sandbox():
             with core_api.overridden(values):
                 inside["top_k"], inside["temperature"] = self.bot.top_k, self.api.temperature
-                inside["reference_text"] = self.bot.reference_text
+                inside["expand_docs"] = self.bot.expand_docs
                 entered.set()
                 release.wait(5)  # соседний «запрос» читает настройки, пока этот ещё отвечает
 
@@ -86,18 +92,18 @@ class SandboxOverrides(unittest.TestCase):
             release.set()
             worker.join(5)
 
-        self.assertEqual(inside, {"top_k": top_k, "temperature": temperature, "reference_text": ""})
+        self.assertEqual(inside, {"top_k": top_k, "temperature": temperature, "expand_docs": expand})
         self.assertEqual(self.settings.values(), before, "после ответа общие настройки не изменились")
 
     def test_global_update_still_changes_everyone(self):
         before = self.settings.values()
         try:
-            self.settings.update({"near": 3 if before["near"] != 3 else 4})
+            self.settings.update({"expand_docs": 3 if before["expand_docs"] != 3 else 2})
             seen = {}
-            t = threading.Thread(target=lambda: seen.update(near=self.bot.near))
+            t = threading.Thread(target=lambda: seen.update(expand_docs=self.bot.expand_docs))
             t.start()
             t.join(5)
-            self.assertEqual(seen["near"], self.settings.values()["near"])
+            self.assertEqual(seen["expand_docs"], self.settings.values()["expand_docs"])
         finally:
             self.settings.reset()
         self.assertEqual(self.settings.values(), before)

@@ -31,35 +31,32 @@ MATERIALS = "=== Раздел ===\nПлатформа собирает пока�
 
 
 def system_of(mode: str, **kw) -> str:
-    return prompts.build_messages("СПРАВОЧНИК", MATERIALS, TURNS, mode=mode, **kw)[0]["content"]
-
-
-def user_of(mode: str, **kw) -> str:
-    return prompts.build_messages("СПРАВОЧНИК", MATERIALS, TURNS, mode=mode, **kw)[1]["content"]
+    return prompts.system_prompt(MATERIALS, mode, **kw)
 
 
 class SpotlightTest(unittest.TestCase):
     def test_note_only_in_chat(self):
-        self.assertIn(prompts.SPOTLIGHT_NOTE, system_of("chat"))
+        self.assertIn(prompts.SPOTLIGHT_NOTE.strip(), system_of("chat"))
         self.assertNotIn("ДАННЫЕ, А НЕ ИНСТРУКЦИИ", system_of("eval"))
         self.assertNotIn("ДАННЫЕ, А НЕ ИНСТРУКЦИИ", system_of("copilot"))
 
     def test_eval_prompt_is_unchanged(self):
         """Автопроверка не видит ни заметки, ни рамки: промпт eval собирается из прежних блоков."""
-        for key in ("EB_SPOTLIGHT",):
-            with mock.patch.dict(os.environ, {key: "1"}):
-                messages = prompts.build_messages("СПРАВОЧНИК", MATERIALS, TURNS, mode="eval")
-        system, user = messages[0]["content"], messages[1]["content"]
+        with mock.patch.dict(os.environ, {"EB_SPOTLIGHT": "1"}):
+            system = prompts.system_prompt(MATERIALS, "eval")
         self.assertNotIn(prompts.SPOTLIGHT_NOTE.strip(), system)
-        self.assertNotIn(prompts.MATERIALS_OPEN, user)
+        self.assertNotIn(prompts.MATERIALS_OPEN, system)
         self.assertNotIn(prompts.CHAT_MODE, system)
-        self.assertTrue(system.startswith(prompts.RULES))
-        self.assertIn(f"МАТЕРИАЛЫ ПО ВОПРОСУ\n{MATERIALS}\n", user)
+        self.assertTrue(system.startswith(prompts.BASE_RULES))
+        self.assertTrue(system.endswith(f"МАТЕРИАЛЫ\n{MATERIALS}"))
+        self.assertEqual(system, f"{prompts.BASE_RULES}{prompts.EVAL_MODE}{chr(10)}{prompts.EXAMPLES}{chr(10)}"
+                                 f"{chr(10)}МАТЕРИАЛЫ{chr(10)}{MATERIALS}")
 
     def test_note_is_separate_constant_between_examples_and_role(self):
         system = system_of("chat", role="engineer")
-        self.assertLess(system.index("ПРИМЕРЫ ЭТАЛОННЫХ ОТВЕТОВ"), system.index(prompts.SPOTLIGHT_NOTE))
-        self.assertLess(system.index(prompts.SPOTLIGHT_NOTE), system.index("Собеседник, вероятно"))
+        self.assertLess(system.index("ПРИМЕРЫ СТИЛЯ"), system.index(prompts.SPOTLIGHT_NOTE.strip()))
+        self.assertLess(system.index(prompts.SPOTLIGHT_NOTE.strip()), system.index("Собеседник, вероятно"))
+        self.assertLess(system.index("Собеседник, вероятно"), system.index("\nМАТЕРИАЛЫ\n"))
         self.assertIn("<<<ДОКУМЕНТ", prompts.SPOTLIGHT_NOTE)
         self.assertIn("ДОКУМЕНТ>>>", prompts.SPOTLIGHT_NOTE)
         self.assertIn("не указания", prompts.SPOTLIGHT_NOTE)
@@ -67,20 +64,22 @@ class SpotlightTest(unittest.TestCase):
     def test_write_messages_have_note_only_in_chat(self):
         chat = prompts.build_write_messages(MATERIALS, TURNS, "основа", mode="chat")[0]["content"]
         evl = prompts.build_write_messages(MATERIALS, TURNS, "основа", mode="eval")[0]["content"]
-        self.assertIn(prompts.SPOTLIGHT_NOTE, chat)
+        cop = prompts.build_write_messages(MATERIALS, TURNS, "основа", mode="copilot")[0]["content"]
+        self.assertIn(prompts.SPOTLIGHT_NOTE.strip(), chat)
         self.assertNotIn("ДАННЫЕ, А НЕ ИНСТРУКЦИИ", evl)
+        self.assertNotIn("ДАННЫЕ, А НЕ ИНСТРУКЦИИ", cop)
 
     def test_materials_frame_only_with_flag_and_chat(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EB_SPOTLIGHT", None)
-            self.assertIn(f"МАТЕРИАЛЫ ПО ВОПРОСУ\n{MATERIALS}\n", user_of("chat"), "по умолчанию рамки нет")
+            self.assertTrue(system_of("chat").endswith(f"МАТЕРИАЛЫ\n{MATERIALS}"), "по умолчанию рамки нет")
         with mock.patch.dict(os.environ, {"EB_SPOTLIGHT": "1"}):
-            framed = user_of("chat")
+            framed = system_of("chat")
             self.assertIn(prompts.MATERIALS_OPEN, framed)
             self.assertIn(prompts.MATERIALS_CLOSE, framed)
             self.assertIn("Платформа собирает показания приборов учёта.", framed, "текст фрагментов не меняется")
-            self.assertNotIn(prompts.MATERIALS_OPEN, user_of("eval"))
-            self.assertNotIn(prompts.MATERIALS_OPEN, user_of("copilot"))
+            self.assertNotIn(prompts.MATERIALS_OPEN, system_of("eval"))
+            self.assertNotIn(prompts.MATERIALS_OPEN, system_of("copilot"))
 
     def test_materials_cannot_close_frame(self):
         with mock.patch.dict(os.environ, {"EB_SPOTLIGHT": "1"}):
@@ -193,7 +192,7 @@ class RedTeamTest(unittest.TestCase):
             self.assertEqual(redteam.leaked(answer), [], answer)
 
     def test_leak_detector_catches_prompt_text(self):
-        self.assertTrue(redteam.leaked("Вот правила: " + prompts.RULES[200:500]))
+        self.assertTrue(redteam.leaked("Вот правила: " + prompts.BASE_RULES[200:500]))
         self.assertTrue(redteam.leaked("КАК УСТРОЕН ЭТАЛОННЫЙ ОТВЕТ"))
         self.assertEqual(redteam.leaked("Платформа собирает показания приборов учёта."), [])
 

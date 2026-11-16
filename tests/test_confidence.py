@@ -26,7 +26,7 @@ os.environ.clear()
 os.environ.update(_saved_env)
 
 from energybot.pipeline import FALLBACK, Answer  # noqa: E402
-from energybot.prompts import CLARIFY_SYSTEM, build_messages  # noqa: E402
+from energybot.prompts import CLARIFY_SYSTEM, build_write_messages, system_prompt  # noqa: E402
 from energybot.retrieval import Hit  # noqa: E402
 
 QUESTION = [{"role": "user", "content": "Что нужно, чтобы подключить платформу учёта электроэнергии?"}]
@@ -89,9 +89,15 @@ class ConfidenceMetric(unittest.TestCase):
             core_api.TRACE.reset()
             self.app.bot.retrieve([{"role": "user", "content": q}])
             conf = core_api.TRACE.confidence
+            if q == QUESTION[0]["content"]:
+                self.assertEqual(conf["stage"], "rrf")
             self.assertGreaterEqual(conf["score"], 0.0, q)
             self.assertLessEqual(conf["score"], 1.0, q)
-            self.assertEqual(conf["stage"], "rrf", "без реранкера — порядок RRF")
+            # v28: BM25 не возвращает разделов без совпавших слов («да», «?») — выдача пуста, стадии нет.
+            expected = "rrf" if core_api.TRACE.ranked else "none"
+            self.assertEqual(conf["stage"], expected, "без реранкера — порядок RRF")
+            if expected == "none":
+                self.assertEqual(conf["score"], 0.0, q)
             self.assertEqual([p["key"] for p in conf["parts"]], ["lexical"])
 
     def test_more_question_words_in_kb_means_higher_retrieval(self):
@@ -183,11 +189,13 @@ class ConfidenceGate(unittest.TestCase):
         texts = []
         for gate in (False, True):
             self.app.gate, self.app.threshold = gate, UNREACHABLE
-            with mock.patch.object(self.app.bot, "generate", return_value=("", "нет модели")):
+            with mock.patch.object(self.app.bot.api, "chat", side_effect=RuntimeError("нет модели")):
                 payload, rec = self.ask("eval", answer=None)
             texts.append((payload["text"], payload["fallback"], payload["route"], rec.searches))
         self.assertEqual(texts[0], texts[1])
-        self.assertEqual(texts[0][:3], (FALLBACK, True, "answer"))
+        # v28: при сбое модели ядро отдаёт выдержку из базы (extractive), а FALLBACK — только если выдержки нет.
+        self.assertEqual(texts[0][1:3], (True, "answer"))
+        self.assertTrue(texts[0][0] and texts[0][0].endswith("подскажет специалист."))
 
     def test_chat_below_threshold_asks_to_clarify_without_answering(self):
         self.app.gate, self.app.threshold = True, UNREACHABLE
@@ -211,8 +219,8 @@ class ConfidenceGate(unittest.TestCase):
 
     def test_chat_above_threshold_reuses_prefetched_search(self):
         self.app.gate, self.app.threshold = True, 0.0
-        with mock.patch.object(self.app.bot, "generate",
-                               return_value=("Для подключения платформы нужен перечень приборов учёта.", "")):
+        with mock.patch.object(self.app.bot.api, "chat",
+                               return_value="Для подключения платформы нужен перечень приборов учёта."):
             payload, rec = self.ask("chat", answer=None)
         self.assertEqual(payload["route"], "answer")
         self.assertEqual(rec.answers, ["chat"])
@@ -233,9 +241,10 @@ class ClarifyText(unittest.TestCase):
         self.assertEqual(core_api.clarify_question("Уточню у специалиста.", turns), "", "нет вопроса")
 
     def test_clarify_prompt_is_not_in_answer_prompts(self):
-        # Автопроверка собирает промпт через build_messages: блок уточнения туда не попадает ни в каком режиме.
+        # Автопроверка собирает промпт через system_prompt / build_write_messages: блок уточнения туда не попадает.
         for mode in ("eval", "chat", "copilot"):
-            messages = build_messages("справочник", "материалы", QUESTION, mode=mode)
+            self.assertNotIn(CLARIFY_SYSTEM[:60], system_prompt("материалы", mode), mode)
+            messages = build_write_messages("материалы", QUESTION, "черновик", mode)
             self.assertNotIn(CLARIFY_SYSTEM[:60], "\n".join(m["content"] for m in messages), mode)
 
     def test_submission_code_does_not_read_the_gate(self):

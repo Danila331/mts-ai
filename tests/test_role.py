@@ -25,24 +25,25 @@ import core_api  # noqa: E402
 os.environ.clear()
 os.environ.update(_saved_env)
 
-from energybot.factmap import build_fm_messages  # noqa: E402
-from energybot.prompts import ROLE_HINT, ROLES, build_messages, build_write_messages, role_hint  # noqa: E402
+from energybot.prompts import ROLE_HINT, ROLES, build_write_messages, role_hint, system_prompt  # noqa: E402
 
 TURNS = [{"role": "user", "content": "Мы электросетевая компания, хотим находить потери"}]
-STYLES = ("tight", "full", "recipe", "jury", "jury2")
 MARK = "Собеседник, вероятно:"
 
 
 def prompts(mode: str, role: str) -> list:
-    """Все сборки промпта ответа: обычная (по стилям, с планом и заданием опоры), двухшаговая и factmap."""
-    out = []
-    for style in STYLES:
-        out.append(build_messages("СПР", "МАТ", TURNS, mode, style=style, near=2, role=role))
-        out.append(build_messages("СПР", "МАТ", TURNS, mode, style=style, plan=2, full_kb=True, role=role))
-        out.append(build_messages("СПР", "МАТ", TURNS, mode, style=style, task="ОПОРА", role=role))
-    out.append(build_write_messages("МАТ", TURNS, "черновик", mode, role=role))
-    out.append(build_fm_messages("КАРТА", "МАТ", TURNS, mode, role=role))
-    return ["\n".join(m["content"] for m in msgs) for msgs in out]
+    """Все сборки промпта ответа: системный (с примерами блоком и без них) и двухшаговая запись."""
+    out = [system_prompt("МАТ", mode, role=role),
+           system_prompt("МАТ", mode, examples="", role=role)]
+    for use_examples in (True, False):
+        out.append("\n".join(m["content"] for m in build_write_messages(
+            "МАТ", TURNS, "черновик", mode, use_examples=use_examples, role=role)))
+    return out
+
+
+def rules_part(system: str) -> str:
+    """Системный промпт до материалов: подсказка — последняя строка правил."""
+    return system.split("\nМАТЕРИАЛЫ\n", 1)[0]
 
 
 class RoleHintPrompt(unittest.TestCase):
@@ -66,11 +67,11 @@ class RoleHintPrompt(unittest.TestCase):
         self.assertEqual(prompts("chat", "admin"), plain)
         grid = prompts("chat", "grid")
         self.assertIn("Собеседник, вероятно: электросетевая компания.", grid[0])
-        # Строка — в конце системного промпта: правила, справочник и примеры остаются общим префиксом.
-        system = build_messages("СПР", "МАТ", TURNS, "chat", near=2, role="grid")[0]["content"]
-        self.assertTrue(system.endswith(role_hint("chat", "grid")))
-        self.assertEqual(system[: -len(role_hint("chat", "grid"))],
-                         build_messages("СПР", "МАТ", TURNS, "chat", near=2)[0]["content"])
+        # Строка — в конце части с правилами (перед материалами): правила и примеры остаются общим префиксом.
+        rules = rules_part(system_prompt("МАТ", "chat", role="grid"))
+        hint = role_hint("chat", "grid")
+        self.assertTrue(rules.rstrip("\n").endswith(hint.strip()))
+        self.assertEqual(rules.replace(hint, ""), rules_part(system_prompt("МАТ", "chat")))
 
     def test_hint_brings_no_facts(self):
         # Подсказка не приносит фактов: ни чисел, ни продуктов сверх «Навигации по типу компании» в базе.
@@ -107,11 +108,12 @@ class RoleThroughCore(unittest.TestCase):
     def ask(self, body: dict) -> tuple:
         seen = []
 
-        def generate(messages, *a, **kw):
-            seen.append("\n".join(m["content"] for m in messages))
-            return "Поиск потерь рассчитан на электросетевые компании.", ""
+        def chat(messages, *a, **kw):
+            if kw.get("observe_final"):  # основной вызов ответа ядра v28
+                seen.append("\n".join(m["content"] for m in messages))
+            return "Поиск потерь рассчитан на электросетевые компании."
 
-        with mock.patch.object(self.app.bot, "generate", side_effect=generate):
+        with mock.patch.object(self.app.bot.api, "chat", side_effect=chat):
             payload = self.app.chat({"messages": TURNS, **body}, lambda *a: None)
         return payload, seen
 

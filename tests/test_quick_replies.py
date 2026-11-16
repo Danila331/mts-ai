@@ -140,28 +140,30 @@ class CoreAnswer(unittest.TestCase):
 
 class PromptRules(unittest.TestCase):
     def test_one_clarifying_question_rule_in_built_prompt(self):
-        from energybot.prompts import build_messages
+        from energybot.prompts import build_write_messages, system_prompt
         for mode in ("chat", "eval"):
-            text = "\n".join(m["content"] for m in build_messages("СПР", "МАТ", user("Хотим учёт"), mode))
-            self.assertIn("Никогда не больше одного вопроса", text, mode)
-            self.assertIn("Один короткий уточняющий вопрос", text, mode)
+            write = "\n".join(m["content"] for m in build_write_messages("МАТ", user("Хотим учёт"), "основа", mode))
+            for text in (system_prompt("МАТ", mode), write):
+                self.assertIn("Один уточняющий вопрос — только когда клиент описывает свою задачу", text, mode)
+            self.assertIn("Уточняющий вопрос — по решению для этого хода, не больше одного", write, mode)
+        # v28: в чате «не больше одного» сказано ещё и блоком «если ответа нет» (в eval его нет).
+        self.assertIn("не больше одного уточняющего вопроса", system_prompt("МАТ", "chat"))
 
     def test_unknown_first_block_only_in_chat(self):
-        from energybot.factmap import build_fm_messages
-        from energybot.prompts import CHAT_UNKNOWN_FIRST, build_messages, build_write_messages
+        from energybot.prompts import CHAT_UNKNOWN_FIRST, build_write_messages, system_prompt
         block = CHAT_UNKNOWN_FIRST.strip()
         turns = user("Какой у вас SLA?")
-        for style in ("tight", "full", "recipe", "jury", "jury2"):
-            for plan in (0, 1, 2):
-                msgs = build_messages("СПР", "МАТ", turns, "eval", style=style, plan=plan)
-                self.assertNotIn("ЕСЛИ ОТВЕТА В БАЗЕ НЕТ", "\n".join(m["content"] for m in msgs), style)
+        for examples in (None, ""):
+            self.assertNotIn("ЕСЛИ ОТВЕТА В БАЗЕ НЕТ", system_prompt("МАТ", "eval", examples))
             for mode, present in (("chat", True), ("copilot", False)):
-                text = "\n".join(m["content"] for m in build_messages("СПР", "МАТ", turns, mode, style=style))
-                self.assertEqual(block in text, present, (style, mode))
-        for builder in (lambda m: build_write_messages("МАТ", turns, "черновик", m),
-                        lambda m: build_fm_messages("КАРТА", "МАТ", turns, m)):
-            self.assertNotIn(block, "\n".join(x["content"] for x in builder("eval")))
-            self.assertIn(block, "\n".join(x["content"] for x in builder("chat")))
+                self.assertEqual(block in system_prompt("МАТ", mode, examples), present, mode)
+        for use_examples in (True, False):
+            def write(mode, use_examples=use_examples):
+                return "\n".join(x["content"] for x in build_write_messages(
+                    "МАТ", turns, "черновик", mode, use_examples=use_examples))
+            self.assertNotIn(block, write("eval"))
+            self.assertNotIn(block, write("copilot"))
+            self.assertIn(block, write("chat"))
         self.assertIn("в первом же предложении", block)
 
     def test_out_of_kb_references_say_unknown_first(self):

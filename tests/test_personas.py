@@ -140,15 +140,18 @@ class MockRunTest(unittest.TestCase):
         """Заглушка спрашивает на 1-й реплике, выдумывает число на 2-й, зовёт специалиста с 3-й."""
         t = self.report["totals"]
         self.assertEqual(t["question_rate"], 1.0)
-        self.assertEqual(t["clean_numbers_rate"], 1.0)  # выдуманное число убрала проверка ядра
+        self.assertEqual(t["clean_numbers_rate"], 1.0)  # выдуманное число убрала самопроверка ядра (verify)
         self.assertEqual(t["fallback_rate"], 0.0)
         self.assertEqual(t["lead"]["extra"], 1)  # менеджер МТС: заявка не ожидалась
         self.assertEqual(t["lead"]["timely"], 4)
         second = self.report["dialogs"][0]["turns"][1]
-        self.assertEqual(second["guard"]["unknown_numbers"], ["987"])
-        self.assertTrue(second["guard"]["repaired"])
-        self.assertEqual(second["llm_calls"]["chat"], 2)
-        self.assertEqual(t["llm_calls"]["chat"], t["turns"] + len(self.report["dialogs"]))
+        # v28: число 987 ловит самопроверка до guard: в ответе его уже нет, guard молчит.
+        self.assertNotIn("987", second["bot"])
+        self.assertEqual(second["unknown_numbers"], [])
+        self.assertEqual(second["guard"], {})
+        # Реплика = тип вопроса + основной ответ; число в ответе добавляет самопроверку (второй черновик и сверку).
+        self.assertGreaterEqual(second["llm_calls"]["chat"], 4)
+        self.assertGreaterEqual(t["llm_calls"]["chat"], 2 * t["turns"] + 2 * len(self.report["dialogs"]))
 
     def test_no_knowledge_base_text(self):
         kb = KnowledgeBase.load(ROOT / "knowledge-base")

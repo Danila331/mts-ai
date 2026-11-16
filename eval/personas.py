@@ -224,6 +224,7 @@ def run_dialog(bot, counter: Counter, scenario: dict, kb_text: str) -> dict:
     for n, reply in enumerate(client_replies(scenario), 1):
         turns.append({"role": "user", "content": reply})
         said.append(reply)
+        MOCK_STATE["turn"] = n
         counter.take()
         t0 = time.perf_counter()
         try:
@@ -258,20 +259,30 @@ def run_dialog(bot, counter: Counter, scenario: dict, kb_text: str) -> dict:
     }
 
 
+MOCK_TURN_1 = ("Подскажу по вашей ситуации. Уточните, пожалуйста: какой у вас объект и какая задача — учёт, "
+               "снижение платежа или поиск потерь?")
+MOCK_TURN_2 = "Здесь подойдёт облачная платформа учёта: показания собираются дистанционно. Какие у вас приборы?"
+MOCK_TURN_3 = ("Точную картину покажет бесплатная предварительная оценка по данным объекта. Могу передать ваш "
+               "запрос специалисту — оставите контакты?")
+
+# Номер текущей реплики клиента для заглушки: ядро v28 режет диалог по сегментам темы (current_segment), и по
+# сообщениям модели номер реплики не восстановить. run_dialog проставляет его перед каждым ответом.
+MOCK_STATE = {"turn": 1}
+
+
 def mock_responder(messages: list) -> str:
     """Детерминированный «бот» заглушки: вопрос на первой реплике, продукт со «случайным» числом на второй
-    (проверка ядра перезапросит ответ), предложение специалиста дальше."""
-    last = str(messages[-1]["content"])
-    if last.startswith("[Служебная"):
-        return "Здесь подойдёт облачная платформа учёта: показания собираются дистанционно. Какие у вас приборы?"
-    dialog = last.split("ДИАЛОГ (", 1)[1] if "ДИАЛОГ (" in last else ""
-    turn = max(1, dialog.count("\nКлиент:"))
+    (самопроверка ядра v28 уберёт число), предложение специалиста дальше. Самопроверка (сообщение
+    «[Служебная …») отвечает на ту же реплику, но без выдуманного числа."""
+    if str(messages[0]["content"]).startswith("Определи тип последнего вопроса"):
+        return "process"
+    check = str(messages[-1]["content"]).startswith("[Служебная")
+    turn = MOCK_STATE["turn"]
     if turn == 1:
-        return "Подскажу по вашей ситуации. Уточните, пожалуйста: какой у вас объект и какая задача — учёт, снижение платежа или поиск потерь?"
+        return MOCK_TURN_1
     if turn == 2:
-        return "Здесь подойдёт облачная платформа учёта, подключение займёт 987 дней. Какие у вас приборы?"
-    return ("Точную картину покажет бесплатная предварительная оценка по данным объекта. Могу передать ваш "
-            "запрос специалисту — оставите контакты?")
+        return MOCK_TURN_2 if check else MOCK_TURN_2.replace("учёта:", "учёта, подключение займёт 987 дней:", 1)
+    return MOCK_TURN_3
 
 
 def git_commit() -> str:
@@ -283,8 +294,7 @@ def git_commit() -> str:
 
 
 def run(scenarios: list, mock: bool) -> dict:
-    # Как стенд: стиль ответов jury по умолчанию (scripts/core_api.py), режим chat.
-    os.environ.setdefault("EB_STYLE", "jury")
+    # Как стенд: режим chat.
     from energybot.llm import Api, env
     from energybot.pipeline import Consultant
 
@@ -296,7 +306,8 @@ def run(scenarios: list, mock: bool) -> dict:
     counter = Counter(bot.api)
     counter.take()  # эмбеддинги базы при старте — не реплики
     t0 = time.perf_counter()
-    dialogs = [run_dialog(bot, counter, s, bot.kb_text) for s in scenarios]
+    kb_text = "\n".join(c.render() for c in bot.kb.chunks)
+    dialogs = [run_dialog(bot, counter, s, kb_text) for s in scenarios]
     personas = []
     for key, name in PERSONAS.items():
         own = [d for d in dialogs if d["persona"] == key]
@@ -308,8 +319,9 @@ def run(scenarios: list, mock: bool) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "commit": git_commit(),
         "model": "заглушка tests/mock_api.py" if mock else env("LLM_MODEL", ""),
-        "config": {"mode": "chat", "arch": bot.arch, "style": bot.style, "search": bot.search,
-                   "dense": bot.dense, "reranker": bool(bot.api.configured and bot.api.can_rerank),
+        "config": {"mode": "chat", "arch": bot.arch, "top_k": bot.top_k,
+                   "n_candidates": bot.n_candidates, "expand_docs": bot.expand_docs,
+                   "context_chars": bot.context_chars, "dense": bot.dense, "reranker": bool(bot.api.configured and bot.api.can_rerank),
                    "kb_fingerprint": bot.kb.fingerprint},
         "scenarios_file": SCENARIOS.relative_to(ROOT).as_posix(),
         "duration_sec": round(time.perf_counter() - t0, 1),
