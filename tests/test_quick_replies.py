@@ -70,6 +70,17 @@ class Suggest(unittest.TestCase):
         self.assertIn("Снизить платёж", got)
         self.assertEqual(quick_replies.suggest("Какая у вас задача?", {"task": "поиск потерь"}), got)
 
+    def test_meters_follow_passport(self):
+        q = "Какие типы приборов сейчас стоят на складах?"
+        self.assertIn(quick_replies.NO_METERS, quick_replies.suggest(q, None))
+        passport = {"fields": [{"key": "meters", "value": "около 40 счётчиков"}]}
+        got = quick_replies.suggest(q, passport)
+        self.assertNotIn(quick_replies.NO_METERS, got, "клиент уже сказал, что приборы есть")
+        self.assertEqual(got, ["Приборы есть, подробности пришлю", quick_replies.DONT_KNOW])
+        # Первый ход: паспорта ещё нет, но клиент сам сказал о счётчиках.
+        said = "У нас три склада и около 40 счётчиков, показания снимаем вручную."
+        self.assertNotIn(quick_replies.NO_METERS, quick_replies.suggest(q, None, client=said))
+
     def test_handoff_offer(self):
         got = quick_replies.suggest("Могу передать запрос менеджеру. Передать?", None)
         self.assertEqual(len(got), 2)

@@ -9,6 +9,12 @@ import type { AnswerPayload, HonestNo, HonestNoSection } from "./types.ts";
 
 export const HONEST_NO_TITLE = "Честно: не подойдёт";
 export const HONEST_NO_LEAD = "Вам это, скорее всего, не подойдёт, потому что";
+/** Вторая причина про тот же продукт: заголовок не повторяем (две одинаковые плашки выглядели как дубль). */
+export const HONEST_NO_ALSO = "Ещё одна причина";
+
+/** Та же причина для того же продукта, что и предыдущий пункт: показывать без повторного заголовка. */
+export const sameProductAsPrevious = (items: readonly Pick<HonestNo, "product">[], i: number) =>
+  i > 0 && items[i - 1].product === items[i].product;
 /** Больше двух причин под одним ответом — уже не плашка, а лекция. */
 export const HONEST_NO_MAX = 2;
 

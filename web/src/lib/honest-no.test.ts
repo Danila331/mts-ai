@@ -1,7 +1,7 @@
 // node --experimental-strip-types --test src/lib/*.test.ts (npm test): что попадает в плашку «Честно: не подойдёт».
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HONEST_NO_MAX, honestNoItems, sectionHref, sectionLabel } from "./honest-no.ts";
+import { HONEST_NO_MAX, honestNoItems, sameProductAsPrevious, sectionHref, sectionLabel } from "./honest-no.ts";
 import type { HonestNo } from "./types.ts";
 
 const section = { chunk_id: "00feb2060c578ae2", doc: "20-products/24-losses.md", title: "Поиск коммерческих потерь электроэнергии", path: "Кому подходит > Не подходит энергосбытовым компаниям" };
@@ -45,4 +45,11 @@ test("ссылка и подпись раздела", () => {
   assert.equal(sectionHref({ ...section, chunk_id: "a b" }), "/kb?chunk=a%20b");
   assert.equal(sectionLabel(section), "Поиск коммерческих потерь электроэнергии › Не подходит энергосбытовым компаниям");
   assert.equal(sectionLabel({ ...section, title: "", path: "Где оптового рынка нет" }), "Где оптового рынка нет");
+});
+
+test("две причины про один продукт — один заголовок (живой прогон: 40 кВт и «магазин» про оптовый рынок)", () => {
+  const items = [{ product: "Выход на оптовый рынок" }, { product: "Выход на оптовый рынок" }, { product: "Солнечная станция" }];
+  assert.equal(sameProductAsPrevious(items, 0), false);
+  assert.equal(sameProductAsPrevious(items, 1), true);
+  assert.equal(sameProductAsPrevious(items, 2), false);
 });

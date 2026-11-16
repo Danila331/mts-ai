@@ -86,7 +86,7 @@ export function InlineLead({
     <form
       onSubmit={submit}
       aria-label="Проверьте заявку"
-      className={cn("msg-in rounded-2xl border bg-background p-4 shadow-[var(--shadow-float)]", compact ? "mx-0" : "ml-9")}
+      className={cn("msg-in relative rounded-2xl border bg-background p-4 shadow-[var(--shadow-float)]", compact ? "mx-0" : "ml-9")}
     >
       <div className="flex items-center gap-2 text-[14px] font-semibold">
         <UserRoundCheck className="size-4 text-brand-text" aria-hidden /> Проверьте заявку

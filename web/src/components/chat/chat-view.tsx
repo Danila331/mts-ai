@@ -318,11 +318,15 @@ export function ChatView({
   const session = chat.active;
 
   // Открытый мастер привязан к диалогу: переключились на другой — мастер не тянется следом.
-  const [wizardOpen, setWizardOpen] = useState<{ session: string; flow: string } | null>(null);
-  const openFlow = wizardOpen?.session === chat.activeId ? wizards?.find((f) => f.id === wizardOpen.flow) : undefined;
+  // «Новый диалог» (chat.fresh) в пустом диалоге оставляет тот же id — мастер закрывается и тогда.
+  const [wizardOpen, setWizardOpen] = useState<{ session: string; flow: string; fresh: number } | null>(null);
+  const openFlow =
+    wizardOpen?.session === chat.activeId && wizardOpen.fresh === chat.fresh
+      ? wizards?.find((f) => f.id === wizardOpen.flow)
+      : undefined;
   const record = session?.wizard;
   const recordFlow = record ? wizards?.find((f) => f.id === record.flow) : undefined;
-  const startWizard = (flow: WizardFlow) => setWizardOpen({ session: chat.activeId, flow: flow.id });
+  const startWizard = (flow: WizardFlow) => setWizardOpen({ session: chat.activeId, flow: flow.id, fresh: chat.fresh });
   // Ответы мастера уходят в чат репликой клиента и в паспорт задачи (как правка клиента) — после ответа бота.
   const finishWizard = (flow: WizardFlow, answers: WizardAnswers, intent: "continue" | "handoff") => {
     chat.setWizard({ flow: flow.id, answers }, passportValues(flow, answers));

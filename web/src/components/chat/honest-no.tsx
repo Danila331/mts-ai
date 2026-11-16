@@ -1,7 +1,15 @@
 "use client";
 
 import { ArrowUpRight, CircleSlash } from "lucide-react";
-import { HONEST_NO_LEAD, HONEST_NO_TITLE, honestNoItems, sectionHref, sectionLabel } from "@/lib/honest-no";
+import {
+  HONEST_NO_ALSO,
+  HONEST_NO_LEAD,
+  HONEST_NO_TITLE,
+  honestNoItems,
+  sameProductAsPrevious,
+  sectionHref,
+  sectionLabel,
+} from "@/lib/honest-no";
 import type { AnswerPayload, HonestNoSection } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -19,14 +27,18 @@ function SectionLink({
     <a
       href={sectionHref(section)}
       onClick={(e) => {
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0)
+          return;
         e.preventDefault();
         onOpen(section.chunk_id);
       }}
       className="inline-flex items-baseline gap-0.5 font-medium text-brand-text underline-offset-2 hover:underline"
     >
       {children}
-      <ArrowUpRight className="size-3.5 shrink-0 translate-y-[2px]" aria-hidden />
+      <ArrowUpRight
+        className="size-3.5 shrink-0 translate-y-[2px]"
+        aria-hidden
+      />
     </a>
   );
 }
@@ -54,47 +66,61 @@ export function HonestNoNotice({
         compact ? "px-3.5 py-3 text-[13px]" : "px-4 py-3.5 text-[14px]",
       )}
     >
-      {items.map((item, i) => (
-        <div key={item.rule} className={cn("space-y-1.5 leading-relaxed", i > 0 && "border-t border-tone-warning/20 pt-3")}>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="inline-flex items-center gap-1.5 font-semibold text-tone-warning">
-              <CircleSlash className="size-4" aria-hidden />
-              {HONEST_NO_TITLE}
-            </span>
-            <span className="text-foreground/80">· {item.product}</span>
-          </div>
-          <p className="text-foreground">
-            {HONEST_NO_LEAD}: {item.reason}
-          </p>
-          {item.fact && (
-            <p className="text-xs text-muted-foreground">
-              Из ваших слов: «{item.fact}»
-            </p>
-          )}
-          {item.section && (
-            <p className="text-xs text-muted-foreground">
-              Основание:{" "}
-              <SectionLink section={item.section} onOpen={onOpenChunk}>
-                {sectionLabel(item.section)}
-              </SectionLink>
-            </p>
-          )}
-          {item.alternative && (
+      {items.map((item, i) => {
+        const same = sameProductAsPrevious(items, i);
+        return (
+          <div
+            key={item.rule}
+            className={cn(
+              "space-y-1.5 leading-relaxed",
+              i > 0 && "border-t border-tone-warning/20 pt-3",
+            )}
+          >
+            {!same && (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="inline-flex items-center gap-1.5 font-semibold text-tone-warning">
+                  <CircleSlash className="size-4" aria-hidden />
+                  {HONEST_NO_TITLE}
+                </span>
+                <span className="text-foreground/80">· {item.product}</span>
+              </div>
+            )}
             <p className="text-foreground">
-              <span className="font-medium">Что подойдёт: </span>
-              {item.alternative.text}
-              {item.alternative.section && (
-                <>
-                  {" "}
-                  <SectionLink section={item.alternative.section} onOpen={onOpenChunk}>
-                    раздел базы
-                  </SectionLink>
-                </>
-              )}
+              {same ? HONEST_NO_ALSO : HONEST_NO_LEAD}: {item.reason}
             </p>
-          )}
-        </div>
-      ))}
+            {item.fact && (
+              <p className="text-xs text-muted-foreground">
+                Из ваших слов: «{item.fact}»
+              </p>
+            )}
+            {item.section && (
+              <p className="text-xs text-muted-foreground">
+                Основание:{" "}
+                <SectionLink section={item.section} onOpen={onOpenChunk}>
+                  {sectionLabel(item.section)}
+                </SectionLink>
+              </p>
+            )}
+            {item.alternative && (
+              <p className="text-foreground">
+                <span className="font-medium">Что подойдёт: </span>
+                {item.alternative.text}
+                {item.alternative.section && (
+                  <>
+                    {" "}
+                    <SectionLink
+                      section={item.alternative.section}
+                      onOpen={onOpenChunk}
+                    >
+                      раздел базы
+                    </SectionLink>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </section>
   );
 }

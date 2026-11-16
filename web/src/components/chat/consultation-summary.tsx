@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { KbIndex } from "@/hooks/use-kb";
 import { type SummaryFormat, boardFileTitle, buildBoardPack, defaultFormat } from "@/lib/board-pack";
 import { type ConsultationSummary, buildSummary, summaryFileTitle } from "@/lib/consultation-summary";
+import { HONEST_NO_TITLE } from "@/lib/honest-no";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BoardDocument } from "./board-pack";
@@ -80,6 +81,11 @@ export function SummaryDocument({ summary, compact }: { summary: ConsultationSum
               <div key={p.key} className="break-inside-avoid">
                 <h3 className="text-[15.5px] font-semibold">{p.label}</h3>
                 {p.docTitle !== p.label && <p className="text-[13px] text-muted-foreground">{p.docTitle}</p>}
+                {p.notFit && (
+                  <p className="mt-1.5 text-[13.5px]">
+                    <span className="font-medium text-tone-warning">{HONEST_NO_TITLE}:</span> {p.notFit}
+                  </p>
+                )}
                 {p.facts.length ? (
                   <ul className="mt-2 space-y-2.5">
                     {p.facts.map((f, i) => (

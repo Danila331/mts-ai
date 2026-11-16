@@ -133,6 +133,12 @@ export const DISCLAIMER = {
 export const MAX_FACTS_PER_PRODUCT = 2;
 /** Минимальная доля слов предложения, найденная в разделе базы (`attribute` в scripts/core_api.py). */
 export const MIN_OVERLAP = 0.5;
+/**
+ * С какой опоры предложение относит разговор к продукту (продукты в итогах и чек-листы «Что подготовить»). Тот же
+ * порог, что в паспорте на сервере (backend/internal/chat: MinProductOverlap). Подобран на ручном прогоне с живой
+ * моделью: верная опора на платформу учёта — 0,60–0,86, случайное совпадение с распознаванием по фото — 0,30–0,50.
+ */
+export const PRODUCT_MIN_OVERLAP = 0.6;
 const MIN_FACT_CHARS = 20;
 const MAX_FACT_CHARS = 400;
 const MAX_QUESTIONS = 12;
@@ -162,6 +168,12 @@ export interface SummaryProduct {
   /** Название документа базы о продукте. */
   docTitle: string;
   facts: SummaryFact[];
+  /**
+   * «Честно: не подойдёт» (T26) по последнему ответу: причина словами базы. Продукт остаётся в итогах, но чек-лист
+   * «Что подготовить» для него не строится — нельзя просить данные под то, что клиенту не подойдёт (ручной прогон:
+   * магазин на 40 кВт получал список данных для выхода на оптовый рынок).
+   */
+  notFit?: string;
 }
 
 export interface SummaryChecklistItem {
@@ -291,7 +303,9 @@ function collectFacts(session: Session, kb?: KbLike | null): Candidate[] {
         href: `/kb?chunk=${encodeURIComponent(s.id)}`,
       }));
       for (const p of PRODUCTS) {
-        const own = support.filter((s) => s.doc === p.doc || fileName(s.doc) === fileName(p.doc));
+        const own = support.filter(
+          (s) => (s.doc === p.doc || fileName(s.doc) === fileName(p.doc)) && s.overlap >= PRODUCT_MIN_OVERLAP,
+        );
         if (!own.length) continue;
         out.push({
           fact: { text, messageId: m.id, sources },
@@ -301,6 +315,21 @@ function collectFacts(session: Session, kb?: KbLike | null): Candidate[] {
         });
       }
     }
+  }
+  return out;
+}
+
+/**
+ * Продукты, которые клиенту не подойдут, — по последнему завершённому ответу: ядро считает «честные нет» по всем
+ * репликам клиента (scripts/honest_no.py), так что последний ответ отражает текущее состояние разговора.
+ */
+function notFitting(session: Session): Map<ProductKey, string> {
+  const out = new Map<ProductKey, string>();
+  const last = [...session.messages].reverse().map(usableAnswer).find(Boolean);
+  for (const item of last?.honest_no ?? []) {
+    const doc = item?.section?.doc;
+    const p = doc ? PRODUCTS.find((x) => x.doc === doc || fileName(x.doc) === fileName(doc)) : undefined;
+    if (p && item.reason?.trim() && !out.has(p.key)) out.set(p.key, item.reason.trim());
   }
   return out;
 }
@@ -316,6 +345,7 @@ export function buildSummary(session: Session, kb?: KbLike | null): Consultation
     .map((m) => squash(maskContacts(m.content, passport)));
 
   const candidates = collectFacts(session, kb);
+  const notFit = notFitting(session);
 
   // Порядок продуктов: как в паспорте (первый — тот, о котором говорили первым), затем остальные по ответам.
   const keys: ProductKey[] = [];
@@ -336,11 +366,15 @@ export function buildSummary(session: Session, kb?: KbLike | null): Consultation
       .slice(0, MAX_FACTS_PER_PRODUCT)
       .sort((a, b) => a.order - b.order)
       .map((c) => c.fact);
-    return { key, label: meta.label, docTitle: docTitle(kb, meta.doc), facts };
+    const product: SummaryProduct = { key, label: meta.label, docTitle: docTitle(kb, meta.doc), facts };
+    const reason = notFit.get(key);
+    return reason ? { ...product, notFit: reason } : product;
   });
 
-  // Чек-лист: под каждый обсуждённый продукт; если продукт не определился — для первичного понимания задачи.
-  const listKeys: ChecklistKey[] = keys.length ? keys : ["general"];
+  // Чек-лист: под каждый обсуждённый продукт, кроме тех, что не подойдут; если продукт не определился —
+  // для первичного понимания задачи.
+  const fitting = keys.filter((k) => !notFit.has(k));
+  const listKeys: ChecklistKey[] = fitting.length ? fitting : ["general"];
   const checklists: SummaryChecklist[] = listKeys.map((key) => {
     const src = CHECKLISTS[key];
     return {

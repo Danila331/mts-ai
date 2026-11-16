@@ -43,3 +43,18 @@ func TestConversationStatsRates(t *testing.T) {
 	empty.Rates()
 	assert.Zero(t, empty.LeadConversion, "без диалогов — ноль, а не деление на ноль")
 }
+
+func TestSectionRefsSkipWeakSupport(t *testing.T) {
+	// Живой ответ стенда: вопрос о складских счётчиках уверенно опирается на платформу учёта и слабо задевает
+	// раздел о распознавании по фото — такой продукт в паспорт не попадает.
+	var a Answer
+	require.NoError(t, json.Unmarshal([]byte(`{"citations": [
+		{"support": [{"id": "p1", "doc": "20-products/22-askue.md", "overlap": 0.62},
+		             {"id": "r1", "doc": "20-products/25-meter-reading.md", "overlap": 0.4}]},
+		{"support": [{"id": "r2", "doc": "20-products/25-meter-reading.md", "overlap": 0.5}]},
+		{"question": true, "support": [{"id": "r3", "doc": "20-products/25-meter-reading.md", "overlap": 0.5}]}]}`), &a))
+	refs := a.SectionRefs()
+	require.Len(t, refs, 1)
+	assert.Equal(t, "p1", refs[0].ID)
+	assert.Equal(t, []string{"p1", "r1", "r2", "r3"}, a.Sources(), "журнал по-прежнему видит всю опору")
+}

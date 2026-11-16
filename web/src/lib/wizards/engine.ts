@@ -192,6 +192,20 @@ export function visibleSteps(flow: WizardFlow, answers: WizardAnswers): WizardSt
   return steps;
 }
 
+/**
+ * Сколько вопросов в самом длинном пути при текущих ответах: перебор вариантов ещё не отвеченных шагов. До первого
+ * ответа видна только развилка, и «Вопрос 1 из 1» с полной полосой прогресса вводил в заблуждение (ручной прогон);
+ * длина пути — честная верхняя граница, а после ответов она сжимается до настоящей.
+ */
+export function maxSteps(flow: WizardFlow, answers: WizardAnswers): number {
+  const visible = visibleSteps(flow, answers);
+  const open = visible.find((s) => !answers[s.id]);
+  if (!open) return visible.length;
+  let best = visible.length;
+  for (const o of open.options) best = Math.max(best, maxSteps(flow, { ...answers, [open.id]: { option: o.id } }));
+  return best;
+}
+
 /** Следующий неотвеченный шаг; `undefined` — мастер пройден. */
 export function nextStep(flow: WizardFlow, answers: WizardAnswers): WizardStep | undefined {
   return visibleSteps(flow, answers).find((s) => !answers[s.id]);

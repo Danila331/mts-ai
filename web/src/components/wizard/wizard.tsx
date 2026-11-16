@@ -27,6 +27,7 @@ import {
   kbChunkId,
   kbDocTitle,
   kbRefHref,
+  maxSteps,
   nextStep,
   unanswer,
   visibleSteps,
@@ -48,7 +49,7 @@ function questions(n: number) {
 
 /** Кнопка входа в мастер — в пустом чате стенда и виджета. */
 export function WizardEntry({ flow, onStart, compact }: { flow: WizardFlow; onStart: () => void; compact?: boolean }) {
-  const label = `${flow.title} за ${questions(flow.steps.length)}`;
+  const label = `${flow.title} за ${questions(maxSteps(flow, {}))}`;
   if (compact) {
     return (
       <button
@@ -297,6 +298,8 @@ export function WizardRunner({
   const [trail, setTrail] = useState<string[]>([]);
   const step = nextStep(flow, answers);
   const visible = visibleSteps(flow, answers);
+  // Всего — самый длинный путь при текущих ответах: до первого ответа видна только развилка.
+  const total = step ? maxSteps(flow, answers) : visible.length;
   const index = step ? visible.findIndex((s) => s.id === step.id) : visible.length;
 
   const respond = (option: string, text?: string) => {
@@ -329,11 +332,11 @@ export function WizardRunner({
           <div className="flex items-baseline justify-between gap-3">
             <span className="truncate text-[13px] font-medium">{flow.title}</span>
             <span className="tnum shrink-0 text-xs text-muted-foreground">
-              {step ? `Вопрос ${index + 1} из ${visible.length}` : "Готово"}
+              {step ? `Вопрос ${index + 1} из ${total}` : "Готово"}
             </span>
           </div>
           <div className="mt-1.5">
-            <Progress index={step ? index : visible.length} total={visible.length} />
+            <Progress index={step ? index : total} total={total} />
           </div>
         </div>
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Закрыть подбор" className="-mr-2 text-muted-foreground">

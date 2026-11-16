@@ -33,6 +33,7 @@ test("frame-ancestors /embed: свой origin и allowlist; пустой — т�
 
   const empty = embedFrameAncestors([]);
   assert.ok(empty.startsWith("frame-ancestors 'self' "));
+  assert.ok(!empty.includes("["), "IPv6-адрес CSP не принимает — Chrome ругается в консоли");
   assert.ok(empty.includes("http://localhost:*") && empty.includes("http://127.0.0.1:*"));
   assert.ok(!/(^|\s)\*(\s|$)/.test(empty) && !empty.includes("https:"), "никакого «*» и «https:»");
 });
