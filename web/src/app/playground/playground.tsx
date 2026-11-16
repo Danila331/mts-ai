@@ -2,8 +2,8 @@
 
 import { Check, ChevronDown, Download, FileJson, PanelRight, Pencil, Trash2 } from "lucide-react";
 import dynamic from "next/dynamic";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { ChatView } from "@/components/chat/chat-view";
 import { NewDialogConfirm } from "@/components/chat/new-dialog-confirm";
@@ -68,7 +68,6 @@ export function Playground() {
   const [debugSheet, setDebugSheet] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const params = useSearchParams();
-  const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
@@ -77,14 +76,25 @@ export function Playground() {
   }, []);
 
   // «Новый диалог» со страниц базы и виджета приходит сюда как ?new=1, диалог из палитры ⌘K — как ?s=<id>.
+  // Параметр выполняется ровно один раз. Раньше эффект зависел от всего состояния чата и перезапускался на каждом его
+  // изменении: router.replace не успевал очистить адрес (каждый вызов прерывал предыдущий переход), и любой вопрос
+  // создавал ещё один пустой диалог и переключал на него — чат «не открывался». Адрес чистим history.replaceState:
+  // Next синхронизирует с ним useSearchParams, а новой навигации нет.
   const wantsNew = params.get("new") === "1";
   const wantsSession = params.get("s");
+  const wantKey = wantsNew ? "new" : wantsSession ? `s:${wantsSession}` : null;
+  const handled = useRef<string | null>(null);
   useEffect(() => {
-    if (!chat.ready || (!wantsNew && !wantsSession)) return;
+    if (!wantKey) {
+      handled.current = null;
+      return;
+    }
+    if (!chat.ready || handled.current === wantKey) return;
+    handled.current = wantKey;
     if (wantsNew) chat.create();
     else if (wantsSession) chat.select(wantsSession);
-    router.replace(pathname, { scroll: false });
-  }, [chat, wantsNew, wantsSession, router, pathname]);
+    window.history.replaceState(window.history.state, "", pathname);
+  }, [chat, wantKey, wantsNew, wantsSession, pathname]);
 
   const messages = useMemo(() => chat.active?.messages ?? [], [chat.active]);
   // Отладка показывает выбранный ответ; если он из другого диалога — последний ответ текущего.
