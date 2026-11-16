@@ -77,6 +77,10 @@ type (
 		LeadCard(ctx context.Context, code string) (lead.Card, error)
 		SetLeadStatus(ctx context.Context, code string, status lead.Status) error
 	}
+	// Stats — наблюдаемые исходы диалогов (GET /api/stats).
+	Stats interface {
+		Stats(ctx context.Context) (chat.ConversationStats, error)
+	}
 	// Analytics — отчёт экрана менеджера (T6).
 	Analytics interface {
 		Analytics(ctx context.Context, days int) (analytics.Report, error)
@@ -102,6 +106,8 @@ type Deps struct {
 	Board Board
 	// Analytics — nil выключает аналитику.
 	Analytics Analytics
+	// Stats — nil выключает /api/stats.
+	Stats Stats
 	// Documents — nil выключает приём документов.
 	Documents Documents
 	// Metrics — nil выключает метрики.
@@ -233,6 +239,9 @@ func (s *Server) routes() {
 
 	api := s.echo.Group("/api", s.requireToken)
 	api.GET("/health", s.health)
+	if s.deps.Stats != nil {
+		api.GET("/stats", s.stats)
+	}
 	api.GET("/kb", s.kb)
 	api.POST("/chat", s.chat, chatLimit, chatDayLimit)
 	api.POST("/lead", s.lead, leadLimit)

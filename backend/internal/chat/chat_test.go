@@ -32,3 +32,14 @@ func keys(m map[string]json.RawMessage) []string {
 	}
 	return out
 }
+
+func TestConversationStatsRates(t *testing.T) {
+	s := ConversationStats{Answers: 4, Answered: 3, NoBoundary: 4, Sessions: 2, LeadSessions: 1}
+	s.Rates()
+	assert.InDelta(t, 0.75, s.AnsweredRate, 1e-9)
+	assert.InDelta(t, 1.0, s.NoBoundaryRate, 1e-9)
+	assert.InDelta(t, 0.5, s.LeadConversion, 1e-9)
+	var empty ConversationStats
+	empty.Rates()
+	assert.Zero(t, empty.LeadConversion, "без диалогов — ноль, а не деление на ноль")
+}

@@ -146,6 +146,7 @@ func run() error {
 		Passports: store,
 		Board:     store,
 		Analytics: store,
+		Stats:     store,
 		Documents: documents,
 		Metrics:   m,
 		RateStore: rateStore,

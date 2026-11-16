@@ -83,7 +83,7 @@ import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с эт�
 import logmask  # noqa: E402 — scripts/logmask.py: маскировка телефонов и почты в журнале (T35)
 import quick_replies  # noqa: E402 — scripts/quick_replies.py: кнопки быстрых ответов (T31), только режим chat
 
-from energybot.dialog import search_queries  # noqa: E402
+from energybot.dialog import current_segment, search_queries  # noqa: E402
 from energybot.guard import SENTENCE, numbers  # noqa: E402
 from energybot.kb import KnowledgeBase  # noqa: E402
 from energybot.llm import THINK, Api, DeadlineExceeded, env, env_num, strip_thinking  # noqa: E402
@@ -200,6 +200,7 @@ class Trace(threading.local):
         self.stream_on = False  # идёт основной вызов генерации — его и только его отдаём потоком
         self.streamed = ""  # текст, уже отправленный клиенту дельтами
         self.query_dense = False  # вектор вопроса получен: эмбеддинги в этом ответе работали
+        self.query_vec = None  # вектор вопроса ядра v28 (WebConsultant._query_vec): свой у каждого ответа
 
 
 TRACE = Trace()
@@ -359,7 +360,7 @@ class WebApi(Api):
 
     def _post(self, url: str, key: str, body: dict, attempts: int = 3, timeout: float | None = None) -> dict:
         if not (TRACE.stream_on and TRACE.emit and url.endswith("/chat/completions")) or TRACE.streamed:
-            return super()._post(url, key, body, attempts=attempts, timeout=timeout)
+            return super()._post(url, key, body, attempts=attempts)
         last = None
         limit = timeout or self.timeout
         for attempt in range(attempts):
@@ -378,7 +379,7 @@ class WebApi(Api):
                 break
             if TRACE.streamed:
                 # Клиент уже видит часть текста: повтор — без потока, иначе текст напечатался бы дважды.
-                return super()._post(url, key, body, attempts=attempts - attempt - 1, timeout=timeout)
+                return super()._post(url, key, body, attempts=attempts - attempt - 1)
             time.sleep(0.6 * (2 ** attempt))
         raise last
 
@@ -432,18 +433,9 @@ class WebConsultant(Consultant):
     # Всё, что меняет страница настроек: глобально — через Settings, на один ответ — через overridden().
     top_k = Overridable()
     n_candidates = Overridable()
-    full_docs = Overridable()
+    expand_docs = Overridable()
     context_chars = Overridable()
     dense = Overridable()
-    reference_text = Overridable()
-    search = Overridable()
-    style = Overridable()
-    use_examples = Overridable()
-    near = Overridable()
-    think = Overridable()
-    refine = Overridable()
-    check_kb = Overridable()
-
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -457,31 +449,34 @@ class WebConsultant(Consultant):
         def recording_chat(messages, *a, **kw):
             if TRACE.emit and not TRACE.calls:
                 TRACE.emit("stage", {"name": "generation"})
+            # Основной вызов ответа ядра v28 — с observe_final=True (energybot/pipeline.py). Потоком идёт только
+            # он: классификатор типа вопроса, второй черновик, самопроверка и правка чисел клиенту не печатаются.
+            main = bool(kw.get("observe_final"))
             t0 = time.perf_counter()
             output, error = "", ""
             try:
-                output = chat(messages, *a, **kw)
+                with self._streaming(main):
+                    output = chat(messages, *a, **kw)
                 return output
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 raise
             finally:
                 TRACE.calls.append({"messages": [dict(m) for m in messages], "output": output or "", "error": error,
-                                    "ms": round((time.perf_counter() - t0) * 1000)})
+                                    "ms": round((time.perf_counter() - t0) * 1000), "main": main})
 
         self.retriever.search = recording_search
         self.api.chat = recording_chat
 
-    # Потоком идёт только основной вызов ответа: попытки generate / fm_generate до первого напечатанного куска.
-    # Разбор вопроса (EB_PLAN) потоком не идёт — клиенту нужен только ответ после метки ОТВЕТ. Перезапросы
-    # проверки, уточнение и вспомогательные вызовы (основа, опора, переписывание реплики) — тоже нет.
-    def generate(self, messages: list, think: bool, attempts: int, plan: bool = False) -> tuple:
-        with self._streaming(not plan):
-            return super().generate(messages, think, attempts, plan)
+    # Вектор вопроса ядро v28 держит в атрибуте экземпляра между поиском и подбором примеров (few-shot).
+    # Consultant общий для потоков сервера — храним его в TRACE этого потока, чтобы ответы не путали векторы.
+    @property
+    def _query_vec(self):
+        return TRACE.query_vec
 
-    def fm_generate(self, messages: list) -> tuple:
-        with self._streaming(True):
-            return super().fm_generate(messages)
+    @_query_vec.setter
+    def _query_vec(self, value):
+        TRACE.query_vec = value
 
     @contextmanager
     def _streaming(self, allowed: bool):
@@ -508,18 +503,6 @@ class WebConsultant(Consultant):
         self._after_search(turns)
         return result
 
-    def fm_search(self, turns, *args, **kwargs):  # схема factmap (есть не во всех версиях ядра)
-        cached = self._take_prefetched("fm_search", turns, args, kwargs)
-        if cached is not None:
-            top, guard = cached
-            if isinstance(kwargs.get("guard"), dict):
-                kwargs["guard"].update(guard)
-            return top
-        top = super().fm_search(turns, *args, **kwargs)
-        TRACE.docs, TRACE.chunks = [], list(top)
-        self._after_search(turns)
-        return top
-
     def _after_search(self, turns):
         lexical, semantic, last = search_queries(turns)
         TRACE.queries = {"lexical": lexical, "semantic": semantic, "last": last}
@@ -544,11 +527,8 @@ class WebConsultant(Consultant):
         """Поиск до генерации — чтобы решить по порогу, отвечать ли вообще. Выдача запоминается, и answer()
         берёт её же, а не ищет заново: эмбеддинги и реранкер — платные вызовы. Возвращает retrieval-часть."""
         t0 = time.perf_counter()
-        if self.arch == "factmap":
-            guard = {}
-            kind, value = "fm_search", (self.fm_search(turns, None, fast=False, guard=guard), guard)
-        else:
-            kind, value = "retrieve", (self.retrieve(turns),)
+        turns = current_segment(turns)  # answer() ищет по текущей теме диалога — та же выдача
+        kind, value = "retrieve", (self.retrieve(turns),)
         TRACE.prefetched = (kind, [dict(t) for t in turns], value)
         TRACE.retrieval_ms = (time.perf_counter() - t0) * 1000
         return TRACE.confidence
@@ -869,37 +849,25 @@ class Field:
 
 class Settings:
     def __init__(self, bot: Consultant, api: Api):
-        reference = bot.reference_text  # справочник выключается пустой строкой, а включается обратно им же
         # Векторы могут появиться и после старта (App.retry_dense), поэтому — проверка в момент обращения,
         # а не снимок на старте.
         def has_vectors() -> bool:
             return bot.retriever.vectors is not None
 
+        # Только реальные ручки ядра v28 (energybot/pipeline.py): флаги экспериментов внутри answer() остаются
+        # кодом конфигурации, а не мнимыми переключателями. sandbox_hi — потолок песочницы жюри (T35).
         self.fields = [
-            Field("top_k", "search", "int", "EB_TOP_K", bot, "top_k", lo=0, hi=30),
+            Field("top_k", "search", "int", "EB_TOP_K", bot, "top_k", lo=1, hi=30),
             Field("n_candidates", "search", "int", "EB_N_CANDIDATES", bot, "n_candidates", lo=5, hi=80, sandbox_hi=40),
-            Field("full_docs", "search", "int", "EB_FULL_DOCS", bot, "full_docs", lo=0, hi=6, sandbox_hi=3),
-            Field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=200000,
-                  sandbox_hi=60000),
+            Field("expand_docs", "search", "int", "EB_EXPAND_DOCS", bot, "expand_docs", lo=0, hi=3),
+            Field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=60000),
             Field("use_dense", "search", "bool", "EB_USE_EMBEDDINGS", bot, "dense",
                   to_attr=lambda v: bool(v) and has_vectors(), available=has_vectors),
             Field("use_reranker", "search", "bool", "EB_USE_RERANKER", api, "can_rerank",
                   available=lambda: api.configured),
-            Field("use_reference", "search", "bool", "EB_REFERENCE", bot, "reference_text",
-                  to_attr=lambda v: reference if v else "", from_attr=bool, available=lambda: bool(reference)),
-            Field("search", "search", "enum", "EB_SEARCH", bot, "search",
-                  options=list(dict.fromkeys(["v3", "ve", bot.search]))),
-            # Стили правил из energybot/prompts.py; значение из окружения добавляется, даже если оно своё.
-            Field("style", "generation", "enum", "EB_STYLE", bot, "style",
-                  options=list(dict.fromkeys(["tight", "full", "recipe", "jury", "jury2", bot.style]))),
-            Field("use_examples", "generation", "bool", "EB_EXAMPLES", bot, "use_examples"),
-            Field("near", "generation", "int", "EB_NEAR", bot, "near", lo=0, hi=8, sandbox_hi=4),
             Field("temperature", "generation", "float", "EB_TEMPERATURE", api, "temperature", lo=0.0, hi=2.0),
             Field("max_tokens", "generation", "int", "EB_MAX_TOKENS", api, "max_tokens", lo=128, hi=8192,
                   sandbox_hi=2048),
-            Field("think", "generation", "bool", "EB_THINK", bot, "think"),
-            Field("refine", "generation", "bool", "EB_REFINE", bot, "refine"),
-            Field("check_kb", "generation", "enum", "EB_CHECK", bot, "check_kb", options=[0, 1, 2]),
         ]
         self.by_key = {f.key: f for f in self.fields}
         self.defaults = self.values()
@@ -1101,17 +1069,19 @@ class App:
                             "chunk_id": first.id if first else None})
         for c in TRACE.chunks:
             sources.append({"kind": "chunk", "doc": c.doc, "title": c.title, "path": c.path, "chunk_id": c.id})
-        # Основной промпт — первый вызов модели за ответ; следующие (перезапрос проверки чисел и т. п.)
+        # Основной промпт — вызов ответа; остальные (тип вопроса, самопроверка, правка чисел и т. п.)
         # показываются кратко: время, последняя реплика-указание и что ответила модель.
-        prompt = [{"role": m["role"], "content": str(m["content"])} for m in TRACE.calls[0]["messages"]] \
-            if TRACE.calls else []
+        # Ядро v28 сначала спрашивает модель о типе вопроса — основной промпт тот, что помечен main.
+        main_call = next((c for c in TRACE.calls if c.get("main")), TRACE.calls[0] if TRACE.calls else None)
+        prompt = [{"role": m["role"], "content": str(m["content"])} for m in main_call["messages"]] \
+            if main_call else []
         calls = [{
             "ms": c["ms"],
             "prompt_chars": sum(len(str(m["content"])) for m in c["messages"]),
-            "instruction": str(c["messages"][-1]["content"])[-1500:] if i else "",
+            "instruction": "" if c is main_call else str(c["messages"][-1]["content"])[-1500:],
             "output": c["output"][:3000],
             "error": c["error"],
-        } for i, c in enumerate(TRACE.calls)]
+        } for c in TRACE.calls]
         timings = {k: round(v * 1000) for k, v in answer.timings.items()}
         if TRACE.retrieval_ms and not gated:  # поиск был в prefetch, answer() взял готовую выдачу
             timings["retrieval"] = max(timings.get("retrieval", 0), round(TRACE.retrieval_ms))

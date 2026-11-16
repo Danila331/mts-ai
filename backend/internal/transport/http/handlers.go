@@ -55,6 +55,15 @@ func (s *Server) kb(c echo.Context) error {
 	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
 }
 
+// stats — наблюдаемые исходы диалогов, а не выдуманное «решение проблемы».
+func (s *Server) stats(c echo.Context) error {
+	stats, err := s.deps.Stats.Stats(c.Request().Context())
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, stats)
+}
+
 // settings — настройки RAG ядра как есть.
 func (s *Server) settings(c echo.Context) error {
 	raw, err := s.deps.Settings.Settings(c.Request().Context())

@@ -241,3 +241,23 @@ func (s *Store) SavePassport(ctx context.Context, id string, p passport.Passport
 	}
 	return nil
 }
+
+// Stats — наблюдаемые исходы для GET /api/stats. session_id у ответов и
+// заявок — из миграции 000003_sessions (NULL у ответов без сессии).
+func (s *Store) Stats(ctx context.Context) (chat.ConversationStats, error) {
+	var out chat.ConversationStats
+	err := s.Pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM answers),
+			(SELECT count(*) FROM answers WHERE NOT fallback AND error = ''),
+			(SELECT count(*) FROM answers WHERE error = ''),
+			(SELECT count(DISTINCT session_id) FROM answers WHERE coalesce(session_id, '') <> ''),
+			(SELECT count(*) FROM leads),
+			(SELECT count(DISTINCT session_id) FROM leads WHERE coalesce(session_id, '') <> '')
+	`).Scan(&out.Answers, &out.Answered, &out.NoBoundary, &out.Sessions, &out.Leads, &out.LeadSessions)
+	if err != nil {
+		return out, err
+	}
+	out.Rates()
+	return out, nil
+}

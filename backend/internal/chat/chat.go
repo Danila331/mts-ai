@@ -171,6 +171,32 @@ type Record struct {
 	SessionID string
 }
 
+// ConversationStats — наблюдаемые исходы (GET /api/stats): содержательный
+// ответ, отсутствие технической ошибки и переход диалога в заявку. «Проблема
+// решена» здесь не выдумывается.
+type ConversationStats struct {
+	Answers        int     `json:"answers"`
+	Answered       int     `json:"answered"`
+	NoBoundary     int     `json:"no_boundary"`
+	Sessions       int     `json:"sessions"`
+	Leads          int     `json:"leads"`
+	LeadSessions   int     `json:"lead_sessions"`
+	AnsweredRate   float64 `json:"answered_rate"`
+	NoBoundaryRate float64 `json:"no_boundary_rate"`
+	LeadConversion float64 `json:"lead_conversion"`
+}
+
+// Rates досчитывает доли по счётчикам.
+func (s *ConversationStats) Rates() {
+	if s.Answers > 0 {
+		s.AnsweredRate = float64(s.Answered) / float64(s.Answers)
+		s.NoBoundaryRate = float64(s.NoBoundary) / float64(s.Answers)
+	}
+	if s.Sessions > 0 {
+		s.LeadConversion = float64(s.LeadSessions) / float64(s.Sessions)
+	}
+}
+
 // DebugFields — поля события answer для стенда разработчика: промпт целиком,
 // выдача поиска, вызовы модели и разбор. Виджету на чужом сайте они не
 // нужны, а промпт и устройство поиска — не то, что стоит отдавать каждому

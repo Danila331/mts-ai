@@ -65,6 +65,14 @@ func TestStore(t *testing.T) {
 		assert.Equal(t, "req-1", reqID)
 	})
 
+	t.Run("наблюдаемые исходы /api/stats", func(t *testing.T) {
+		st, err := s.Stats(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, st.Answers)
+		assert.Equal(t, 1, st.Answered)
+		assert.Equal(t, 0, st.Sessions, "ответ без сессии в воронку не входит")
+		assert.InDelta(t, 1.0, st.AnsweredRate, 1e-9)
+	})
 	t.Run("заявка", func(t *testing.T) {
 		l := lead.Lead{Code: "0123456789", Contacts: lead.Contacts{Name: "Иван"}, Summary: "s",
 			Messages: []dialog.Turn{{Role: dialog.RoleUser, Content: "q"}}}
