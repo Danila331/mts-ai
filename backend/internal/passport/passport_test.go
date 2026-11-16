@@ -152,3 +152,36 @@ func TestPrimaryProductByTaskThenSections(t *testing.T) {
 	q.AddSections([]SectionRef{{ID: "a1", Doc: "20-products/22-askue.md"}, {ID: "a2", Doc: "20-products/22-askue.md"}})
 	assert.Equal(t, Platform, q.Render().Product, "больше разделов — главнее первого упомянутого")
 }
+
+func TestLossesTaskNeedsAGridCompany(t *testing.T) {
+	// Прод 16.11.2026: «небольшой завод, хотим понимать, куда уходит электричество» — модель записала задачу
+	// «поиск потерь», и паспорт выбрал продукт сетевых компаний. База (24-losses.md): промышленному потребителю —
+	// платформа учёта.
+	cases := []struct {
+		org  string
+		want Group
+	}{
+		{"небольшой завод", Platform},
+		{"промышленное предприятие", Platform},
+		{"энергосбытовая компания", Platform},
+		{"склад", Platform},
+		{"электросетевая компания", Losses},
+		{"сетевая организация", Losses},
+		{"сбыт с сетями на балансе", Losses},
+		{"РЭС", Losses},
+		{"", Losses}, // тип ещё не назван — решает задача
+	}
+	for _, c := range cases {
+		var p Passport
+		p.Set("task", "поиск потерь", FromBot, time.Now())
+		if c.org != "" {
+			p.Set("org_type", c.org, FromBot, time.Now())
+		}
+		assert.Equal(t, c.want, p.Render().Product, c.org)
+	}
+}
+
+func TestExtractPromptSeparatesLossesFromOwnMetering(t *testing.T) {
+	assert.Contains(t, ExtractSystem, "в сети электросетевой компании")
+	assert.Contains(t, ExtractSystem, "куда уходит электроэнергия на своём объекте")
+}
