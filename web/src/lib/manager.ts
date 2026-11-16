@@ -1,6 +1,7 @@
 // Экран менеджера (T5): типы ответов Go-API (GET /api/leads, /api/leads/:code), запросы через серверные обработчики
 // /api/manager/* (токен менеджера подставляет сервер Next, в браузере его нет) и чистая логика списка.
 
+import { humanizeCallbackLabel } from "./callback.ts";
 import type { LeadKind } from "./lead-kinds";
 import type { Passport, PassportGroup } from "./types";
 
@@ -68,6 +69,17 @@ export interface LeadCard extends LeadItem {
   messages: { role: string; content: string }[];
   status_changed_at?: string;
   history: { session: { channel: string; title: string }; turns: HistoryTurn[] } | null;
+}
+
+/**
+ * Удобное время для менеджера: выбор клиента в форме заявки, а если он ничего не выбрал — его собственные слова из
+ * переписки (поле паспорта «Удобное время для звонка»: «звоните завтра после 14:00»). Иначе менеджер видел «не
+ * указано», хотя клиент время назвал (ручной прогон). Это пожелание, а не договорённость — подпись рядом это говорит.
+ */
+export function callbackWish(card: Pick<LeadCard, "callback_label" | "passport">): string {
+  if (card.callback_label) return humanizeCallbackLabel(card.callback_label);
+  const said = card.passport.fields?.find((f) => f.key === "callback_preference")?.value?.trim();
+  return said ? `«${said}» — из переписки` : "";
 }
 
 /** Ошибка запроса к экрану менеджера; setup — не задан EB_MANAGER_TOKEN. */

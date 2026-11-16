@@ -129,6 +129,27 @@ describe("шпаргалка: без дублей", () => {
       "Площадь",
     ]);
   });
+  test("известное из паспорта не запрашивается повторно (живой прогон)", () => {
+    const fields = [
+      { key: "region", label: "Регион", value: "Тверская область", group: "general" as const },
+      { key: "task", label: "Задача", value: "автоматизация учёта", group: "general" as const },
+      { key: "metering", label: "Приборы учёта и сбор показаний", value: "вручную", group: "general" as const },
+      { key: "meters", label: "Количество и тип приборов", value: "около 40 счётчиков", group: "platform" as const },
+    ];
+    const items = buildBrief(sample({ product: "platform", passport: { fields } })).sections.find((s) => s.id === "prepare")!.items;
+    for (const known of ["регион", "количество и тип приборов", "существующие приборы учёта и способ сбора показаний"]) {
+      assert.ok(!items.includes(known), known);
+    }
+    assert.ok(!items.some((i) => i.startsWith("задача клиента")));
+    assert.ok(items.includes("существующая схема сбора данных"), "не названное — остаётся");
+  });
+  test("время без выбора в форме — словами клиента из переписки", () => {
+    const fields = [{ key: "callback_preference", label: "Удобное время для звонка", value: "завтра после 14:00", group: "contacts" as const }];
+    const known = buildBrief(sample({ callback_label: "", passport: { fields } })).sections.find((s) => s.id === "known")!.items;
+    assert.ok(known.includes("Удобное время по словам клиента в переписке: «завтра после 14:00» (пожелание, не договорённость)"));
+    const none = buildBrief(sample({ callback_label: "", passport: {} })).sections.find((s) => s.id === "known")!.items;
+    assert.ok(none.includes("Удобное время клиент не указал"));
+  });
   test("время клиента в шпаргалке — с городом, а не IANA", () => {
     const known = buildBrief(sample()).sections.find((s) => s.id === "known")!.items.join("\n");
     assert.match(known, /вечер, Москва \(UTC\+3\)/);

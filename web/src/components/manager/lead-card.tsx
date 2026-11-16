@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { KbIndex, kbHref, useKb } from "@/hooks/use-kb";
 import {
   type HistoryTurn,
+  callbackWish,
   type LeadCard,
   type LeadStatus,
   ManagerError,
@@ -145,7 +146,7 @@ export function LeadCardView({
           </Row>
           <Row label="Компания" value={card.company} />
           <Row label="Тип заявки" value={card.kind_label} />
-          <Row label="Удобное время" value={humanizeCallbackLabel(card.callback_label)} empty="не указано" />
+          <Row label="Удобное время" value={callbackWish(card)} empty="не указано" />
           {card.comment && <Row label="Комментарий" value={card.comment} />}
         </dl>
         <p className="mt-2 text-[12px] text-muted-foreground">

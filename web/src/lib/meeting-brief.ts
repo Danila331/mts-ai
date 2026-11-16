@@ -8,6 +8,7 @@
 import { kindInfo } from "./lead-kinds.ts";
 import type { LeadKind } from "./lead-kinds.ts";
 import { humanizeCallbackLabel } from "./callback.ts";
+import { CHECKLISTS } from "./consultation-summary.ts";
 import type { PassportGroup } from "./types.ts";
 
 /** Раздел базы, откуда взята формулировка; items — дословные фрагменты текста этого раздела. */
@@ -204,7 +205,7 @@ export interface BriefInput {
   grade_label: string;
   callback_label: string;
   score: { missing: string[] };
-  passport: { fields?: { label: string; value?: string; group: PassportGroup }[] };
+  passport: { fields?: { key?: string; label: string; value?: string; group: PassportGroup }[] };
 }
 
 /** Ключ для сравнения пунктов: регистр, пробелы и пунктуация не важны. */
@@ -232,6 +233,16 @@ function productOf(input: BriefInput): Exclude<PassportGroup, "contacts" | "gene
   return input.product in LIMITS_BY_PRODUCT ? (input.product as Exclude<PassportGroup, "contacts" | "general">) : null;
 }
 
+/** Пункт чек-листа закрыт паспортом: все поля, к которым он относится (CHECKLISTS итогов), заполнены. */
+function alreadyKnown(item: string, provided: Set<string>): boolean {
+  const key = normalize(item);
+  for (const list of Object.values(CHECKLISTS)) {
+    const hit = list.items.find((i) => normalize(i.text) === key);
+    if (hit) return hit.fields.length > 0 && hit.fields.every((f) => provided.has(f));
+  }
+  return false;
+}
+
 export function buildBrief(input: BriefInput): Brief {
   const product = productOf(input);
   const sections: BriefSection[] = [];
@@ -239,10 +250,13 @@ export function buildBrief(input: BriefInput): Brief {
   const known = [`Продукт: ${product ? input.product_label : "пока не определён"}`, `Оценка заявки: ${input.grade_label || "нет"}`];
   const kind = kindInfo(input.kind);
   known.push(`Тип заявки: ${kind.label} — ${kind.hint}`);
+  const said = input.passport.fields?.find((f) => f.key === "callback_preference")?.value?.trim();
   known.push(
     input.callback_label
       ? `Удобное время по словам клиента: ${humanizeCallbackLabel(input.callback_label)} (пожелание, не договорённость)`
-      : "Удобное время клиент не указал",
+      : said
+        ? `Удобное время по словам клиента в переписке: «${said}» (пожелание, не договорённость)`
+        : "Удобное время клиент не указал",
   );
   for (const f of input.passport.fields ?? []) {
     if (f.value && f.group !== "contacts") known.push(`${f.label}: ${f.value}`);
@@ -259,11 +273,14 @@ export function buildBrief(input: BriefInput): Brief {
     sources: [],
   });
 
+  // Уже известное из паспорта не запрашиваем повторно: регион, задачу и т. п. клиент назвал в чате.
+  const provided = new Set((input.passport.fields ?? []).filter((f) => f.key && f.value?.trim()).map((f) => f.key!));
   const prepare = [PREPARE.general, ...(product ? [PREPARE[product]] : [])];
+  const toAsk = uniqueItems(prepare.flatMap((p) => p.items)).filter((item) => !alreadyKnown(item, provided));
   sections.push({
     id: "prepare",
     title: "Что подготовить и запросить у клиента",
-    items: uniqueItems(prepare.flatMap((p) => p.items)),
+    items: toAsk.length ? toAsk : ["Всё из чек-листа базы клиент уже назвал — сверьте значения на звонке"],
     sources: prepare.map(source),
   });
 
