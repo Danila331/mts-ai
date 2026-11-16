@@ -211,7 +211,8 @@ function LeadForm({
 
   return (
     <form onSubmit={submit} className={cn(panel ? "flex h-full min-h-0 flex-col" : "grid gap-6")} noValidate>
-      <div className={cn(body, "grid grid-cols-[minmax(0,1fr)] content-start gap-6")}>
+      {/* relative — точка отсчёта для скрытой ловушки (honeypot.tsx): она остаётся внутри прокрутки формы. */}
+      <div className={cn(body, "relative grid grid-cols-[minmax(0,1fr)] content-start gap-6")}>
         <div className={cn("grid gap-1.5", !panel && "pr-8")}>
           <Title className={cn("font-heading text-[19px] leading-snug font-semibold tracking-[-0.015em]", panel && "sr-only")}>
             Передать запрос менеджеру

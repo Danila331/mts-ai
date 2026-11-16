@@ -122,20 +122,39 @@ type Answer struct {
 	// Citations — опора предложений ответа; в журнал идут только id
 	// разделов базы (Sources), без текста.
 	Citations []struct {
-		Support []struct {
-			ID  string `json:"id"`
-			Doc string `json:"doc"`
+		// Question — уточняющий вопрос клиенту: утверждений в нём нет,
+		// и его опора продукт в паспорт не добавляет.
+		Question bool `json:"question"`
+		Support  []struct {
+			ID      string  `json:"id"`
+			Doc     string  `json:"doc"`
+			Overlap float64 `json:"overlap"`
 		} `json:"support"`
 	} `json:"citations"`
 }
 
+// MinProductOverlap — с какой доли общих слов предложения с разделом
+// продукт считается обсуждённым. Тот же порог, что у продуктов в итогах
+// консультации (web/src/lib/consultation-summary.ts: PRODUCT_MIN_OVERLAP).
+// Подобран на ручном прогоне с живой моделью: разговор о складских
+// счётчиках опирался на платформу учёта с совпадением 0,60–0,86, а раздел
+// о распознавании по фото задевал случайно — 0,30–0,50, и клиенту в «Что
+// подготовить» приходили пункты про фотографии.
+const MinProductOverlap = 0.6
+
 // SectionRefs — разделы базы из опоры ответа вместе с документом: по
-// документу продукта паспорт узнаёт, какие продукты обсуждали.
+// документу продукта паспорт узнаёт, какие продукты обсуждали. Слабая
+// опора (MinProductOverlap) и опора уточняющих вопросов («Какие типы
+// приборов стоят?» совпадает с разделом о распознавании по двум словам)
+// продукт не добавляют.
 func (a Answer) SectionRefs() []passport.SectionRef {
 	var out []passport.SectionRef
 	for _, c := range a.Citations {
+		if c.Question {
+			continue
+		}
 		for _, s := range c.Support {
-			if s.ID != "" {
+			if s.ID != "" && s.Overlap >= MinProductOverlap {
 				out = append(out, passport.SectionRef{ID: s.ID, Doc: s.Doc})
 			}
 		}

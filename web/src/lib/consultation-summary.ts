@@ -133,6 +133,12 @@ export const DISCLAIMER = {
 export const MAX_FACTS_PER_PRODUCT = 2;
 /** Минимальная доля слов предложения, найденная в разделе базы (`attribute` в scripts/core_api.py). */
 export const MIN_OVERLAP = 0.5;
+/**
+ * С какой опоры предложение относит разговор к продукту (продукты в итогах и чек-листы «Что подготовить»). Тот же
+ * порог, что в паспорте на сервере (backend/internal/chat: MinProductOverlap). Подобран на ручном прогоне с живой
+ * моделью: верная опора на платформу учёта — 0,60–0,86, случайное совпадение с распознаванием по фото — 0,30–0,50.
+ */
+export const PRODUCT_MIN_OVERLAP = 0.6;
 const MIN_FACT_CHARS = 20;
 const MAX_FACT_CHARS = 400;
 const MAX_QUESTIONS = 12;
@@ -291,7 +297,9 @@ function collectFacts(session: Session, kb?: KbLike | null): Candidate[] {
         href: `/kb?chunk=${encodeURIComponent(s.id)}`,
       }));
       for (const p of PRODUCTS) {
-        const own = support.filter((s) => s.doc === p.doc || fileName(s.doc) === fileName(p.doc));
+        const own = support.filter(
+          (s) => (s.doc === p.doc || fileName(s.doc) === fileName(p.doc)) && s.overlap >= PRODUCT_MIN_OVERLAP,
+        );
         if (!own.length) continue;
         out.push({
           fact: { text, messageId: m.id, sources },

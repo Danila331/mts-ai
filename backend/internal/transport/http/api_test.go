@@ -837,7 +837,7 @@ func (m passportModel) Complete(context.Context, string, string, int) (string, e
 }
 
 const askueStream = "event: answer\ndata: {\"id\": \"a1\", \"text\": \"Ответ\", \"mode\": \"chat\", " +
-	"\"citations\": [{\"support\": [{\"id\": \"k1\", \"doc\": \"20-products/22-askue.md\"}]}]}\n\n" +
+	"\"citations\": [{\"support\": [{\"id\": \"k1\", \"doc\": \"20-products/22-askue.md\", \"overlap\": 0.62}]}]}\n\n" +
 	"event: done\ndata: {}\n\n"
 
 func TestPassportBeforeDone(t *testing.T) {

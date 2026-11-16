@@ -39,8 +39,7 @@ RULES = (
     (re.compile(r"сбор(?:а|у|ом)? показаний|как (?:вы )?(?:сейчас )?(?:собираете|снимаете)|"
                 r"схем[аеуы] (?:сбора|учёта)", re.I),
      ("Снимаем показания вручную", "Уже есть автоматический сбор", DONT_KNOW)),
-    (re.compile(r"прибор|счётчик|счетчик", re.I),
-     ("Приборов учёта пока нет", "Приборы есть, подробности пришлю", DONT_KNOW)),
+    (re.compile(r"прибор|счётчик|счетчик", re.I), "meters"),
     (re.compile(r"мощност", re.I), ("Назову позже", DONT_KNOW)),
     (re.compile(r"регион|област|город", re.I), ("Назову позже", DONT_KNOW)),
     (re.compile(r"кровл|площадк|площад[ьи]", re.I), ("Плоская кровля", "Скатная кровля", "Свободная площадка", DONT_KNOW)),
@@ -83,8 +82,24 @@ def task_options(passport) -> list:
     return left[: MAX_OPTIONS - 1] + [DONT_KNOW]
 
 
-def suggest(text: str, passport=None, has_lead: bool = False) -> list:
-    """2–4 кнопки на уточняющий вопрос из ответа бота или []."""
+NO_METERS = "Приборов учёта пока нет"
+# Поля паспорта, по которым видно, что приборы у клиента уже есть («около 40 счётчиков»).
+METER_FIELDS = ("meters", "meter_fleet", "metering", "metering_data")
+
+
+# Клиент сам упомянул приборы («около 40 счётчиков», «Меркурий 230»): паспорт этого хода ещё не готов —
+# он считается после ответа, — поэтому смотрим и на реплики клиента.
+METERS_SAID = re.compile(r"счётчик|счетчик|прибор\w* учёт|прибор\w* учет|меркури|энергомер|нартис|милур", re.I)
+
+
+def meter_options(passport, client: str = "") -> list:
+    """Кнопки на вопрос о приборах: «пока нет» не предлагаем, если клиент уже сказал о своих приборах."""
+    has = any(field_value(passport, k) for k in METER_FIELDS) or bool(METERS_SAID.search(client or ""))
+    return ([] if has else [NO_METERS]) + ["Приборы есть, подробности пришлю", DONT_KNOW]
+
+
+def suggest(text: str, passport=None, has_lead: bool = False, client: str = "") -> list:
+    """2–4 кнопки на уточняющий вопрос из ответа бота или []. client — реплики клиента одной строкой."""
     q = question_of(text)
     if not q:
         return []
@@ -96,7 +111,8 @@ def suggest(text: str, passport=None, has_lead: bool = False) -> list:
     options = None
     for pattern, variants in RULES:
         if pattern.search(q):
-            options = task_options(passport) if variants == "task" else list(variants)
+            options = (task_options(passport) if variants == "task"
+                       else meter_options(passport, client) if variants == "meters" else list(variants))
             break
     if options is None and YES_NO.match(q):
         options = ["Да", "Нет", DONT_KNOW]

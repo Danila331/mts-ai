@@ -77,6 +77,7 @@ load_dotenv(ROOT / ".env")
 # Умолчание, а не жёсткая настройка: EB_STYLE из окружения по-прежнему главнее.
 os.environ.setdefault("EB_STYLE", "jury")
 
+import callback_promise  # noqa: E402 — scripts/callback_promise.py: без обещаний времени звонка, только режим chat
 import honest_no  # noqa: E402 — scripts/honest_no.py: «честные нет» (T26), только режим chat
 import httpx  # noqa: E402 — зависимость energybot/llm.py
 import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с этим файлом
@@ -652,16 +653,24 @@ class WebConsultant(Consultant):
         }
 
 
+def client_text(turns: list) -> str:
+    """Реплики клиента одной строкой: его числа и слова не требуют опоры в базе."""
+    return "\n".join(str(t.get("content", "")) for t in turns if t.get("role") == "user")
+
+
 def content_tokens(text: str) -> set:
     return {t for t in tokens(text) if len(t) >= 3 and not t.isdigit()}
 
 
-def attribute(answer: str, chunks: list) -> list:
+def attribute(answer: str, chunks: list, client: str = "") -> list:
     """Сопоставляет каждое предложение ответа с разделами контекста, на которые оно опирается.
 
     Это эвристика для отладки (пересечение основ слов + совпадение чисел), а не объяснение модели:
     модель не размечает источники сама, потому что ответ по регламенту — одна строка без разметки.
+    Числа, которые назвал сам клиент («около 40 счётчиков»), опоры в базе не требуют — как и в проверке
+    цифр ядра (energybot.pipeline: числа из материалов и диалога).
     """
+    said = set(numbers(client))
     prepared = [(c, content_tokens(c.search_text()), numbers(c.text)) for c in chunks]
     result = []
     for sentence in SENTENCE.split(answer.strip()):
@@ -684,7 +693,8 @@ def attribute(answer: str, chunks: list) -> list:
             "sentence": sentence,
             "question": sentence.rstrip().endswith("?"),
             "support": support,
-            "unsupported_numbers": sorted(n for n in nums if not any(n in s["numbers"] for s in support)),
+            "unsupported_numbers": sorted(n for n in nums
+                                          if n not in said and not any(n in s["numbers"] for s in support)),
         })
     return result
 
@@ -1083,6 +1093,9 @@ class App:
             gated = retrieval is not None and retrieval["score"] < self.threshold
         answer = self.bot.clarify(turns) if gated else self.bot.answer(turns, mode=mode, role=role, level=level)
         total = (time.perf_counter() - t0) * 1000
+        # Время звонка не обещаем (раздел базы «Обратный звонок»): правка после генерации, только чат с клиентом.
+        if mode == "chat" and not gated:
+            answer.text = callback_promise.soften(answer.text)
         # Модель недоступна (T30): только в чате с клиентом. Автопроверка (eval) и копилот остаются при прежнем
         # FALLBACK — судья сравнивает с эталонами, а копилот обращается к менеджеру, не к клиенту.
         degraded = None
@@ -1128,7 +1141,7 @@ class App:
             "guard": answer.guard,
             "trace": getattr(answer, "trace", ""),
             "sources": sources,
-            "citations": attribute(answer.text, chunks),
+            "citations": attribute(answer.text, chunks, client_text(turns)),
             "retrieval": self.bot.retrieval_payload() if TRACE.ranked or TRACE.chunks else None,
             "prompt": prompt,
             "prompt_chars": sum(len(m["content"]) for m in prompt),
@@ -1152,7 +1165,7 @@ class App:
         if degraded:
             payload["degraded"] = degraded
         # Кнопки быстрых ответов (T31): детерминированно по вопросу бота и паспорту, без вызова модели; только chat.
-        payload["suggestions"] = quick_replies.suggest(answer.text, passport) \
+        payload["suggestions"] = quick_replies.suggest(answer.text, passport, client=client_text(turns)) \
             if mode == "chat" and not payload["fallback"] else []
         return payload
 
