@@ -114,3 +114,29 @@ test("/widget: превью сайта МТС готово по сообщени
   await page.getByRole("button", { name: "Солнечные панели" }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { got: { action: string }[] }).got.length)).toBe(2);
 });
+
+test("виджет: наведение начинает грузить чат до клика; до eb:ready — индикатор, а не белое окно", async ({ page }) => {
+  // Задерживаем страницу чата, чтобы поймать состояние «грузится».
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  await page.route("**/embed?**", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.goto(PREVIEW);
+  await bubbleShown(page);
+  const launcher = page.locator("#energytool-chat .launcher");
+  await launcher.hover();
+  await expect(page.locator("#energytool-chat iframe")).toHaveCount(1); // создан по наведению, до клика
+  await expect(page.locator("#energytool-chat .wrap")).not.toHaveClass(/open/);
+  await launcher.click();
+  await panelOpen(page);
+  const panel = page.locator("#energytool-chat .panel");
+  await expect(page.locator("#energytool-chat .loading")).toBeVisible();
+  await expect(panel).not.toHaveClass(/ready/);
+  release();
+  await expect(panel).toHaveClass(/ready/, { timeout: 30_000 }); // eb:ready от чата
+  await expect(page.locator("#energytool-chat .loading")).toBeHidden();
+  await expect(page.frameLocator("#energytool-chat iframe").locator("textarea")).toBeVisible();
+});
+
