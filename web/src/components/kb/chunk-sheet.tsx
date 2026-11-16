@@ -10,11 +10,14 @@ import { DocView } from "./doc-view";
 export function ChunkSheet({
   kb,
   chunkId,
+  line,
   onClose,
   marked,
 }: {
   kb: KbIndex | null;
   chunkId: string | null;
+  /** Строка раздела, на которую опирается ответ. */
+  line?: number;
   onClose: () => void;
   marked?: Set<string>;
 }) {
@@ -36,7 +39,7 @@ export function ChunkSheet({
           </div>
           {chunkId && (
             <a
-              href={kbHref(chunkId)}
+              href={kbHref(chunkId, line)}
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -51,6 +54,7 @@ export function ChunkSheet({
               doc={doc}
               kb={kb}
               focusId={doc === entry?.doc ? chunkId ?? undefined : undefined}
+              focusLine={line}
               marked={marked}
               onDoc={(d) => setDocOverride({ for: chunkId, doc: d })}
               scrollRoot={root}

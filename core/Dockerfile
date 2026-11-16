@@ -3,7 +3,7 @@
 #
 # Тот же Python, что у платформы организаторов и в CI: ответ ядра на
 # стенде должен совпадать с ответом сабмита.
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -16,12 +16,20 @@ WORKDIR /app
 # requirements.txt с полным набором платформы: образ меньше впятеро,
 # и ядро не начнёт молча опираться на то, чего в сабмите нет.
 COPY solution-requirements.txt ./
-RUN pip install -r solution-requirements.txt \
+# Системные пакеты — с исправлениями безопасности Debian (trivy: zlib1g). setuptools и wheel ядру после
+# установки не нужны, а их встроенные пакеты (jaraco.context, wheel) — находки trivy в образе.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install -r solution-requirements.txt \
+ && pip uninstall -y setuptools wheel \
  && useradd --uid 65532 --no-create-home core
 
 COPY energybot ./energybot
 COPY knowledge-base ./knowledge-base
-COPY scripts/core_api.py scripts/index_cache.py ./scripts/
+# Все модули scripts/, которые импортирует core_api.py (tests/test_core_image.py сверяет список).
+COPY scripts/core_api.py scripts/index_cache.py scripts/callback_promise.py scripts/honest_no.py \
+     scripts/logmask.py scripts/quick_replies.py ./scripts/
 
 # Каталог кеша векторов (EB_INDEX_CACHE_DIR). Создаётся здесь, с владельцем
 # core: том docker перенимает владельца каталога образа, и непривилегированное

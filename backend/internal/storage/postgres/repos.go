@@ -6,11 +6,14 @@ import (
 	"errors"
 
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 	"github.com/Danila331/mts-ai/backend/internal/storage/postgres/db"
 )
 
@@ -28,7 +31,60 @@ func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
 		Timings:   object(rec.Timings),
 		Guard:     object(rec.Guard),
 		RequestID: rec.RequestID,
+		SessionID: optional(rec.SessionID),
+		Sources:   jsonArray(rec.Sources()),
 	})
+}
+
+// TouchSession создаёт сессию на первом вопросе и обновляет её время на
+// каждом следующем; заголовок остаётся от первого. Страница виджета
+// пишется при создании и заменяется, только если пришла непустая. Роль
+// заменяется, только если у вопроса она известна или клиент её снял.
+func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint,
+	level session.LevelChoice) error {
+	page := []byte(ref.Page)
+	if len(page) == 0 {
+		page = []byte("{}")
+	}
+	return s.Queries.UpsertSession(ctx, db.UpsertSessionParams{
+		ID: ref.ID, Channel: string(ref.Channel), Mode: mode, Title: title, Page: page,
+		Role: string(role.Role), RoleSource: string(role.Source),
+		Level: string(level.Level), LevelSet: level.Chosen,
+	})
+}
+
+// History — сессия и её реплики по порядку: вопрос клиента, затем ответ.
+func (s *Store) History(ctx context.Context, id string) (session.History, error) {
+	row, err := s.Queries.GetSession(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return session.History{}, session.ErrNotFound
+	}
+	if err != nil {
+		return session.History{}, err
+	}
+	answers, err := s.Queries.SessionAnswers(ctx, &id)
+	if err != nil {
+		return session.History{}, err
+	}
+	view := passport.Parse(row.Passport).Render()
+	h := session.History{
+		Session: session.Session{
+			ID: row.ID, Channel: row.Channel, Mode: row.Mode, Title: row.Title,
+			Page: json.RawMessage(row.Page), Passport: &view, Role: row.Role, RoleSource: row.RoleSource, Level: row.Level,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		},
+		Turns: make([]session.Turn, 0, 2*len(answers)),
+	}
+	for _, a := range answers {
+		var sources []string
+		_ = json.Unmarshal(a.Sources, &sources)
+		h.Turns = append(h.Turns,
+			session.Turn{Role: "user", Content: a.Question, At: a.CreatedAt},
+			session.Turn{Role: "assistant", Content: a.Answer, AnswerID: a.ID, Sources: sources,
+				Fallback: a.Fallback, At: a.CreatedAt},
+		)
+	}
+	return h, nil
 }
 
 // CreateLead сохраняет заявку. Занятый номер отдаётся как
@@ -41,6 +97,20 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 	if l.Messages == nil {
 		messages = []byte("[]")
 	}
+	// Заявка без оценки (старые вызовы) — пустой объект, а не оценка с
+	// пустыми полями.
+	scored := []byte("{}")
+	if l.Score.Grade != "" {
+		if scored, err = json.Marshal(l.Score); err != nil {
+			return err
+		}
+	}
+	callback := []byte("{}")
+	if !l.Callback.Empty() {
+		if callback, err = json.Marshal(l.Callback); err != nil {
+			return err
+		}
+	}
 	row, err := s.Queries.CreateLead(ctx, db.CreateLeadParams{
 		Code:          l.Code,
 		Name:          l.Name,
@@ -51,6 +121,12 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 		SummarySource: summarySource(l.SummarySource),
 		Messages:      messages,
 		RequestID:     l.RequestID,
+		SessionID:     optional(l.SessionID),
+		Passport:      object(l.Passport),
+		Score:         scored,
+		// Предпочтение по времени звонка (T4), не запись на время.
+		CallbackPreference: callback,
+		Kind:               leadKind(l.Kind),
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == "leads_code_uq" {
@@ -82,6 +158,14 @@ func (s *Store) UpdateLeadSummary(ctx context.Context, l *lead.Lead) error {
 	return nil
 }
 
+// leadKind — пустой тип — обратный звонок, как у заявок до типов.
+func leadKind(k lead.Kind) string {
+	if k == "" {
+		return string(lead.KindCallback)
+	}
+	return string(k)
+}
+
 // summarySource — пустой источник — это список вопросов: так заявка
 // записывается до резюме моделью.
 func summarySource(s lead.SummarySource) string {
@@ -111,4 +195,69 @@ func object(raw json.RawMessage) []byte {
 		return []byte("{}")
 	}
 	return raw
+}
+
+// optional — пустая строка как NULL: ответ без сессии.
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// jsonArray — список строк для колонки jsonb NOT NULL; nil — пустой массив.
+func jsonArray(items []string) []byte {
+	if items == nil {
+		items = []string{}
+	}
+	raw, _ := json.Marshal(items)
+	return raw
+}
+
+// LoadPassport — паспорт сессии; сессии нет — session.ErrNotFound.
+func (s *Store) LoadPassport(ctx context.Context, id string) (passport.Passport, error) {
+	raw, err := s.Queries.GetPassport(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return passport.Passport{}, session.ErrNotFound
+	}
+	if err != nil {
+		return passport.Passport{}, err
+	}
+	return passport.Parse(raw), nil
+}
+
+// SavePassport записывает паспорт сессии целиком.
+func (s *Store) SavePassport(ctx context.Context, id string, p passport.Passport) error {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	n, err := s.Queries.SavePassport(ctx, db.SavePassportParams{ID: id, Passport: raw})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return session.ErrNotFound
+	}
+	return nil
+}
+
+// Stats — наблюдаемые исходы для GET /api/stats. session_id у ответов и
+// заявок — из миграции 000003_sessions (NULL у ответов без сессии).
+func (s *Store) Stats(ctx context.Context) (chat.ConversationStats, error) {
+	var out chat.ConversationStats
+	err := s.Pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM answers),
+			(SELECT count(*) FROM answers WHERE NOT fallback AND error = ''),
+			(SELECT count(*) FROM answers WHERE error = ''),
+			(SELECT count(DISTINCT session_id) FROM answers WHERE coalesce(session_id, '') <> ''),
+			(SELECT count(*) FROM leads),
+			(SELECT count(DISTINCT session_id) FROM leads WHERE coalesce(session_id, '') <> '')
+	`).Scan(&out.Answers, &out.Answered, &out.NoBoundary, &out.Sessions, &out.Leads, &out.LeadSessions)
+	if err != nil {
+		return out, err
+	}
+	out.Rates()
+	return out, nil
 }

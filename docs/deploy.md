@@ -11,6 +11,7 @@ Prometheus.
                                                    └──▶ Railway: llm-gateway ◀── core     ──▶ провайдер модели
                                                         (LiteLLM, ключ провайдера — только здесь; база llm-db)
 Railway: prometheus ──▶ /metrics api и llm-gateway
+Railway: grafana ──▶ prometheus (приватная сеть)
 ```
 
 | Что | Где | Публичный адрес |
@@ -23,8 +24,9 @@ Railway: prometheus ──▶ /metrics api и llm-gateway
 | База шлюза | Railway, второй PostgreSQL `llm-db` | нет — только приватная сеть |
 | Redis | Railway, `Redis` | нет — только приватная сеть |
 | Метрики | Railway, служба `prometheus`, корень `/monitoring` | по желанию — интерфейс Prometheus |
+| Дашборды | Railway, служба `grafana`, корень `/monitoring/grafana` | по желанию — только с паролем |
 
-Тот же набор служб поднимается локально одной командой — `docker compose up --build` (см. `docker-compose.yml`).
+Тот же набор служб поднимается локально одной командой — `docker compose up --build` (см. `compose.yaml`), вместе с фронтом на http://localhost:3000.
 
 ## Автодеплой: слияние dev → main и есть выкладка
 
@@ -163,6 +165,9 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `EB_CORE_URL` | `http://${{core.RAILWAY_PRIVATE_DOMAIN}}:8788` |
 | `EB_CORE_TOKEN` | `${{core.EB_CORE_TOKEN}}` |
 | `EB_API_TOKEN` | ещё одна случайная строка — общая с Vercel |
+| `EB_ADMIN_TOKEN` | токен администратора `/settings` (не короче 32 знаков) — общий с Vercel; без него глобальные настройки RAG закрыты, работает только песочница |
+| `EB_EMBED_ALLOWED_ORIGINS` | сайты, которым можно встроить виджет: `https://www.example.ru, https://shop.example.ru` (origin'ы без путей и масок). Определяет `frame-ancestors` у `/embed` и проверку `?parent=`; пусто — виджет работает только на самом стенде и локально (T35) |
+| `EB_TRUST_PROXY_HEADERS` | на Vercel не нужна: платформа ставит `X-Forwarded-For` сама, и Next ему верит. В других местах `1` — только если перед Next стоит ваш прокси, перезаписывающий заголовок; иначе пределы по адресу обходятся подменой заголовка (T35) |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | `${{core.LLM_BASE_URL}}`, `${{llm-gateway.GW_KEY_API}}`, `energy-chat` — тот же шлюз, свой ключ |
 | `EB_THINKING_PARAM` | `${{core.EB_THINKING_PARAM}}` |
 | `PORT` | `8080` — тот же порт, что у домена |
@@ -197,6 +202,35 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `LISTEN` | `[::]:9090` — приватная сеть Railway адресует по IPv6 |
 | `PORT` | `9090` — по нему Railway делает healthcheck; без него — 8080, где Prometheus не слушает |
 
+### 3b. Railway: служба `grafana` (дашборды)
+
+Образ собирается из `monitoring/grafana/Dockerfile`: дашборды и provisioning (источник данных Prometheus) вшиты в
+образ, ручной настройки в интерфейсе нет. Новые дашборды выкладываются обычным деплоем службы.
+
+| Настройка | Значение |
+|---|---|
+| Source | `Danila331/mts-ai`, ветка `main`, **Wait for CI** включён |
+| Root Directory | `/monitoring/grafana` |
+| Dockerfile Path | `Dockerfile` (внутри `/monitoring/grafana`) |
+| Watch Paths | `/monitoring/grafana/**` |
+| Healthcheck | `/api/health`, тайм-аут 60 с |
+| Volume | в `/var/lib/grafana`: пользователи, настройки и сессии переживают выкладку (образ работает от uid 472; если том не пишется, задать `RAILWAY_RUN_UID=0`). Дашборды из тома не зависят — они в образе |
+| Public Networking | по желанию. Без публичного домена открыть Grafana можно только из приватной сети; домен включать лишь после того, как задан пароль |
+
+| Переменная | Значение |
+|---|---|
+| `GF_SECURITY_ADMIN_PASSWORD` | длинный случайный пароль; **задать до включения публичного домена** (без него у Grafana `admin` / `admin`). Только в переменных Railway, в репозиторий не попадает |
+| `GF_AUTH_ANONYMOUS_ENABLED` | `false` |
+| `GF_USERS_ALLOW_SIGN_UP` | `false` |
+| `GF_SERVER_HTTP_PORT` | `3000` — тот же порт, что у домена |
+| `GF_SERVER_HTTP_ADDR` | `::` — приватная сеть Railway адресует по IPv6 |
+| `GF_SERVER_ROOT_URL` | публичный адрес Grafana, если включён домен |
+| `GF_ANALYTICS_REPORTING_ENABLED`, `GF_ANALYTICS_CHECK_FOR_UPDATES` | `false` |
+| `PROMETHEUS_URL` | `http://${{prometheus.RAILWAY_PRIVATE_DOMAIN}}:9090` |
+
+Проверка: `GET /api/health` отвечает без входа; `GET /api/search` без пароля — 401; после входа видны три дашборда
+(«Консультант», «Модель и шлюз», «Заявки»). Сами `/metrics` api и шлюза остаются только в приватной сети.
+
 ### 4. Vercel: фронт
 
 Project → Settings:
@@ -207,6 +241,7 @@ Project → Settings:
 | Git → Production Branch | `main` |
 | Environment Variables → `EB_API_URL` | публичный адрес `api` на Railway, `https://….up.railway.app` |
 | Environment Variables → `EB_API_TOKEN` | то же значение, что у `api` |
+| Environment Variables → `EB_ADMIN_TOKEN` | то же значение, что у `api`: вход администратора на `/settings` |
 | Environment Variables → `EB_STAND_URL` | адрес стенда сайта МТС, если он развёрнут |
 
 Браузер в Railway не ходит: все запросы идут на `/api/*` того же домена Vercel, и уже сервер Next
@@ -236,10 +271,16 @@ sh backend/scripts/smoke.sh https://<api>.up.railway.app <EB_API_TOKEN>
 | `EB_CORE_TOKEN` | — | общий секрет с ядром; в бою обязателен |
 | `EB_CORE_TIMEOUT` | `3m` | потолок на один ответ ядра |
 | `EB_API_TOKEN` | — | общий секрет с прокси Next; в бою обязателен |
+| `EB_ADMIN_TOKEN` | — | токен администратора: только с ним `POST /api/settings` меняет настройки RAG для всех; пусто — закрыто для всех |
+| `EB_MANAGER_TOKEN` | — | токен менеджера: разговоры клиентов `GET /api/sessions/:id` (и заявки `/api/leads`, T5); пусто — закрыто для всех. Тот же токен задайте службе web (Vercel): `/manager` — демо без входа, токен подставляет сервер Next |
 | `EB_ALLOWED_ORIGINS` | — | CORS, только для вызовов из браузера напрямую |
 | `EB_LIMIT_CHAT_PER_MINUTE` / `_BURST` | 20 / 5 | вопросов с адреса |
 | `EB_LIMIT_LEAD_PER_HOUR` / `_BURST` | 10 / 3 | заявок с адреса |
+| `EB_LIMIT_CHAT_PER_DAY` | 300 | вопросов с адреса за сутки (T35); счётчик в Redis или памяти, как остальные пределы |
+| `EB_LEAD_MIN_FILL` | `2s` | быстрее заявка не принимается: антибот без CAPTCHA вместе со скрытым полем `website` (T35); `0` — выкл. |
 | `EB_LIMIT_FEEDBACK_PER_MINUTE` / `_BURST` | 30 / 10 | оценок с адреса |
+| `EB_LIMIT_SETTINGS_PER_MINUTE` / `_BURST` | 10 / 5 | запросов к настройкам и попыток входа администратора с адреса |
+| `EB_LIMIT_MANAGER_PER_MINUTE` / `_BURST` | 120 / 30 | запросов экрана менеджера (`/manager`: опрос списка раз в 10 с, карточки, статусы) с адреса |
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | — | модель для резюме заявок; без неё резюме — список вопросов |
 | `EB_SUMMARY_TIMEOUT` | `30s` | тайм-аут одного запроса резюме |
 | `EB_REDIS_URL` / `REDIS_URL` | — | Redis для пределов частоты; без него — память реплики |

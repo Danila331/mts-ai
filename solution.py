@@ -12,11 +12,8 @@ import os
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-
-# Вариант v28 — схема v3 с правилами «как у жюри» (eval/VARIANTS.md). Умолчание: EB_STYLE из окружения главнее.
-os.environ.setdefault("EB_STYLE", "jury")
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -29,89 +26,50 @@ DATA_DIR = Path(env("DATA_DIR", "data"))
 OUTPUT = Path(env("OUTPUT_PATH", "submission.csv"))
 # MAX_WORKERS платформы отражает лимиты сервиса (регламент, раздел 6) — уважаем его.
 MAX_WORKERS = env_num("EB_MAX_WORKERS", 0, 0, 16) or env_num("MAX_WORKERS", 4, 1, 16)
-# Лимит прогона на платформе — 20 минут. С 17-й минуты новых запросов к модели нет: необработанные вопросы
-# получают выдержку из базы, остаётся запас на запись файла.
-DEADLINE_SEC = env_num("EB_DEADLINE_SEC", 1020.0, 5.0, 3600.0, float)
-# Жёсткий предел: к этому моменту файл записан при любом поведении сети, зависшие потоки бросаются.
-HARD_DEADLINE_SEC = env_num("EB_HARD_DEADLINE_SEC", 1140.0, 10.0, 3600.0, float)
+# Лимит прогона на платформе — 20 минут; оставляем запас на запись файла.
+DEADLINE_SEC = env_num("EB_DEADLINE_SEC", 1050.0, 30.0, 3600.0, float)
 MAX_ANSWER_CHARS = 9000  # предел платформы — 10 000 символов
-FLUSH_EVERY_SEC = 5.0  # как часто дописывать готовые ответы в submission.csv
 OFFLINE_MARGIN_SEC = 20.0  # верхняя граница запаса до дедлайна, после которого модель уже не вызываем
 
 
-# Оценки длительности одного вопроса, пока нет своих замеров.
-EXTRA_PRIOR_SEC = 15.0
-PLAIN_PRIOR_SEC = 5.0
-
-
 class Budget:
-    """Распределяет время прогона между вопросами.
+    """Следит, успеваем ли ответить на все вопросы до дедлайна.
 
-    Режимы по убыванию качества: extra (с дорогими шагами — опорой из базы или размышлениями) →
-    normal → fast (без реранкера, повторной генерации и с сокращённым контекстом) → offline (без модели).
-
-    Дорогие шаги дают лучший ответ, но удлиняют его в разы, поэтому вопрос получает их, только если
-    после него все оставшиеся вопросы гарантированно успевают в обычном режиме. Так они достаются
-    стольким вопросам, сколько позволяет запас времени, а прогон не выходит за дедлайн.
-    Если и обычный режим не успевает — включается быстрый и не выключается. Когда до дедлайна
-    остаётся меньше, чем нужно на один ответ (1,5 средней длительности, от 5 до OFFLINE_MARGIN_SEC
-    секунд), модель больше не вызывается.
+    По средней длительности уже обработанных вопросов прогнозирует, хватит ли времени на
+    оставшиеся. Если нет — включает быстрый режим (без реранкера и повторной генерации)
+    и не выключает его. Когда до дедлайна остаётся меньше, чем нужно на один ответ
+    (1,5 средней длительности, от 5 до OFFLINE_MARGIN_SEC секунд), модель больше не вызывается.
     """
 
-    def __init__(self, total: int, started: float, deadline_sec: float, workers: int, extra: bool = False):
+    def __init__(self, total: int, started: float, deadline_sec: float, workers: int):
         self.total, self.started, self.deadline_sec, self.workers = total, started, deadline_sec, workers
-        self.extra = extra
         self.lock = threading.Lock()
         self.dispatched = self.done = 0
-        self.stats = {"extra": [0, 0.0], "plain": [0, 0.0]}  # режим → [вопросов, секунд]
+        self.spent = 0.0
         self.fast = False
         self.fast_from = None
-
-    def _plain_avg(self) -> float:
-        n, sec = self.stats["plain"]
-        if n:
-            return sec / n
-        n, sec = self.stats["extra"]
-        # Своих замеров обычного режима ещё нет: берём долю от длительности с дорогими шагами.
-        return max(PLAIN_PRIOR_SEC, 0.35 * sec / n) if n else PLAIN_PRIOR_SEC
-
-    def _extra_avg(self) -> float:
-        n, sec = self.stats["extra"]
-        return sec / n if n else max(EXTRA_PRIOR_SEC, 3 * self._plain_avg())
 
     def take(self) -> str:
         with self.lock:
             self.dispatched += 1
             left = self.deadline_sec - (time.perf_counter() - self.started)
-            plain = self._plain_avg()
-            cap = min(OFFLINE_MARGIN_SEC, 0.2 * self.deadline_sec)  # запас не больше пятой части дедлайна
-            margin = cap if not self.done else min(cap, max(min(5.0, cap), 1.5 * plain))
+            avg = self.spent / self.done if self.done else None
+            margin = OFFLINE_MARGIN_SEC if avg is None else min(OFFLINE_MARGIN_SEC, max(5.0, 1.5 * avg))
             if left < margin:
                 return "offline"
-            remaining = self.total - self.dispatched + 1
-            # Быстрый режим включается только по собственным замерам обычного режима: оценка «доля от
-            # длительности с дорогими шагами» слишком грубая, чтобы из-за неё необратимо резать качество.
-            if not self.fast and self.stats["plain"][0] >= self.workers:
-                projected = remaining * plain / self.workers
+            if not self.fast and self.done >= self.workers:
+                remaining = self.total - self.dispatched + 1
+                projected = remaining * avg / self.workers
                 if projected > 0.85 * left:
                     self.fast, self.fast_from = True, self.dispatched
                     print(f"[budget] не успеваем: осталось {remaining} вопросов, прогноз {projected:.0f} c "
                           f"при {left:.0f} c — быстрый режим", file=sys.stderr, flush=True)
-            if self.fast:
-                return "fast"
-            if self.extra:
-                # Остальные вопросы в обычном режиме + этот с дорогими шагами (с запасом на долгий ответ).
-                need = (remaining - 1) * plain / self.workers + 1.5 * self._extra_avg()
-                if need <= 0.8 * left:
-                    return "extra"
-            return "normal"
+            return "fast" if self.fast else "normal"
 
-    def record(self, seconds: float, mode: str = "normal"):
+    def record(self, seconds: float):
         with self.lock:
             self.done += 1
-            stat = self.stats["extra" if mode == "extra" else "plain"]
-            stat[0] += 1
-            stat[1] += seconds
+            self.spent += seconds
 
 
 def find(*names) -> Path:
@@ -129,134 +87,104 @@ def read_questions(path: Path) -> list:
         reader = csv.DictReader(f)
         fields = {name.strip().lower(): name for name in reader.fieldnames or []}
         id_col, q_col = fields.get("id", "id"), fields.get("question", "question")
-        # ID сохраняется ровно как во входном файле: регламент требует ответ на каждый исходный ID.
-        return [(str(row[id_col]), str(row[q_col] or "")) for row in reader]
+        return [(str(row[id_col]).strip(), str(row[q_col] or "")) for row in reader]
+
+
+class Snapshot:
+    """Периодическая атомарная перезапись submission.csv: при тайм-ауте остаётся
+    последний полный снимок, а не обрезанный файл."""
+
+    def __init__(self, path: Path, questions: list, every_sec: float):
+        self.path, self.questions, self.every_sec = path, questions, every_sec
+        self.answers = [FALLBACK] * len(questions)
+        self.lock = threading.Lock()
+        self.last_write = 0.0
+
+    def write(self):
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        write_answers(tmp, [(qid, a) for (qid, _), a in zip(self.questions, self.answers)])
+        os.replace(tmp, self.path)
+
+    def update(self, i: int, text: str, force: bool = False) -> bool:
+        with self.lock:
+            self.answers[i] = text
+            now = time.perf_counter()
+            if not force and now - self.last_write < self.every_sec:
+                return False
+            self.write()
+            self.last_write = now
+            return True
 
 
 def write_answers(path: Path, rows: list):
-    """Атомарно: пишем во временный файл рядом и подменяем — платформа никогда не увидит файл наполовину."""
-    tmp = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as f:
+    with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, quoting=csv.QUOTE_ALL, lineterminator="\n")
         writer.writerow(["id", "answer"])
         for qid, answer in rows:
             text = " ".join(answer.split())[:MAX_ANSWER_CHARS] or FALLBACK
             writer.writerow([qid, text])
-    os.replace(tmp, path)
 
 
 def main():
     started = time.perf_counter()
     questions = read_questions(find("questions.csv", "train.csv", "test.csv", "demo_questions.csv"))
     kb_path = find("knowledge-base.zip", "knowledge_base.zip", "kb.zip", "knowledge-base")
-    answers = [FALLBACK] * len(questions)
-    # Файл с запасными ответами пишем сразу: даже при падении сабмит будет валидным.
-    write_answers(OUTPUT, [(qid, a) for (qid, _), a in zip(questions, answers)])
+    # Файл пишется сразу и обновляется атомарными снимками: при падении остаётся последний полный.
+    snapshot = Snapshot(OUTPUT, questions, env_num("EB_SNAPSHOT_SEC", 15.0, 1.0, 300.0, float))
+    snapshot.write()
 
     api = Api()
     api.deadline = started + DEADLINE_SEC
+    bot = Consultant(kb_path, index_dir=HERE / "index", api=api)
     turns = [parse(q) for _, q in questions]
-
-    # Загрузка базы и эмбеддинги — тоже под жёстким дедлайном. Тайм-аут httpx ограничивает паузы между
-    # порциями данных, а не весь запрос, и медленно «капающий» ответ /embeddings держал бы главный поток
-    # дольше лимита платформы (регламент, раздел 5) ещё до того, как ниже включается ожидание с дедлайном.
-    # Не успели — в файле уже запасные ответы, выходим, не дожидаясь зависшего запроса.
-    prepared: dict = {}
-
-    def prepare():
-        try:
-            prepared["bot"] = Consultant(kb_path, index_dir=HERE / "index", api=api)
-            prepared["vectors"] = prepared["bot"].embed_queries([search_queries(t)[1] for t in turns])
-        except BaseException as exc:  # noqa: BLE001 — ошибку поднимет главный поток
-            prepared["error"] = exc
-
-    loader = threading.Thread(target=prepare, daemon=True)
-    loader.start()
-    loader.join(timeout=max(1.0, HARD_DEADLINE_SEC - (time.perf_counter() - started)))
-    if "error" in prepared:
-        raise prepared["error"]
-    if "vectors" not in prepared:
-        print("Подготовка не уложилась в жёсткий дедлайн — в файле запасные ответы", file=sys.stderr, flush=True)
-        sys.stdout.flush()
-        os._exit(0)
-    bot, vectors = prepared["bot"], prepared["vectors"]
+    vectors = bot.embed_queries([search_queries(t)[1] for t in turns])
     print(f"Вопросов: {len(questions)}; потоков: {MAX_WORKERS}", file=sys.stderr, flush=True)
 
     debug_path = env("DEBUG_JSONL")
-    debug = []
-    budget = Budget(len(questions), started, DEADLINE_SEC, MAX_WORKERS, extra=bot.has_extra)
-    saved = threading.Lock()
-    last_flush = [time.perf_counter()]
-    closed = threading.Event()  # итог собирает главный поток: поздние ответы зависших потоков не пишем
-
-    def keep(i: int, text: str):
-        """Готовый ответ сразу попадает в submission.csv (не чаще раза в FLUSH_EVERY_SEC): если процесс убьют,
-        в файле останутся все ответы, полученные к этому моменту."""
-        with saved:
-            if closed.is_set():
-                return
-            answers[i] = text
-            if time.perf_counter() - last_flush[0] >= FLUSH_EVERY_SEC:
-                write_answers(OUTPUT, [(qid, a) for (qid, _), a in zip(questions, answers)])
-                last_flush[0] = time.perf_counter()
+    debug = [None] * len(questions)
+    budget = Budget(len(questions), started, DEADLINE_SEC, MAX_WORKERS)
 
     def work(i):
+        # Поэтапный бюджет: раскрытие документов только в первые ~11 минут (дорогое, дальше шум).
+        if time.perf_counter() - started > env_num("EB_EXPAND_UNTIL_SEC", 660.0, 60.0, 3600.0, float):
+            bot.expand_docs = 0
         qid = questions[i][0]
         mode = budget.take()
         t0 = time.perf_counter()
         try:
-            result = bot.answer(turns[i], mode="eval", query_vec=vectors[i], fast=mode == "fast",
-                                offline=mode == "offline", premium=mode == "extra")
+            result = bot.answer(turns[i], mode="eval", query_vec=vectors[i],
+                                fast=mode == "fast", offline=mode == "offline")
         except Exception as exc:  # noqa: BLE001
             print(f"[{qid}] {type(exc).__name__}: {exc}", file=sys.stderr)
-            return qid, FALLBACK, {"id": qid, "error": str(exc), "mode": mode}
+            return i, FALLBACK, {"id": qid, "error": str(exc), "mode": mode}
         finally:
             if mode != "offline":
-                budget.record(time.perf_counter() - t0, mode)
+                budget.record(time.perf_counter() - t0)
         info = {"id": qid, "mode": mode, "sources": result.sources, "timings": result.timings,
-                "error": result.error, "guard": result.guard}
+                "error": result.error, "guard": result.guard, "draft": result.draft,
+                "write": result.write, "final": result.text}
         print(f"[{qid}] {mode} {result.timings.get('total', 0):.1f} c"
               f"{' guard=' + ','.join(result.guard) if result.guard else ''}", file=sys.stderr, flush=True)
-        keep(i, result.text)
-        return qid, result.text, info
+        return i, result.text, info
 
-    pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-    futures = {pool.submit(work, i): i for i in range(len(questions))}
-    done, pending = wait(futures, timeout=max(1.0, HARD_DEADLINE_SEC - (time.perf_counter() - started)))
-    with saved:
-        closed.set()  # с этого момента answers и файл меняет только главный поток
-        for future in done:
-            _qid, text, info = future.result()
-            answers[futures[future]] = text
-            debug.append(info)
-    # Тайм-аут httpx ограничивает паузы между порциями данных, а не весь запрос: медленно
-    # «капающий» ответ мог бы держать поток за дедлайном. Такие вопросы отвечаем без модели.
-    for future in pending:
-        i = futures[future]
-        try:
-            answers[i] = bot.answer(turns[i], mode="eval", offline=True).text
-        except Exception:  # noqa: BLE001
-            answers[i] = FALLBACK
-        debug.append({"id": questions[i][0], "mode": "hard-deadline"})
-    pool.shutdown(wait=False, cancel_futures=True)
+    saves = 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = [pool.submit(work, i) for i in range(len(questions))]
+        for fut in as_completed(futures):
+            i, text, info = fut.result()
+            debug[i] = info
+            saves += snapshot.update(i, text)
 
-    write_answers(OUTPUT, [(qid, a) for (qid, _), a in zip(questions, answers)])
+    snapshot.write()
     if debug_path:
         with open(debug_path, "w", encoding="utf-8") as f:
             for row in debug:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    fails = sum(1 for a in answers if a == FALLBACK)
-    modes = {m: sum(1 for d in debug if d.get("mode") == m) for m in ("extra", "normal", "fast", "offline")}
-    guarded = sum(1 for d in debug if d.get("guard"))
-    hard = len(pending)
+    fails = sum(1 for a in snapshot.answers if a == FALLBACK)
+    modes = {m: sum(1 for d in debug if d and d.get("mode") == m) for m in ("normal", "fast", "offline")}
+    guarded = sum(1 for d in debug if d and d.get("guard"))
     print(f"Готово: {OUTPUT} ({len(questions)} ответов, запасных: {fails}, режимы: {modes}, "
-          f"исправлено проверкой: {guarded}{f', жёсткий дедлайн: {hard}' if hard else ''}) "
-          f"за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
-    if hard:
-        # Не ждём зависшие потоки: файл уже записан.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
+          f"исправлено проверкой: {guarded}, снимков CSV: {saves + 1}) за {time.perf_counter() - started:.0f} c", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Loader2, MessagesSquare } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -10,8 +10,23 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toTurns } from "@/hooks/use-chat";
 import { sendLead } from "@/lib/api";
+import {
+  browserTimezone,
+  CALLBACK_PLAIN,
+  type CallbackPreference,
+  callbackNote,
+  guessTime,
+  LEAD_SAVED_TITLE,
+  leadSavedText,
+} from "@/lib/callback";
+import { type LeadKind, kindInfo, sessionKinds } from "@/lib/lead-kinds";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { CallbackPicker } from "./callback-picker";
+import { useAntibot } from "./honeypot";
+import { LeadKindPicker } from "./lead-kind-picker";
+import { Consent } from "./consent";
+import { LeadChecklist } from "./post-lead";
 
 function plural(n: number, one: string, few: string, many: string) {
   const m10 = n % 10;
@@ -101,14 +116,35 @@ function LeadForm({
   closeButton: (label: string, primary?: boolean) => React.ReactNode;
   panel?: boolean;
 }) {
-  const [form, setForm] = useState({ name: "", phone: "", company: "", comment: "" });
+  const fromPassport = (key: string) => session.passport?.fields.find((f) => f.key === key)?.value ?? "";
+  const [form, setForm] = useState(() => ({
+    name: fromPassport("name"),
+    phone: fromPassport("phone"),
+    company: fromPassport("company"),
+    comment: "",
+  }));
+  // Удобное время (T4) — пожелание, а не запись на время.
+  const [callback, setCallback] = useState<CallbackPreference>(() => ({
+    time: guessTime(fromPassport("callback_preference")),
+    timezone: browserTimezone(),
+  }));
+  // Текст после отправки зависит от того, выбрал ли клиент время, — запоминаем выбор на момент отправки.
+  const [savedNote, setSavedNote] = useState(CALLBACK_PLAIN);
+  // Тип заявки (T17): только подходящие продуктам из паспорта; предвыбор — по словам клиента.
+  // Паспорт может обновиться, пока карточка открыта, — список считается заново, а выбор клиента остаётся,
+  // если тип всё ещё подходит.
+  const { kinds, guess } = useMemo(() => sessionKinds(session), [session]);
+  const [picked, setKind] = useState<LeadKind | null>(null);
+  const kind = picked && kinds.some((k) => k.kind === picked) ? picked : guess;
+  const [consent, setConsent] = useState(false);
   const [touched, setTouched] = useState({ name: false, phone: false });
   const [sending, setSending] = useState(false);
+  const antibot = useAntibot();
   const lead = session.lead;
   const digits = form.phone.replace(/\D/g, "").length;
   const nameError = touched.name && !form.name.trim() ? "Как к вам обращаться?" : "";
   const phoneError = touched.phone && digits < 10 ? "Нужен номер из 10–11 цифр, например +7 900 000-00-00" : "";
-  const valid = form.name.trim() && digits >= 10;
+  const valid = form.name.trim() && digits >= 10 && consent;
   const turns = session.messages.filter((m) => !m.pending && !m.error && m.content).length;
 
   const submit = async (e?: React.FormEvent) => {
@@ -117,9 +153,18 @@ function LeadForm({
     if (!valid || sending) return;
     setSending(true);
     try {
-      const res = await sendLead({ ...form, messages: toTurns(session.messages) });
+      const res = await sendLead({
+        ...form,
+        messages: toTurns(session.messages),
+        session_id: session.id,
+        callback,
+        kind,
+        consent,
+        ...(await antibot.settle()),
+      });
+      setSavedNote([kindInfo(kind).note, callbackNote(callback)].filter(Boolean).join(" "));
       onDone(res);
-      toast.success("Заявка передана менеджеру");
+      toast.success(leadSavedText(callback, kindInfo(kind).note), { description: `Номер заявки №${res.id}` });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Не удалось отправить заявку. Попробуйте ещё раз.");
     } finally {
@@ -145,13 +190,15 @@ function LeadForm({
               <Check className="size-5" strokeWidth={2.5} />
             </span>
             <Title className="font-heading text-[18px] leading-snug font-semibold tracking-[-0.015em]">
-              Заявка передана
+              {LEAD_SAVED_TITLE}
             </Title>
             <Description className="text-[14px] leading-relaxed text-muted-foreground">
-              Менеджер свяжется с вами и уже будет знать контекст разговора. Номер заявки{" "}
+              {savedNote} Он уже будет знать контекст разговора. Консультация продолжается — вернитесь к чату и
+              задавайте вопросы. Номер заявки{" "}
               <span className="font-mono text-[13px] text-foreground">№{lead.id}</span>
             </Description>
           </div>
+          <LeadChecklist session={session} className="rounded-xl border bg-surface p-4" />
           <div className="rounded-xl border bg-surface p-4">
             <div className="mb-3 text-[13px] font-semibold">Что получит менеджер</div>
             <Summary text={lead.summary} />
@@ -164,7 +211,8 @@ function LeadForm({
 
   return (
     <form onSubmit={submit} className={cn(panel ? "flex h-full min-h-0 flex-col" : "grid gap-6")} noValidate>
-      <div className={cn(body, "grid grid-cols-[minmax(0,1fr)] content-start gap-6")}>
+      {/* relative — точка отсчёта для скрытой ловушки (honeypot.tsx): она остаётся внутри прокрутки формы. */}
+      <div className={cn(body, "relative grid grid-cols-[minmax(0,1fr)] content-start gap-6")}>
         <div className={cn("grid gap-1.5", !panel && "pr-8")}>
           <Title className={cn("font-heading text-[18px] leading-snug font-semibold tracking-[-0.015em]", panel && "sr-only")}>
             Передать запрос менеджеру
@@ -193,7 +241,7 @@ function LeadForm({
               value={form.name}
               onChange={set("name")}
               onBlur={blur("name")}
-              placeholder="Иван Петров"
+              placeholder="Тестов Тест Тестович"
               autoComplete="off"
               aria-invalid={!!nameError}
               aria-describedby={nameError ? "lead-name-error" : undefined}
@@ -217,7 +265,7 @@ function LeadForm({
               id="lead-company"
               value={form.company}
               onChange={set("company")}
-              placeholder="ООО «Ромашка»"
+              placeholder="ООО Учебный склад"
               autoComplete="off"
             />
           </Field>
@@ -227,27 +275,29 @@ function LeadForm({
               value={form.comment}
               onChange={set("comment")}
               rows={3}
-              placeholder="Удобное время для звонка, адрес объекта"
+              placeholder="Адрес объекта, что важно знать менеджеру"
               className="field-sizing-fixed min-h-[84px] w-full resize-none"
             />
           </Field>
         </div>
-        {!panel && <p className="-mt-2 text-xs text-muted-foreground">Это демо-стенд: вводите только тестовые данные.</p>}
+        {antibot.field}
+        <LeadKindPicker id={`lead-kind-${session.id}`} kinds={kinds} value={kind} onChange={setKind} />
+        <CallbackPicker id={`lead-callback-${session.id}`} value={callback} onChange={setCallback} />
+        <Consent id={`lead-consent-${session.id}`} checked={consent} onChange={setConsent} />
       </div>
 
       <div className={footer}>
         {panel ? (
           <>
-            <Button type="submit" size="lg" disabled={sending} className="h-11 w-full text-[15px]">
+            <Button type="submit" size="lg" disabled={sending || !consent} className="h-11 w-full text-[15px]">
               {sending && <Loader2 className="animate-spin" />}
               {sending ? "Отправляю" : "Отправить заявку"}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">Демо-стенд: вводите только тестовые данные</p>
           </>
         ) : (
           <>
             {closeButton("Отмена")}
-            <Button type="submit" size="lg" disabled={sending}>
+            <Button type="submit" size="lg" disabled={sending || !consent}>
               {sending && <Loader2 className="animate-spin" />}
               {sending ? "Отправляю" : "Отправить заявку"}
             </Button>

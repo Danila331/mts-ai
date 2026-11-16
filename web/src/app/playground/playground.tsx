@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { ChatView } from "@/components/chat/chat-view";
+import { NewDialogConfirm } from "@/components/chat/new-dialog-confirm";
 import { exportSession, SessionsList } from "@/components/sessions-sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,8 +20,10 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
+import { FLOWS } from "@/lib/wizards/flows";
 import { useKb } from "@/hooks/use-kb";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { hasUnsentLead } from "@/lib/answer-ux";
 import type { ChatMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -48,12 +51,19 @@ const MODES: { value: ChatMode; short: string; label: string; hint: string }[] =
 
 export function Playground() {
   const [mode, setMode] = useState<ChatMode>("chat");
-  const chat = useChat("eb.playground.sessions.v1", mode);
+  const chat = useChat("eb.playground.sessions.v1", mode, { sandbox: true });
   const { kb } = useKb();
   const wide = useMediaQuery("(min-width: 1024px)", true);
   const [picked, setPicked] = useState<string>("");
   const [chunk, setChunk] = useState<string | null>(null);
+  const [line, setLine] = useState<number | undefined>();
+  const openChunk = (id: string, hl?: number) => {
+    setChunk(id);
+    setLine(hl);
+  };
   const [leadOpen, setLeadOpen] = useState(false);
+  // «Новый диалог» (T31): начатая, но не отправленная заявка — сначала подтверждение.
+  const [confirmNew, setConfirmNew] = useState(false);
   const [debugPref, setDebugPref] = useState(true);
   const [debugSheet, setDebugSheet] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -101,7 +111,7 @@ export function Playground() {
       message={selected}
       question={question}
       kb={kb}
-      onOpenChunk={setChunk}
+      onOpenChunk={openChunk}
       onClose={() => setDebugOpen(false)}
     />
   );
@@ -168,7 +178,8 @@ export function Playground() {
             <button
               type="button"
               className="flex h-8 items-center gap-1 rounded-md px-2 text-[13px] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-muted aria-expanded:text-foreground"
-              aria-label="Режим ответа"
+              // Видимый текст («Чат») — в начале имени (axe: label-content-name-mismatch, WCAG 2.5.3).
+              aria-label={`${MODES.find((m) => m.value === mode)?.short ?? ""}: режим ответа`}
             />
           }
         >
@@ -217,13 +228,17 @@ export function Playground() {
           <ChatView
             chat={chat}
             kb={kb}
-            onOpenChunk={setChunk}
+            onOpenChunk={openChunk}
             selectedId={wide && debugOpen ? selected?.id : undefined}
             onSelect={(id, explicit) => {
               setPicked(id);
               if (explicit) setDebugOpen(true);
             }}
             onLead={() => setLeadOpen(true)}
+            summary
+            wizards={mode === "chat" ? FLOWS : undefined}
+            showRoles={mode === "chat"}
+            showLevel={mode === "chat"}
           />
         )}
       </div>
@@ -232,7 +247,7 @@ export function Playground() {
 
   return (
     <AppShell
-      onNew={() => chat.create()}
+      onNew={() => (hasUnsentLead(chat.active) ? setConfirmNew(true) : chat.create())}
       onSelectSession={(id) => chat.select(id)}
       sidebar={chat.ready ? <SessionsList chat={chat} /> : null}
     >
@@ -265,7 +280,15 @@ export function Playground() {
           </Sheet>
         </>
       )}
-      <ChunkSheet kb={kb} chunkId={chunk} onClose={() => setChunk(null)} marked={marked} />
+      <NewDialogConfirm
+        open={confirmNew}
+        onCancel={() => setConfirmNew(false)}
+        onConfirm={() => {
+          setConfirmNew(false);
+          chat.create();
+        }}
+      />
+      <ChunkSheet kb={kb} chunkId={chunk} line={line} onClose={() => setChunk(null)} marked={marked} />
       {chat.active && (
         <LeadDialog
           session={chat.active}

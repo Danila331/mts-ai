@@ -74,6 +74,19 @@ func (q *Queries) ForgetLeadsMentioning(ctx context.Context, phone10 string) (in
 	return result.RowsAffected(), nil
 }
 
+const forgetSessionsMentioning = `-- name: ForgetSessionsMentioning :execrows
+DELETE FROM sessions WHERE regexp_replace(title, '\D', '', 'g') LIKE '%' || $1::text || '%'
+`
+
+// Заголовок сессии — первая реплика клиента: номер мог оказаться и там.
+func (q *Queries) ForgetSessionsMentioning(ctx context.Context, phone10 string) (int64, error) {
+	result, err := q.db.Exec(ctx, forgetSessionsMentioning, phone10)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const purgeAnswers = `-- name: PurgeAnswers :execrows
 DELETE FROM answers WHERE created_at < $1
 `
@@ -104,6 +117,19 @@ DELETE FROM leads WHERE created_at < $1
 
 func (q *Queries) PurgeLeads(ctx context.Context, createdAt time.Time) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeLeads, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeSessions = `-- name: PurgeSessions :execrows
+DELETE FROM sessions WHERE updated_at < $1
+`
+
+// Сессия живёт, пока жив её последний ответ: тот же срок, что у журнала.
+func (q *Queries) PurgeSessions(ctx context.Context, updatedAt time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeSessions, updatedAt)
 	if err != nil {
 		return 0, err
 	}

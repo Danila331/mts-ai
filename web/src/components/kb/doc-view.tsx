@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { GROUPS, type KbIndex } from "@/hooks/use-kb";
 import type { KbDoc } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { flash, scrollToElement } from "@/lib/smooth-scroll";
 import { ChunkText } from "./chunk-text";
 
 export function Tag({ tone, children }: { tone: "neutral" | "warning" | "info"; children: React.ReactNode }) {
@@ -50,6 +51,7 @@ export function DocView({
   doc,
   kb,
   focusId,
+  focusLine,
   marked,
   onDoc,
   query,
@@ -61,6 +63,8 @@ export function DocView({
   doc: KbDoc;
   kb: KbIndex | null;
   focusId?: string;
+  /** Номер строки раздела focusId (lib/line-match.ts): к ней прокручиваем и её подсвечиваем. */
+  focusLine?: number;
   marked?: Set<string>;
   onDoc?: (doc: string) => void;
   query?: string;
@@ -86,13 +90,17 @@ export function DocView({
     const el = refs.current.get(focusId);
     if (!el) return;
     const t = setTimeout(() => {
-      el.scrollIntoView({ block: "start", behavior: "smooth" });
-      el.classList.remove("kb-flash");
-      void el.offsetWidth; // перезапуск анимации подсветки
-      el.classList.add("kb-flash");
+            // Строка, на которую опирается ответ; нет совпадения — подсвечиваем раздел целиком, как раньше.
+      const row = focusLine == null ? null : el.querySelector<HTMLElement>(`[data-line="${focusLine}"]`);
+      if (scrollRoot) {
+        if (row) scrollToElement(scrollRoot, row, { align: "center", duration: 450 });
+        else scrollToElement(scrollRoot, el, { duration: 420 });
+      } else (row ?? el).scrollIntoView({ block: row ? "center" : "start", behavior: "smooth" });
+      flash(el, "kb-flash");
+      if (row) flash(row, "kb-line-flash");
     }, 60);
     return () => clearTimeout(t);
-  }, [focusId, focusKey, doc.doc, scrollRoot]);
+  }, [focusId, focusLine, focusKey, doc.doc, scrollRoot]);
 
   // Оглавление: подсвечиваем раздел, который сейчас вверху экрана.
   useEffect(() => {
@@ -133,7 +141,9 @@ export function DocView({
     if (onSection) return onSection(id);
     pinned.current = id;
     setCurrent(id);
-    refs.current.get(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    const el = refs.current.get(id);
+    if (el && scrollRoot) scrollToElement(scrollRoot, el, { duration: 420 });
+    else el?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
 
   const copyLink = (id: string) => {
@@ -240,7 +250,7 @@ export function DocView({
                       {parts.map((p, i) => (
                         <span key={i} className={i < parts.length - 1 ? "font-normal text-muted-foreground" : undefined}>
                           {p}
-                          {i < parts.length - 1 && <span className="mx-1.5 text-muted-foreground/50">/</span>}
+                          {i < parts.length - 1 && <span className="mx-1.5 text-muted-foreground">/</span>}
                         </span>
                       ))}
                     </h2>
@@ -262,6 +272,7 @@ export function DocView({
                   kb={kb}
                   onDoc={onDoc}
                   highlight={query}
+                  focusLine={focused ? focusLine : undefined}
                   className={cn(
                     "text-pretty",
                     isIntro ? "text-[15px] leading-[1.7] text-foreground" : "text-[15px] leading-[1.7] text-foreground/90",
@@ -291,7 +302,7 @@ export function DocView({
                         : "border-transparent text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    <span className="tnum w-[34px] shrink-0 pt-px font-mono text-[11px] text-muted-foreground/70">{sectionNo.get(c.id)}</span>
+                    <span className="tnum w-[34px] shrink-0 pt-px font-mono text-[11px] text-muted-foreground">{sectionNo.get(c.id)}</span>
                     <span className="min-w-0">{sectionParts(c.path, doc.title).pop()}</span>
                   </button>
                 </li>

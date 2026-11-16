@@ -2,31 +2,53 @@
 
 import {
   ArrowUpRight,
-  Braces,
+  Check,
+  ChevronDown,
+  Copy,
   FileCode2,
   Globe,
   Headset,
   Layers,
-  Check,
-  Copy,
   Lock,
+  Braces,
+  LoaderCircle,
+  TriangleAlert,
   Monitor,
   MousePointerClick,
   Pipette,
   Plus,
   RotateCcw,
+  Route,
   Smartphone,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { TOPICS, type TopicName, topicByName } from "@/components/chat/topics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { matchTopic } from "@/lib/page-context";
+import {
+  failMessage,
+  initialPreview,
+  isMixedContent,
+  LOAD_TIMEOUT_MS,
+  previewReducer,
+  probeStand,
+  standLabel,
+  type PreviewState,
+} from "@/lib/site-preview";
 import { cn } from "@/lib/utils";
+
+/** Строка data-topics: префикс пути страницы сайта → тема приветствия и первых вопросов в чате. */
+interface TopicRule {
+  prefix: string;
+  topic: TopicName;
+}
 
 interface Settings {
   title: string;
@@ -35,6 +57,7 @@ interface Settings {
   greeting: string;
   quick: string[];
   delay: number;
+  topics: TopicRule[];
 }
 
 const DEFAULTS: Settings = {
@@ -44,7 +67,13 @@ const DEFAULTS: Settings = {
   greeting: "Здравствуйте! Подберу решение по энергоучёту, потерям и солнечной генерации.",
   quick: ["Как снизить расходы на электроэнергию?", "Окупится ли солнечная станция?"],
   delay: 3,
+  topics: [
+    { prefix: "/solar", topic: "solar" },
+    { prefix: "/askue", topic: "askue" },
+  ],
 };
+
+const TOPIC_NAMES = Object.keys(TOPICS) as TopicName[];
 
 const COLORS = [
   { value: "#FF0032", name: "Красный МТС" },
@@ -58,19 +87,31 @@ const TRY = [
   { label: "Поиск потерь", text: "Как найти, где теряется электроэнергия в нашей сети?" },
 ];
 
-const LIMITS = { title: 40, greeting: 140, quick: 60 };
+const LIMITS = { title: 40, greeting: 140, quick: 60, prefix: 60, topics: 8 };
 const isHex = (v: string) => /^#[0-9a-f]{6}$/i.test(v);
 const quickList = (s: Settings) => s.quick.map((q) => q.trim()).filter(Boolean).slice(0, 3);
 const attr = (v: string) => v.replace(/"/g, "&quot;");
+/** Тот же формат префикса, что принимает загрузчик (src/lib/page-context.ts). */
+const isPrefix = (v: string) => /^\/[^\s"'<>]{0,199}$/.test(v);
+
+/** data-topics как объект: только верные префиксы, повтор префикса — последняя строка. */
+function topicsMap(s: Settings) {
+  const out: Record<string, string> = {};
+  for (const { prefix, topic } of s.topics) if (isPrefix(prefix.trim())) out[prefix.trim()] = topic;
+  return out;
+}
 
 function snippet(origin: string, s: Settings) {
+  const topics = topicsMap(s);
+  // JSON с двойными кавычками — в одинарных кавычках атрибута; одинарных в префиксах нет (isPrefix).
+  const topicsAttr = Object.keys(topics).length ? `\n  data-topics='${JSON.stringify(topics)}'` : "";
   return `<script src="${origin}/widget.js" async
   data-title="${attr(s.title)}"
   data-color="${s.color}"
   data-position="${s.position}"
   data-greeting="${attr(s.greeting)}"
   data-quick="${attr(quickList(s).join("|"))}"
-  data-greeting-delay="${s.delay}"></script>`;
+  data-greeting-delay="${s.delay}"${topicsAttr}></script>`;
 }
 
 function useCopy() {
@@ -167,12 +208,78 @@ function Field({
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+/** Иконка раздела в новой рамке не рисуется (оставлена в сигнатуре, чтобы не трогать места вызова). */
+function Panel({ title, children }: { icon?: React.ElementType; title: string; children: React.ReactNode }) {
   return (
     <section className="grid gap-4 border-t py-4 first:border-t-0">
       <h2 className="text-[14px] font-medium">{title}</h2>
       {children}
     </section>
+  );
+}
+
+/** data-topics строками: префикс пути → тема из базы. Своё приветствие и первые вопросы — в чате на этих страницах. */
+function TopicRules({ value, onChange }: { value: TopicRule[]; onChange: (v: TopicRule[]) => void }) {
+  const patch = (i: number, p: Partial<TopicRule>) => onChange(value.map((r, j) => (j === i ? { ...r, ...p } : r)));
+  return (
+    <>
+      {value.length > 0 && (
+        <ul className="grid gap-2">
+          {value.map((r, i) => {
+            const bad = !isPrefix(r.prefix.trim());
+            return (
+              <li key={i} className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-1.5">
+                <Input
+                  value={r.prefix}
+                  maxLength={LIMITS.prefix}
+                  placeholder="/solar"
+                  aria-label={`Префикс пути ${i + 1}`}
+                  aria-invalid={bad}
+                  onChange={(e) => patch(i, { prefix: e.target.value })}
+                  className="h-9 font-mono text-[13px] md:text-[13px]"
+                />
+                <span className="relative inline-flex min-w-0">
+                  <select
+                    value={r.topic}
+                    onChange={(e) => patch(i, { topic: e.target.value as TopicName })}
+                    aria-label={`Тема для ${r.prefix || `строки ${i + 1}`}`}
+                    className="h-9 w-full min-w-0 appearance-none truncate rounded-lg border border-input bg-background pr-7 pl-2.5 text-[13px] outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+                  >
+                    {TOPIC_NAMES.map((name) => (
+                      <option key={name} value={name}>
+                        {TOPICS[name].label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-4 -translate-y-1/2 text-muted-foreground" />
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onChange(value.filter((_, j) => j !== i))}
+                  aria-label={`Удалить тему ${i + 1}`}
+                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-60 transition hover:bg-muted hover:text-foreground hover:opacity-100"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {value.length < LIMITS.topics && (
+        <button
+          type="button"
+          onClick={() => {
+            const used = new Set(value.map((r) => r.topic));
+            const topic = TOPIC_NAMES.find((n) => !used.has(n)) ?? TOPIC_NAMES[0];
+            onChange([...value, { prefix: "/", topic }]);
+          }}
+          className="flex h-9 items-center justify-center gap-1.5 rounded-lg border border-dashed text-[13px] text-muted-foreground transition-colors hover:border-input hover:bg-muted hover:text-foreground"
+        >
+          <Plus className="size-3.5" /> Добавить страницу
+        </button>
+      )}
+    </>
   );
 }
 
@@ -188,7 +295,7 @@ function Segmented<T extends string>({
   label: string;
 }) {
   return (
-    <div className="inline-flex w-fit rounded-md bg-muted p-0.5" role="radiogroup" aria-label={label}>
+    <div className="inline-flex w-fit max-w-full overflow-x-auto rounded-md bg-muted p-0.5" role="radiogroup" aria-label={label}>
       {options.map(({ value: v, label: l, icon: Icon, iconOnly, disabled }) => (
         <button
           key={v}
@@ -200,7 +307,7 @@ function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(v)}
           className={cn(
-            "flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-[5px] px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
             value === v && "bg-background text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-accent",
           )}
         >
@@ -212,39 +319,39 @@ function Segmented<T extends string>({
   );
 }
 
-/** Сводка справа от тега — как панель окружения в Claude Code: строки «иконка — подпись — значение». */
-function Summary({ standUp, scriptKb }: { standUp: boolean | null; scriptKb: number | null }) {
+/** Сводка справа от тега: строки «иконка · подпись · значение» на одной сетке, значения одним шрифтом. */
+function Summary({ state, scriptSize }: { state: PreviewState; scriptSize: string | null }) {
+  const dot =
+    state.phase === "probing" ? "bg-dim animate-pulse" : state.phase === "failed" ? "bg-destructive" : "bg-success";
   const rows: { icon: React.ElementType; label: string; value: React.ReactNode; title?: string }[] = [
     {
       icon: FileCode2,
       label: "widget.js",
-      value: scriptKb ? `${scriptKb.toLocaleString("ru", { maximumFractionDigits: 1 })} КБ · без зависимостей` : "без зависимостей",
+      value: scriptSize ? `${scriptSize} gzip · без зависимостей` : "без зависимостей",
     },
     { icon: Layers, label: "Изоляция", value: "Shadow DOM + iframe", title: FACTS[0].text },
     { icon: Smartphone, label: "На телефоне", value: "во весь экран", title: FACTS[1].text },
     { icon: Headset, label: "Заявка", value: "с резюме диалога", title: FACTS[2].text },
-    { icon: Braces, label: "JS API", value: <span className="font-mono text-[11px]">open · close · ask</span> },
+    { icon: Braces, label: "JS API", value: "open · close · ask" },
     {
       icon: Globe,
       label: "Копия сайта МТС",
       value: (
         <span className="inline-flex items-center gap-1.5">
-          <span
-            className={cn("size-1.5 rounded-full", standUp ? "bg-success" : standUp === false ? "bg-dim" : "bg-dim animate-pulse")}
-          />
-          {standUp ? "запущена" : standUp === false ? "не запущена" : "проверяю…"}
+          <span className={cn("size-1.5 rounded-full", dot)} />
+          {standLabel(state)}
         </span>
       ),
     },
   ];
   return (
-    <dl className="self-start border-y py-1.5 lg:border-y-0 lg:border-l lg:py-0 lg:pl-6">
-      <div className="mb-1 hidden text-[12px] font-medium text-muted-foreground lg:block">Как устроено</div>
+    <dl className="grid content-start self-start border-y py-2 lg:border-y-0 lg:border-l lg:py-0 lg:pl-6">
+      <div className="flex h-8 items-center text-[12px] font-medium text-muted-foreground">Как устроено</div>
       {rows.map(({ icon: Icon, label, value, title }) => (
-        <div key={label} className="flex min-h-7 items-center gap-2.5 text-[13px]" title={title}>
+        <div key={label} className="flex h-9 items-center gap-2.5 text-[13px]" title={title}>
           <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <dt className="min-w-0 truncate">{label}</dt>
-          <dd className="tnum ml-auto shrink-0 text-right text-[12px] text-muted-foreground">{value}</dd>
+          <dd className="tnum ml-auto shrink-0 text-right text-[13px] text-muted-foreground">{value}</dd>
         </div>
       ))}
     </dl>
@@ -257,15 +364,19 @@ const FACTS = [
   { title: "Заявка менеджеру", text: "Контакты и резюме диалога уходят менеджеру — клиенту не нужно повторять задачу." },
 ];
 
-export function WidgetStudio({ standUrl }: { standUrl: string }) {
+export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string; scriptSize?: string | null }) {
   const [s, setS] = useState<Settings>(DEFAULTS);
   const [origin, setOrigin] = useState("https://energytool-ai.example");
   const [device, setDevice] = useState<"desktop" | "phone">("desktop");
   const [source, setSource] = useState<"mts" | "blank">("mts");
-  const [standUp, setStandUp] = useState<boolean | null>(null);
-  const [src, setSrc] = useState("");
+  const [pv, dispatch] = useReducer(previewReducer, initialPreview);
+  const [probeRun, setProbeRun] = useState(0);
+  // Адрес превью вместе с источником, для которого он собран: чужой адрес в iframe не попадает.
+  const [built, setBuilt] = useState<{ mts: boolean; url: string }>({ mts: false, url: "" });
+  const [seenKey, setSeenKey] = useState("");
+  const [loadedSrc, setLoadedSrc] = useState("");
   const [nonce, setNonce] = useState(0);
-  const [scriptKb, setScriptKb] = useState<number | null>(null);
+  const [previewPath, setPreviewPath] = useState("/");
   const frame = useRef<HTMLIFrameElement>(null);
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS((x) => ({ ...x, [k]: v }));
   const stand = standUrl.replace(/\/$/, "");
@@ -280,24 +391,43 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- адрес стенда известен только в браузере
     setOrigin(window.location.origin);
-    fetch("/widget.js", { cache: "no-store" })
-      .then((r) => r.text())
-      .then((t) => setScriptKb(Math.round((new Blob([t]).size / 1024) * 10) / 10))
-      .catch(() => {});
-    // Запущен ли стенд с копией сайта МТС; если нет — превью на пустой странице.
-    fetch(stand, { mode: "no-cors", cache: "no-store" })
-      .then(() => setStandUp(true))
-      .catch(() => {
-        setStandUp(false);
-        setSource("blank");
-      });
-  }, [stand]);
+  }, []);
 
-  const mts = source === "mts" && standUp !== false;
+  // Доступна ли копия сайта МТС: тайм-аут, смешанное содержимое http/https, отмена при повторе и размонтировании.
+  useEffect(() => {
+    let alive = true;
+    if (isMixedContent(window.location.protocol, stand)) {
+      dispatch({ type: "probeFail", reason: "mixed" });
+      return;
+    }
+    void probeStand(stand).then((ok) => {
+      if (alive) dispatch(ok ? { type: "probeOk" } : { type: "probeFail", reason: "down" });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [stand, probeRun]);
+
+  const retry = () => {
+    setSource("mts");
+    dispatch({ type: "retry" });
+    setProbeRun((n) => n + 1);
+    setNonce((n) => n + 1);
+  };
+
+  const probing = source === "mts" && pv.phase === "probing";
+  const mts = source === "mts" && pv.phase !== "failed";
+  const siteFailed = source === "mts" && pv.phase === "failed";
+
+  // Страница превью: главная или одна из страниц с темой — виджет видит этот путь и берёт тему из data-topics.
+  const topics = useMemo(() => topicsMap(s), [s]);
+  const pages = useMemo(() => ["/", ...Object.keys(topics).filter((p) => p !== "/")], [topics]);
+  const path = pages.includes(previewPath) ? previewPath : "/";
+  const previewTopic = topicByName(matchTopic(path, topics));
 
   // Превью — настоящий widget.js: на копии сайта МТС (стенд принимает настройки в адресе) или на заглушке.
   useEffect(() => {
-    if (standUp === null) return;
+    if (probing) return;
     const t = setTimeout(() => {
       const cfg: Record<string, string> = {
         title: s.title,
@@ -306,22 +436,36 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
         greeting: s.greeting,
         greetingDelay: String(Math.min(s.delay, 1)),
         quick: quickList(s).join("|"),
+        path,
       };
+      if (Object.keys(topics).length) cfg.topics = JSON.stringify(topics);
       if (mts) {
         const q = new URLSearchParams(Object.entries(cfg).map(([k, v]) => [`w_${k}`, v]));
         q.set("w_preview", "1");
         q.set("n", String(nonce));
-        setSrc(`${stand}/?${q}`);
+        setBuilt({ mts: true, url: `${stand}/?${q}` });
       } else {
-        setSrc(`/widget-preview.html?${new URLSearchParams({ ...cfg, n: String(nonce) })}`);
+        setBuilt({ mts: false, url: `/widget-preview.html?${new URLSearchParams({ ...cfg, n: String(nonce) })}` });
       }
     }, 350);
     return () => clearTimeout(t);
-  }, [s, nonce, mts, stand, standUp]);
+  }, [s, nonce, mts, probing, stand, path, topics]);
+
+  const src = !probing && built.mts === mts ? built.url : "";
+  const frameKey = `${device}-${mts}`;
+  const frameReady = src !== "" && seenKey === frameKey;
+  const loaded = src !== "" && loadedSrc === src;
+
+  // Копия сайта не загрузилась за отведённое время — переходим на пустую страницу с предложением повторить.
+  useEffect(() => {
+    if (!mts || !src || loaded) return;
+    const t = setTimeout(() => dispatch({ type: "loadTimeout" }), LOAD_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [mts, src, loaded]);
 
   const command = (action: "ask" | "toggle", text?: string) => {
     const win = frame.current?.contentWindow;
-    if (!win) return;
+    if (!win || !frameReady) return;
     if (mts) win.postMessage({ type: "eb:preview", action, text }, standOrigin);
     else if (action === "ask") win.EnergyToolChat?.ask(text ?? "");
     else win.EnergyToolChat?.toggle();
@@ -340,16 +484,23 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
       </PageBar>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1180px] px-5 pt-6 pb-24 sm:px-8">
-          <header className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="grid content-start gap-4">
-            <p className="max-w-[640px] text-[14px] leading-relaxed text-pretty text-muted-foreground">
+          <header className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-12">
+            {/* min-w-0: без него колонка растягивалась по длине тега, и кнопка «Скопировать тег» уезжала под
+                правый блок «Как устроено» (QA). */}
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5">
+            <h1 className="text-[34px] leading-[1.08] font-semibold tracking-[-0.03em] sm:text-[40px]">
+              Консультант на любом сайте —
+              <br />
+              <span className="text-muted-foreground">одной строкой.</span>
+            </h1>
+            <p className="max-w-[560px] text-[15px] leading-relaxed text-pretty text-muted-foreground">
               Вставьте тег перед <span className="font-mono text-[13px] text-foreground">&lt;/body&gt;</span> — сайту больше
               ничего менять не нужно. Чат живёт в изолированном iframe, стили не пересекаются. Ниже — настоящий виджет на
               копии сайта МТС: он меняется вместе с настройками.
             </p>
             <OneLine origin={origin} full={code} />
-            </div>
-            <Summary standUp={standUp} scriptKb={scriptKb} />
+           </div>
+            <Summary state={pv} scriptSize={scriptSize} />
           </header>
 
           <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-8">
@@ -503,6 +654,20 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                     </div>
                   </Field>
                 </Panel>
+
+                <Panel icon={Route} title="Темы страниц">
+                  <Field
+                    label="Префикс пути → тема"
+                    hint="На странице с этим началом пути чат здоровается и предлагает первые вопросы по продукту. Совпадает самый длинный префикс; на остальных страницах — общее приветствие."
+                    aside={
+                      <span className="tnum ml-auto text-xs text-muted-foreground">
+                        {s.topics.length}/{LIMITS.topics}
+                      </span>
+                    }
+                  >
+                    <TopicRules value={s.topics} onChange={(v) => set("topics", v)} />
+                  </Field>
+                </Panel>
               </div>
               <button
                 type="button"
@@ -520,10 +685,10 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                 </h2>
                 <Segmented
                   label="Страница для превью"
-                  value={mts ? "mts" : "blank"}
-                  onChange={setSource}
+                  value={source === "mts" && !siteFailed ? "mts" : "blank"}
+                  onChange={(v) => (v === "mts" && pv.phase === "failed" ? retry() : setSource(v))}
                   options={[
-                    { value: "mts", label: "Сайт МТС", disabled: standUp === false },
+                    { value: "mts", label: "Сайт МТС" },
                     { value: "blank", label: "Пустая страница" },
                   ]}
                 />
@@ -547,15 +712,18 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                   </span>
                   <div className="mx-auto flex h-7 w-full max-w-[380px] min-w-0 items-center justify-center gap-1.5 rounded-full border bg-background px-3 text-[12px] text-muted-foreground dark:bg-background">
                     <Lock className="size-3 shrink-0" />
-                    <span className="truncate text-foreground/80">{host}</span>
-                    {mts && <span className="shrink-0 text-muted-foreground/70">· копия для стенда</span>}
+                    <span className="truncate text-foreground/80">
+                      {host}
+                      {path !== "/" && <span className="text-muted-foreground">{path}</span>}
+                    </span>
+                    {mts && <span className="shrink-0 text-muted-foreground">· копия для стенда</span>}
                   </div>
                   <Tooltip>
                     <TooltipTrigger
                       render={
                         <button
                           type="button"
-                          onClick={() => setNonce((n) => n + 1)}
+                          onClick={() => (pv.phase === "failed" ? retry() : setNonce((n) => n + 1))}
                           aria-label="Обновить страницу"
                           className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                         />
@@ -566,25 +734,72 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                     <TooltipContent>Обновить: снова показать подсказку</TooltipContent>
                   </Tooltip>
                 </div>
-                <div className="flex justify-center bg-muted">
-                  {src ? (
+                {siteFailed && (
+                  <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-surface px-3.5 py-2.5 text-[13px]">
+                    <TriangleAlert className="size-4 shrink-0 text-warning" aria-hidden />
+                    <span className="min-w-0 flex-1 basis-56 text-muted-foreground">
+                      {failMessage(pv.reason)} Показываю пустую страницу — виджет работает и на ней.
+                    </span>
+                    <Button size="sm" variant="outline" onClick={retry}>
+                      <RotateCcw /> Повторить
+                    </Button>
+                  </div>
+                )}
+                <div className="relative flex justify-center bg-muted">
+                  {src && (
                     <iframe
                       ref={frame}
-                      key={`${device}-${mts}`}
+                      key={frameKey}
                       src={src}
+                      onLoad={() => {
+                        setLoadedSrc(src);
+                        setSeenKey(frameKey);
+                        if (mts) dispatch({ type: "loaded" });
+                      }}
                       title={mts ? "Превью: сайт МТС EnergyTool с виджетом" : "Превью виджета на странице сайта"}
                       className={cn(
                         "block h-[clamp(460px,calc(100dvh-390px),760px)] border-0 bg-white",
                         device === "phone" ? "w-[390px] border-x" : "w-full",
                       )}
                     />
-                  ) : (
-                    <div className="h-[clamp(460px,calc(100dvh-390px),760px)] w-full animate-pulse bg-muted" />
+                  )}
+                  {!frameReady && (
+                    <div
+                      role="status"
+                      className={cn(
+                        "flex items-center justify-center gap-2 bg-muted text-[13px] text-muted-foreground",
+                        src
+                          ? "absolute inset-0"
+                          : "h-[clamp(600px,calc(100dvh-170px),780px)] w-full",
+                      )}
+                    >
+                      <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden />
+                      {probing ? "Проверяю копию сайта МТС…" : mts ? "Загружаю копию сайта МТС…" : "Загружаю превью…"}
+                    </div>
                   )}
                 </div>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="mr-0.5 text-[13px] text-muted-foreground">Страница:</span>
+                <Segmented
+                  label="Страница сайта в превью"
+                  value={path}
+                  onChange={setPreviewPath}
+                  options={pages.map((p) => ({ value: p, label: p === "/" ? "Главная" : p }))}
+                />
+                <span className="text-[13px] text-muted-foreground">
+                  {previewTopic ? (
+                    <>
+                      тема <span className="font-medium text-foreground">«{previewTopic.label}»</span> — откройте чат
+                    </>
+                  ) : (
+                    "общее приветствие"
+                  )}
+                </span>
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="mr-0.5 text-[13px] text-muted-foreground">Спросить в превью:</span>
                 {TRY.map((t) => (
                   <Button key={t.label} variant="outline" size="sm" onClick={() => command("ask", t.text)}>
@@ -595,9 +810,9 @@ export function WidgetStudio({ standUrl }: { standUrl: string }) {
                   Открыть / закрыть чат
                 </Button>
               </div>
-              {standUp === false && (
+              {siteFailed && (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Стенд с сайтом МТС не запущен — превью на пустой странице. Запуск:{" "}
+                  Запуск копии сайта:{" "}
                   <code className="font-mono">node web/scripts/stand.mjs --site &lt;папка сайта&gt;</code>
                 </p>
               )}

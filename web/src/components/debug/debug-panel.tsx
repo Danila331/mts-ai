@@ -9,9 +9,11 @@ import {
   Copy,
   Cpu,
   FileText,
+  Gauge,
   Loader2,
   MessageSquareText,
   ScanSearch,
+  SlidersHorizontal,
   ShieldCheck,
   SquareTerminal,
   Timer,
@@ -22,7 +24,7 @@ import { toast } from "sonner";
 import { citationOrder, SourceNumber } from "@/components/chat/answer-text";
 import type { KbIndex } from "@/hooks/use-kb";
 import { getSettings } from "@/lib/api";
-import type { AnswerPayload, Citation, Hit, Message, Retrieval } from "@/lib/types";
+import type { AnswerPayload, Citation, Confidence, HonestNo, Hit, Message, Retrieval } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /*
@@ -265,6 +267,102 @@ function ChunkLink({
   );
 }
 
+// ---------- Уверенность (T12) и честные «нет» (T26) ----------
+
+const pct = (v: number) => `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%`;
+const num = (v: number) => v.toFixed(2).replace(".", ",");
+
+/** Шкала 0..1; тонкая вертикальная черта — порог. Цвет только у проблемы: ниже порога. */
+function Meter({ value, threshold, low }: { value: number; threshold?: number; low?: boolean }) {
+  return (
+    <span className="relative block h-1.5 w-full rounded-full bg-muted">
+      <span
+        className={cn("absolute inset-y-0 left-0 rounded-full", low ? "bg-warning" : "bg-foreground/60")}
+        style={{ width: pct(value) }}
+      />
+      {threshold !== undefined && (
+        <span
+          className="absolute -top-1 -bottom-1 w-0.5 -translate-x-1/2 rounded-full bg-foreground"
+          style={{ left: pct(threshold) }}
+          aria-hidden
+        />
+      )}
+    </span>
+  );
+}
+
+function ConfidenceSection({ c }: { c: Confidence }) {
+  const low = c.retrieval < c.threshold;
+  const rows = [
+    { key: "retrieval", label: "Поиск", hint: "до ответа", value: c.retrieval, threshold: c.threshold, low },
+    ...(c.support === null ? [] : [{ key: "support", label: "Опора", hint: "после ответа", value: c.support }]),
+  ];
+  return (
+    <Section
+      title="Уверенность"
+      aside={
+        <span className="tnum font-mono" title={c.explain}>
+          {num(c.score)}
+        </span>
+      }
+    >
+      <p className="text-[12px] text-muted-foreground">
+        {c.gated ? (
+          <span className="text-warning">ниже порога — уточняющий вопрос</span>
+        ) : c.gate ? (
+          "порог включён"
+        ) : (
+          "порог выключен"
+        )}
+      </p>
+      <dl className="mt-2 space-y-2">
+        {rows.map((r) => (
+          <div key={r.key} className="grid grid-cols-[88px_1fr_36px] items-center gap-x-3 text-[13px]">
+            <dt>
+              {r.label} <span className="text-[12px] text-muted-foreground">{r.hint}</span>
+            </dt>
+            <dd>
+              <Meter value={r.value} threshold={"threshold" in r ? r.threshold : undefined} low={"low" in r && r.low} />
+            </dd>
+            <dd className="tnum text-right font-mono text-[11px] text-muted-foreground">{num(r.value)}</dd>
+          </div>
+        ))}
+      </dl>
+      <ul className="mt-3 space-y-1 text-[12px] leading-relaxed text-muted-foreground">
+        {c.parts.map((p) => (
+          <li key={p.key}>
+            <span className="text-foreground/80">{p.label}</span> <span className="tnum font-mono">{num(p.value)}</span>
+            {p.detail && <> · {p.detail}</>}
+          </li>
+        ))}
+        <li className="flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-0.5 rounded-full bg-foreground" aria-hidden />
+          порог {num(c.threshold)} — по поиску, до генерации; только чат при EB_CONFIDENCE_GATE=1
+        </li>
+      </ul>
+    </Section>
+  );
+}
+
+/** «Честные нет» (T26): какие правила сработали, по какому фрагменту реплики клиента и на какой раздел базы. */
+function HonestNoSection({ items, kb, onOpen }: { items: HonestNo[]; kb: KbIndex | null; onOpen: (id: string) => void }) {
+  return (
+    <Section title="Честные нет" aside={`${items.length} · правила базы, только чат`}>
+      <ul className="space-y-2.5">
+        {items.map((h) => (
+          <li key={h.rule} className="space-y-0.5">
+            <div className="flex flex-wrap items-baseline gap-x-2 text-[12px] text-muted-foreground">
+              <span className="font-mono text-[11px] text-foreground/80">{h.rule}</span>
+              {h.fact && <span>по фразе «{h.fact}»</span>}
+            </div>
+            {h.section && <ChunkLink id={h.section.chunk_id} kb={kb} onOpen={onOpen} title={h.section.title} path={h.section.path} />}
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
 // ---------- Ответ ----------
 
 function AnswerSection({ a, question, message }: { a?: AnswerPayload; question?: string; message: Message }) {
@@ -282,8 +380,34 @@ function AnswerSection({ a, question, message }: { a?: AnswerPayload; question?:
             {a.model ? a.model.split("/").pop() : "без модели"}
           </Row>
           <Row icon={MessageSquareText} label="Режим">
-            {a.mode === "eval" ? "как на проверке" : "чат"}
+            {a.mode === "eval" ? "как на проверке" : a.mode === "copilot" ? "копилот" : "чат"}
           </Row>
+          {a.overrides && Object.keys(a.overrides).length > 0 && (
+            <Row icon={SlidersHorizontal} label="Настройки">
+              <span
+                className="inline-flex h-5 items-center rounded-md bg-brand-soft px-1.5 text-[11px] font-medium whitespace-nowrap text-brand-text"
+                title={Object.entries(a.overrides)
+                  .map(([k, v]) => `${k}: ${String(v)}`)
+                  .join("\n")}
+              >
+                ответ с вашими настройками
+              </span>
+            </Row>
+          )}
+          {a.route === "clarify" && (
+            <Row icon={CircleHelp} label="Маршрут">
+              <span className="inline-flex h-5 items-center rounded-md bg-warning-soft px-1.5 text-[11px] font-medium text-warning">
+                уточнение ниже порога
+              </span>
+            </Row>
+          )}
+          {a.confidence && (
+            <Row icon={Gauge} label="Уверенность">
+              <span className="tnum font-mono text-[12px]" title={a.confidence.explain}>
+                {num(a.confidence.score)} · порог {num(a.confidence.threshold)}
+              </span>
+            </Row>
+          )}
           <Row icon={ShieldCheck} label="Проверка">
             <span className={cn("inline-flex items-center gap-1.5", (fired || a.fallback) && "text-destructive")}>
               <span className={cn("size-1.5 rounded-full", fired || a.fallback ? "bg-destructive" : "bg-success")} />
@@ -555,7 +679,10 @@ function SearchSection({ r, kb, onOpen }: { r: Retrieval; kb: KbIndex | null; on
   const max = Math.max(...r.hits.map((h) => h.score ?? 0));
   const stage = r.hits[0]?.stage;
   return (
-    <Section title="Поиск по базе" aside={<span className="font-mono text-[12px]">{[stage, r.dense ? "bm25 + эмбеддинги" : "bm25"].filter(Boolean).join(" · ")}</span>}>
+    <Section title="Поиск по базе" aside={<span className="font-mono text-[12px]">{[r.tier ? undefined : stage, r.tier ?? (r.dense ? "bm25 + эмбеддинги" : "bm25"), `схема ${r.arch}`].filter(Boolean).join(" · ")}</span>}>
+      {!!r.skipped?.length && (
+        <Note>Простая ступень, недоступно: {r.skipped.map((k) => (k === "reranker" ? "реранкер" : "эмбеддинги")).join(", ")}</Note>
+      )}
       <p className="text-[13px] leading-relaxed text-pretty">{r.queries.semantic || "—"}</p>
       <div className="mt-2">
         {r.queries.lexical && (
@@ -862,6 +989,8 @@ export function DebugPanel({
       {header}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <AnswerSection a={a} question={question} message={message} />
+        {a?.confidence && <ConfidenceSection c={a.confidence} />}
+        {a?.honest_no && a.honest_no.length > 0 && <HonestNoSection items={a.honest_no} kb={kb} onOpen={onOpenChunk} />}
         {a && <SupportSection a={a} kb={kb} onOpen={onOpenChunk} />}
         {r && <ContextSection a={a} r={r} kb={kb} onOpen={onOpenChunk} budget={budget} />}
         {r && <SearchSection r={r} kb={kb} onOpen={onOpenChunk} />}

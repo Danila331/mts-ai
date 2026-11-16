@@ -1,0 +1,4 @@
+ALTER TABLE answers DROP COLUMN IF EXISTS sources;
+DROP INDEX IF EXISTS answers_session_idx;
+ALTER TABLE answers DROP COLUMN IF EXISTS session_id;
+DROP TABLE IF EXISTS sessions;

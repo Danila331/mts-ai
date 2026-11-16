@@ -37,19 +37,21 @@ type Turn struct {
 }
 
 // Mode — для чего ответ: chat разрешает боту предложить передать заявку
-// менеджеру, eval отвечает строго как в сабмите.
+// менеджеру, eval отвечает строго как в сабмите, copilot отвечает
+// менеджеру МТС, а не клиенту (длиннее, «коротко / детали / источники»).
 type Mode string
 
 const (
-	ModeChat Mode = "chat"
-	ModeEval Mode = "eval"
+	ModeChat    Mode = "chat"
+	ModeEval    Mode = "eval"
+	ModeCopilot Mode = "copilot"
 )
 
 // ParseMode отдаёт пустой режим на всё незнакомое: тогда решает ядро
 // своим умолчанием, а не шлюз своей догадкой.
 func ParseMode(s string) Mode {
 	switch Mode(s) {
-	case ModeChat, ModeEval:
+	case ModeChat, ModeEval, ModeCopilot:
 		return Mode(s)
 	}
 	return ""

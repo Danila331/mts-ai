@@ -15,7 +15,9 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/lead/score"
 	"github.com/Danila331/mts-ai/backend/internal/privacy"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // Тесты хранилища идут против живого Postgres: моки базы проверяют
@@ -34,7 +36,7 @@ func openTest(t *testing.T) *Store {
 	s, err := Open(context.Background(), config.DB{DSN: dsn, MaxConns: 4})
 	require.NoError(t, err)
 	t.Cleanup(s.Close)
-	_, err = s.Pool.Exec(context.Background(), "TRUNCATE answers, leads, feedback")
+	_, err = s.Pool.Exec(context.Background(), "TRUNCATE answers, leads, feedback, sessions")
 	require.NoError(t, err)
 	return s
 }
@@ -63,6 +65,14 @@ func TestStore(t *testing.T) {
 		assert.Equal(t, "req-1", reqID)
 	})
 
+	t.Run("наблюдаемые исходы /api/stats", func(t *testing.T) {
+		st, err := s.Stats(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, st.Answers)
+		assert.Equal(t, 1, st.Answered)
+		assert.Equal(t, 0, st.Sessions, "ответ без сессии в воронку не входит")
+		assert.InDelta(t, 1.0, st.AnsweredRate, 1e-9)
+	})
 	t.Run("заявка", func(t *testing.T) {
 		l := lead.Lead{Code: "0123456789", Contacts: lead.Contacts{Name: "Иван"}, Summary: "s",
 			Messages: []dialog.Turn{{Role: dialog.RoleUser, Content: "q"}}}
@@ -73,9 +83,39 @@ func TestStore(t *testing.T) {
 		dup := lead.Lead{Code: "0123456789", Summary: "s"}
 		assert.ErrorIs(t, s.CreateLead(ctx, &dup), lead.ErrCodeTaken)
 
-		var source string
-		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT summary_source FROM leads WHERE id = $1", l.ID).Scan(&source))
+		var source, scored string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT summary_source, score::text FROM leads WHERE id = $1", l.ID).
+			Scan(&source, &scored))
 		assert.Equal(t, "digest", source, "без источника — список вопросов")
+		assert.Equal(t, "{}", scored, "заявка без оценки — пустой объект")
+
+		withScore := lead.Lead{Code: "9876543210", Summary: "s", Score: score.Score{Grade: score.Warm, Points: 55,
+			Reasons: []string{"Подходит: Платформа учёта"}, Missing: []string{"схема сбора данных"}, Product: "platform"}}
+		require.NoError(t, s.CreateLead(ctx, &withScore))
+		var raw []byte
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT score FROM leads WHERE id = $1", withScore.ID).Scan(&raw))
+		var back score.Score
+		require.NoError(t, json.Unmarshal(raw, &back))
+		assert.Equal(t, withScore.Score, back, "оценка лежит в заявке как есть")
+
+		var callback string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT callback_preference::text FROM leads WHERE id = $1", l.ID).Scan(&callback))
+		assert.Equal(t, "{}", callback, "время не выбрано — пустой объект")
+		withCallback := lead.Lead{Code: "5555555555", Summary: "s",
+			Contacts: lead.Contacts{Callback: lead.Callback{Time: "day", Timezone: "Europe/Moscow"}}}
+		require.NoError(t, s.CreateLead(ctx, &withCallback))
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT callback_preference FROM leads WHERE id = $1", withCallback.ID).Scan(&raw))
+		assert.JSONEq(t, `{"time": "day", "timezone": "Europe/Moscow"}`, string(raw))
+
+		var kind string
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT kind FROM leads WHERE id = $1", l.ID).Scan(&kind))
+		assert.Equal(t, "callback", kind, "без типа — обратный звонок")
+		demo := lead.Lead{Code: "7777777777", Summary: "s", Contacts: lead.Contacts{Kind: lead.KindDemo}}
+		require.NoError(t, s.CreateLead(ctx, &demo))
+		require.NoError(t, s.Pool.QueryRow(ctx, "SELECT kind FROM leads WHERE id = $1", demo.ID).Scan(&kind))
+		assert.Equal(t, "demo", kind)
+		bad := lead.Lead{Code: "8888888888", Summary: "s", Contacts: lead.Contacts{Kind: "meeting"}}
+		assert.Error(t, s.CreateLead(ctx, &bad), "тип вне списка не пройдёт и мимо сервиса: CHECK в базе")
 
 		l.Summary, l.SummarySource = "резюме моделью", lead.SummaryLLM
 		require.NoError(t, s.UpdateLeadSummary(ctx, &l))
@@ -87,6 +127,98 @@ func TestStore(t *testing.T) {
 
 		missing := lead.Lead{Summary: "x", SummarySource: lead.SummaryLLM}
 		assert.Error(t, s.UpdateLeadSummary(ctx, &missing), "обновить несуществующую заявку — ошибка, а не тишина")
+	})
+
+	t.Run("сессия", func(t *testing.T) {
+		ref := session.Ref{ID: "widget-sess-1", Channel: session.Embed}
+		var first chat.Answer
+		require.NoError(t, json.Unmarshal([]byte(`{"id": "s1", "text": "Ответ 1", "mode": "chat",
+			"citations": [{"support": [{"id": "kb-1"}, {"id": "kb-2"}]}]}`), &first))
+		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Первый вопрос", session.RoleHint{}, session.LevelChoice{}))
+		require.NoError(t, s.SaveAnswer(ctx, chat.Record{Answer: first, Question: "Первый вопрос", Turns: 1, SessionID: ref.ID}))
+		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Второй вопрос", session.RoleHint{}, session.LevelChoice{}))
+		require.NoError(t, s.SaveAnswer(ctx, chat.Record{
+			Answer: chat.Answer{ID: "s2", Text: "Ответ 2", Mode: "chat"}, Question: "Второй вопрос", Turns: 3, SessionID: ref.ID,
+		}))
+
+		h, err := s.History(ctx, ref.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "embed", h.Session.Channel)
+		assert.Equal(t, "Первый вопрос", h.Session.Title, "заголовок остаётся от первого вопроса")
+		assert.JSONEq(t, `{}`, string(h.Session.Page))
+		require.Len(t, h.Turns, 4)
+		assert.Equal(t, []string{"Первый вопрос", "Ответ 1", "Второй вопрос", "Ответ 2"},
+			[]string{h.Turns[0].Content, h.Turns[1].Content, h.Turns[2].Content, h.Turns[3].Content})
+		assert.Equal(t, []string{"kb-1", "kb-2"}, h.Turns[1].Sources)
+
+		// Страница виджета (T8): пишется при создании, пустая её не стирает,
+		// непустая заменяет.
+		paged := session.Ref{ID: "widget-page-1", Channel: session.Embed,
+			Page: json.RawMessage(`{"path": "/solar", "utm_source": "yandex"}`)}
+		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Про солнце", session.RoleHint{}, session.LevelChoice{}))
+		h, err = s.History(ctx, paged.ID)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"path": "/solar", "utm_source": "yandex"}`, string(h.Session.Page))
+		require.NoError(t, s.TouchSession(ctx, session.Ref{ID: paged.ID, Channel: session.Embed}, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
+		h, err = s.History(ctx, paged.ID)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"path": "/solar", "utm_source": "yandex"}`, string(h.Session.Page), "вопрос без страницы её не стирает")
+		paged.Page = json.RawMessage(`{"path": "/askue", "title": "Платформа учёта"}`)
+		require.NoError(t, s.TouchSession(ctx, paged, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
+		h, err = s.History(ctx, paged.ID)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"path": "/askue", "title": "Платформа учёта"}`, string(h.Session.Page))
+		assert.Equal(t, "Про солнце", h.Session.Title)
+
+		// Роль (T15): пишется, когда известна или снята клиентом; вопрос без
+		// роли её не стирает.
+		roled := session.Ref{ID: "widget-role-1", Channel: session.Embed}
+		role := func() (string, string) {
+			h, err := s.History(ctx, roled.ID)
+			require.NoError(t, err)
+			return h.Session.Role, h.Session.RoleSource
+		}
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Мы сетевая компания", session.RoleHint{}, session.LevelChoice{}))
+		r, src := role()
+		assert.Equal(t, [2]string{"", ""}, [2]string{r, src}, "роли ещё нет")
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё",
+			session.RoleHint{Role: session.RoleGrid, Source: session.RoleAuto}, session.LevelChoice{}))
+		r, src = role()
+		assert.Equal(t, [2]string{"grid", "auto"}, [2]string{r, src})
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
+		r, src = role()
+		assert.Equal(t, [2]string{"grid", "auto"}, [2]string{r, src}, "вопрос без роли её не стирает")
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё",
+			session.RoleHint{Role: session.RoleEngineer, Source: session.RoleByClient}, session.LevelChoice{}))
+		r, src = role()
+		assert.Equal(t, [2]string{"engineer", "client"}, [2]string{r, src}, "выбор клиента")
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{Source: session.RoleByClient}, session.LevelChoice{}))
+		r, src = role()
+		assert.Equal(t, [2]string{"", "client"}, [2]string{r, src}, "клиент снял роль")
+		assert.Error(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{Role: session.RoleGrid, Source: "model"}, session.LevelChoice{}),
+			"CHECK в базе — последняя линия для неизвестного источника роли")
+
+		// Уровень объяснения (T16): пишется, только если клиент его прислал; пустой при выборе — «обычный».
+		lvl := func() string {
+			h, err := s.History(ctx, roled.ID)
+			require.NoError(t, err)
+			return h.Session.Level
+		}
+		assert.Equal(t, "", lvl(), "уровня ещё нет")
+		pick := func(l session.Level) session.LevelChoice { return session.LevelChoice{Level: l, Chosen: true} }
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, pick(session.LevelSimple)))
+		assert.Equal(t, "simple", lvl())
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, session.LevelChoice{}))
+		assert.Equal(t, "simple", lvl(), "вопрос без уровня его не стирает")
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, pick(session.LevelTechnical)))
+		assert.Equal(t, "technical", lvl())
+		require.NoError(t, s.TouchSession(ctx, roled, "chat", "Ещё", session.RoleHint{}, pick("")))
+		assert.Equal(t, "", lvl(), "клиент вернул обычный уровень")
+
+		_, err = s.History(ctx, "nobody-here")
+		assert.ErrorIs(t, err, session.ErrNotFound)
+		assert.Error(t, s.TouchSession(ctx, session.Ref{ID: "x-sess-01", Channel: "fax"}, "chat", "", session.RoleHint{}, session.LevelChoice{}),
+			"CHECK в базе — последняя линия для неизвестного канала")
 	})
 
 	t.Run("оценка", func(t *testing.T) {
@@ -111,11 +243,12 @@ func TestPrivacy(t *testing.T) {
 	}
 
 	t.Run("очистка по сроку", func(t *testing.T) {
-		exec("TRUNCATE answers, leads, feedback")
+		exec("TRUNCATE answers, leads, feedback, sessions")
 		exec(`INSERT INTO leads (code, summary, created_at) VALUES ('old', 's', now() - interval '100 days'), ('new', 's', now())`)
 		exec(`INSERT INTO answers (id, mode, question, answer, turns, created_at)
 		      VALUES ('a-old', 'chat', 'q', 'a', 1, now() - interval '40 days'), ('a-new', 'chat', 'q', 'a', 1, now())`)
 		exec(`INSERT INTO feedback (rating, created_at) VALUES (1, now() - interval '100 days')`)
+		exec(`INSERT INTO sessions (id, title, updated_at) VALUES ('sess-old-1', 'q', now() - interval '40 days'), ('sess-new-1', 'q', now())`)
 
 		now := time.Now()
 		n, locked, err := s.Purge(ctx, privacy.Policy{
@@ -123,7 +256,8 @@ func TestPrivacy(t *testing.T) {
 		}.Cutoffs(now))
 		require.NoError(t, err)
 		assert.True(t, locked)
-		assert.Equal(t, privacy.Counts{Leads: 1, Answers: 1}, n)
+		assert.Equal(t, privacy.Counts{Leads: 1, Answers: 1, Sessions: 1}, n)
+		assert.Equal(t, 1, count("sessions"), "сессия живёт столько же, сколько журнал ответов")
 		assert.Equal(t, 1, count("leads"))
 		assert.Equal(t, 1, count("answers"))
 		assert.Equal(t, 1, count("feedback"), "срок оценок не задан — не тронуты")
@@ -143,17 +277,18 @@ func TestPrivacy(t *testing.T) {
 	})
 
 	t.Run("удаление по запросу", func(t *testing.T) {
-		exec("TRUNCATE answers, leads, feedback")
+		exec("TRUNCATE answers, leads, feedback, sessions")
 		exec(`INSERT INTO leads (code, phone, summary) VALUES ('c1', '8 (900) 123-45-67', 's'), ('c2', '+7 911 000-00-00', 's')`)
 		exec(`INSERT INTO leads (code, phone, summary, messages) VALUES ('c3', '', 's', '[{"role":"user","content":"звоните +7 900 1234567"}]')`)
 		exec(`INSERT INTO answers (id, mode, question, answer, turns) VALUES ('a1', 'chat', 'мой номер 900-123-45-67', 'a', 1), ('a2', 'chat', 'АСКУЭ', 'a', 1)`)
 		exec(`INSERT INTO feedback (rating, comment) VALUES (1, 'перезвоните 89001234567'), (1, 'ок')`)
+		exec(`INSERT INTO sessions (id, title) VALUES ('sess-num-1', 'мой номер 8 900 123 45 67'), ('sess-other', 'АСКУЭ')`)
 		subj, err := privacy.NewSubject("+7 900 123 45 67", "")
 		require.NoError(t, err)
 
 		dry, err := s.Forget(ctx, subj, true)
 		require.NoError(t, err)
-		assert.Equal(t, privacy.Counts{Leads: 2, Answers: 1, Feedback: 1}, dry)
+		assert.Equal(t, privacy.Counts{Leads: 2, Answers: 1, Feedback: 1, Sessions: 1}, dry)
 		assert.Equal(t, 3, count("leads"), "пробный прогон ничего не удаляет")
 
 		n, err := s.Forget(ctx, subj, false)
@@ -162,6 +297,7 @@ func TestPrivacy(t *testing.T) {
 		assert.Equal(t, 1, count("leads"), "чужая заявка осталась")
 		assert.Equal(t, 1, count("answers"))
 		assert.Equal(t, 1, count("feedback"))
+		assert.Equal(t, 1, count("sessions"))
 
 		byCode, err := privacy.NewSubject("", "c2")
 		require.NoError(t, err)

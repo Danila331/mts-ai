@@ -1,41 +1,137 @@
 "use client";
 
-import { CheckCircle2, Headset, PanelRight } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { CheckCircle2, ChevronDown, ChevronRight, FileText, Headset, PanelRight } from "lucide-react";
+import { type OpenChunk, SourceNumber } from "./answer-text";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ChatController } from "@/hooks/use-chat";
 import type { KbIndex } from "@/hooks/use-kb";
 import { sendFeedback } from "@/lib/api";
+import {
+  AI_DISCLAIMER,
+  AI_INTRO,
+  AI_LABEL,
+  followTarget,
+  hasUsefulAnswer,
+  nextFollowing,
+  suggestionsFor,
+} from "@/lib/answer-ux";
+import { canSummarize } from "@/lib/consultation-summary";
 import { cn } from "@/lib/utils";
+import { type WizardAnswers, type WizardFlow, chatReplica, passportValues } from "@/lib/wizards/engine";
+import { WizardEntry, WizardRunner, WizardSummary } from "@/components/wizard/wizard";
 import { Composer } from "./composer";
-import { MessageItem } from "./message-item";
+import { StatusBanner } from "./status-banner";
+import { SummaryPanel } from "./consultation-summary";
+import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
 import { Shortcut } from "@/components/shortcut";
-import { SourceNumber } from "./answer-text";
-import { Starters } from "./starters";
+import { InlineLead } from "./inline-lead";
+import { PostLeadCard } from "./post-lead";
+import { QuickReplies } from "./quick-replies";
+import { PassportCard } from "./passport-card";
+import { LevelSwitch } from "./level-switch";
+import { RoleBadge, RolePicker, roleStarters } from "./role-picker";
+import { type Starter, Starters } from "./starters";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ROLES, type RoleId } from "@/lib/roles";
+
+/** Метка «ИИ-ассистент» (T31): человек сразу видит, что отвечает не менеджер. */
+function AiTag({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 items-center rounded-full bg-muted px-2 text-[11px] font-medium text-muted-foreground",
+        className,
+      )}
+    >
+      {AI_LABEL}
+    </span>
+  );
+}
 
 const GREETING =
   "Подберу решение по базе знаний МТС EnergyTool: учёт электроэнергии, поиск потерь, солнечная генерация, оптовый рынок и тарифы. Опишите задачу своими словами.";
 
-/** «Передать менеджеру» — тихая кнопка в нижней строке поля ввода, как инструменты в поле Claude. */
-function LeadButton({ done, onClick }: { done?: string; onClick: () => void }) {
+function LeadButton({ done, onClick, compact }: { done?: string; onClick: () => void; compact?: boolean }) {
+  // В виджете — строка во всю ширину поля ввода: ясная точка входа к живому человеку.
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="group flex w-full items-center gap-3 rounded-[18px] border bg-surface px-3 py-2.5 text-left transition-colors hover:border-input hover:bg-muted"
+      >
+        <span
+          className={cn(
+            "flex size-8 shrink-0 items-center justify-center rounded-full",
+            done ? "bg-tone-success text-white" : "bg-primary text-white",
+          )}
+        >
+          {done ? <CheckCircle2 className="size-4" /> : <Headset className="size-4" />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13.5px] leading-tight font-medium">
+            {done ? "Заявка передана менеджеру" : "Передать запрос менеджеру"}
+          </span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+            {done ? `№${done} · посмотреть, что получит менеджер` : "Менеджер свяжется и будет знать контекст"}
+          </span>
+        </span>
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+      </button>
+    );
+  }
   return (
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      className={cn(
+        "inline-flex h-8 items-center gap-1.5 rounded-full border bg-background px-3.5 text-[13px] font-medium shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-colors hover:bg-muted dark:bg-card",
+        compact && "h-7 px-3 text-[12.5px]",
+      )}
     >
       {done ? (
         <>
-          <CheckCircle2 className="size-3.5 shrink-0 text-success" />
-          <span className="truncate">Заявка №{done} передана</span>
+          <CheckCircle2 className="size-3.5 text-success" /> Заявка №{done} передана
         </>
       ) : (
         <>
-          <Headset className="size-3.5 shrink-0" />
-          <span className="truncate">Передать менеджеру</span>
+          <Headset className="size-3.5 text-brand-text" /> Передать запрос менеджеру
         </>
       )}
+    </button>
+  );
+}
+
+/** «Итоги консультации» (T10): на стенде — пилюля рядом с заявкой, в виджете — квадрат справа от строки заявки. */
+function SummaryButton({ onClick, compact }: { onClick: () => void; compact?: boolean }) {
+  if (compact) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={onClick}
+              aria-label="Итоги консультации (PDF)"
+              className="flex w-[54px] shrink-0 items-center justify-center rounded-[18px] border bg-surface text-muted-foreground transition-colors hover:border-input hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            />
+          }
+        >
+          <FileText className="size-[18px]" />
+        </TooltipTrigger>
+        <TooltipContent>Итоги консультации (PDF)</TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-8 items-center gap-1.5 rounded-full border bg-background px-3.5 text-[13px] font-medium shadow-[0_1px_2px_rgb(0_0_0/0.04)] transition-colors hover:bg-muted dark:bg-card"
+    >
+      <FileText className="size-3.5 text-muted-foreground" /> Итоги консультации
     </button>
   );
 }
@@ -59,6 +155,58 @@ function StandHints() {
   );
 }
 
+/**
+ * Пустой виджет: приветствие и первые вопросы не должны уезжать за экран. Роли («Кто вы?») и остальные мастера —
+ * за двумя тихими ссылками под карточкой; выбранная роль держит список открытым.
+ */
+function EmptyExtras({
+  wizards,
+  onStart,
+  roles,
+  role,
+  onRole,
+}: {
+  wizards?: readonly WizardFlow[];
+  onStart: (flow: WizardFlow) => void;
+  roles?: boolean;
+  role?: RoleId | "";
+  onRole: (role: RoleId | "") => void;
+}) {
+  const [rolesOpen, setRolesOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const link =
+    "inline-flex items-center gap-1 rounded text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none";
+  const chevron = (open: boolean) => (
+    <ChevronDown className={cn("size-3 transition-transform", open && "rotate-180")} aria-hidden />
+  );
+  const hasMore = !!wizards?.length;
+  if (!roles && !hasMore) return null;
+  return (
+    <div className="space-y-2 pl-8.5">
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {roles && (
+          <button type="button" aria-expanded={rolesOpen || !!role} onClick={() => setRolesOpen((v) => !v)} className={link}>
+            {role ? ROLES[role].label : "Кто вы?"} {chevron(rolesOpen || !!role)}
+          </button>
+        )}
+        {hasMore && (
+          <button type="button" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)} className={link}>
+            Ещё помощники {chevron(moreOpen)}
+          </button>
+        )}
+      </div>
+      {roles && (rolesOpen || !!role) && <RolePicker value={role} onPick={onRole} compact caption={false} />}
+      {moreOpen && (
+        <div className="space-y-1.5">
+          {wizards?.map((flow) => (
+            <WizardEntry key={flow.id} flow={flow} onStart={() => onStart(flow)} compact />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatView({
   chat,
   kb,
@@ -68,30 +216,88 @@ export function ChatView({
   onLead,
   compact,
   greeting,
+  placeholder,
+  heading = "Чем помочь с электроэнергией?",
+  starters,
   prefill,
   disabled,
+  summary,
+  wizards,
+  showRoles,
+  showLevel,
 }: {
   chat: ChatController;
   kb: KbIndex | null;
-  onOpenChunk: (chunkId: string) => void;
+  onOpenChunk: OpenChunk;
   selectedId?: string;
   /** explicit — пользователь сам попросил показать отладку этого ответа. */
   onSelect?: (messageId: string, explicit?: boolean) => void;
   onLead?: () => void;
   compact?: boolean;
   greeting?: string;
+  /** Подсказка в поле ввода; по умолчанию — клиентская (в виджете короче). У копилота менеджера своя. */
+  placeholder?: string;
+  /** Заголовок пустого экрана и подсказки первого вопроса — свои у копилота менеджера. */
+  heading?: string;
+  starters?: Starter[];
   prefill?: { text: string; nonce: number };
   disabled?: boolean;
+  /** Кнопка «Итоги консультации» после первого ответа — для клиента на стенде и в виджете (не в копилоте). */
+  summary?: boolean;
+  /** Мастера (T7), которые предлагаются в пустом чате. Только клиентский режим chat: им нужен паспорт. */
+  wizards?: readonly WizardFlow[];
+  /**
+   * Роль-подсказка (T15): необязательные кнопки на пустом экране и метка «Похоже, вы — …» над полем ввода.
+   * Только чат с клиентом (режим chat): у копилота и в режиме автопроверки ролей нет.
+   */
+  showRoles?: boolean;
+  /** Переключатель «Проще / Технически» (T16) и кнопки «Объяснить …» под ответами. Только режим chat. */
+  showLevel?: boolean;
 }) {
-  const bottom = useRef<HTMLDivElement>(null);
+  const [summaryFor, setSummaryFor] = useState<string | null>(null);
+  const [freshLead, setFreshLead] = useState<string | null>(null);
   const messages = chat.active?.messages ?? [];
   const last = messages[messages.length - 1];
 
+  // Прокрутка (T31, согласована с T13): ленту тянем за новым ответом, пока человек не отмотал вверх, но не дальше
+  // начала этого ответа — длинный ответ читают с первой строки, к его концу мы не прыгаем ни при печати, ни по её
+  // завершении. Короткий ответ целиком помещается, и лента держит низ. Новый вопрос возвращает слежение.
+  const scroller = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  const lastTop = useRef(0);
+  const hasMessages = messages.length > 0;
+  const activeId = chat.activeId;
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [messages.length, last?.pending, last?.stage]);
+    following.current = true;
+  }, [activeId]);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    lastTop.current = el.scrollTop;
+    const onScroll = () => {
+      following.current = nextFollowing(following.current, lastTop.current, el);
+      lastTop.current = el.scrollTop;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [hasMessages]);
+
+  const typedLength = last?.pending ? (last.streamed?.length ?? 0) : 0;
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const answer = last?.role === "assistant" ? el.querySelector(`[data-message-id="${last.id}"]`) : null;
+    const answerTop = answer ? answer.getBoundingClientRect().top - box.top + el.scrollTop : undefined;
+    const sticky = el.querySelector<HTMLElement>("[data-sticky]")?.offsetHeight ?? 0;
+    const target = followTarget(el, answerTop, following.current, 12 + sticky);
+    // prefers-reduced-motion (T43): без плавной прокрутки.
+    const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (target !== null) el.scrollTo({ top: target, behavior: typedLength || calm ? "auto" : "smooth" });
+  }, [messages.length, last?.id, last?.role, last?.pending, last?.stage, typedLength]);
 
   const send = (text: string) => {
+    following.current = true;
     const id = chat.send(text);
     if (id) onSelect?.(id);
   };
@@ -109,76 +315,194 @@ export function ChatView({
     toast.success(rating > 0 ? "Спасибо за оценку" : "Спасибо, учтём при доработке");
   };
 
-  const hasAnswers = messages.some((m) => m.role === "assistant" && m.answer);
-  // В виджете связь с менеджером видна сразу — клиент может не захотеть говорить с ботом; на стенде — после ответа.
-  const leadInline = onLead && (compact || hasAnswers);
+  const session = chat.active;
+
+  // Открытый мастер привязан к диалогу: переключились на другой — мастер не тянется следом.
+  // «Новый диалог» (chat.fresh) в пустом диалоге оставляет тот же id — мастер закрывается и тогда.
+  const [wizardOpen, setWizardOpen] = useState<{ session: string; flow: string; fresh: number } | null>(null);
+  const openFlow =
+    wizardOpen?.session === chat.activeId && wizardOpen.fresh === chat.fresh
+      ? wizards?.find((f) => f.id === wizardOpen.flow)
+      : undefined;
+  const record = session?.wizard;
+  const recordFlow = record ? wizards?.find((f) => f.id === record.flow) : undefined;
+  const startWizard = (flow: WizardFlow) => setWizardOpen({ session: chat.activeId, flow: flow.id, fresh: chat.fresh });
+  // Ответы мастера уходят в чат репликой клиента и в паспорт задачи (как правка клиента) — после ответа бота.
+  const finishWizard = (flow: WizardFlow, answers: WizardAnswers, intent: "continue" | "handoff") => {
+    chat.setWizard({ flow: flow.id, answers }, passportValues(flow, answers));
+    setWizardOpen(null);
+    send(chatReplica(flow, answers, intent));
+  };
+
+  // Роль меняет приветствие и быстрые вопросы; без роли — тема страницы виджета или общие.
+  const role = showRoles && session?.role ? session.role : undefined;
+  const intro = role ? ROLES[role].greeting : greeting;
+  const quick = role ? roleStarters(role) : starters;
+  const passport = session?.passport;
+  // Паспорт показываем, когда в нём что-то есть; карточку заявки — когда есть контакты или согласие
+  // и заявка ещё не отправлена, и только после ответа (не посреди генерации).
+  const hasPassport = !!passport?.fields.some((f) => f.value);
+  const showInlineLead = !!session && !!passport?.ready_for_lead && !session.lead && !chat.busy;
+  const leadDone = (lead: { id: string; summary: string }) => {
+    chat.setLead(lead);
+    setFreshLead(lead.id);
+  };
+  // Кнопки быстрых ответов — под последним ответом бота; свой текст клиента или новый вопрос их убирает.
+  const suggestions = chat.busy ? [] : suggestionsFor(messages, passport, !!session?.lead);
+  // «Связаться с менеджером» в ленте не предлагаем до первого полезного ответа; кнопка в шапке виджета есть всегда.
+  const offerLead = hasUsefulAnswer(messages);
+  const showSummary = !!summary && canSummarize(session);
+  // Итоги открыты для конкретного диалога: переключился на другой — экран итогов закрывается сам.
+  const summaryOpen = showSummary && !!session && summaryFor === session.id;
   const composer = (
     <Composer
-      tools={leadInline ? <LeadButton done={chat.active?.lead?.id} onClick={onLead} /> : undefined}
       onSend={send}
       onStop={chat.stop}
       busy={chat.busy}
       compact={compact}
-      placeholder={compact ? "Опишите вашу задачу" : undefined}
+      placeholder={placeholder ?? (compact ? "Опишите вашу задачу" : undefined)}
       disabled={disabled}
       value={prefill}
       autoFocus={!compact}
     />
   );
 
-  // Пустой стенд — как в Claude: знак и вопрос, поле ввода, подсказки; внизу — как читать стенд.
-  if (!messages.length && !compact) {
+  // Пустой стенд — как в Claude: знак и вопрос одной строкой, поле ввода, тихие подсказки под ним.
+  if (!messages.length && !compact && openFlow) {
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-[680px] flex-1 flex-col justify-center px-5 pt-6 pb-[10vh] sm:px-6">
-          <div className="msg-in flex flex-col items-center text-center">
-            <h1 className="flex items-center gap-3 text-[24px] leading-tight font-medium tracking-[-0.022em]">
-              <BrandGlyph className="size-7 sm:size-8" />
-              Чем помочь с электроэнергией?
-            </h1>
-            <p className="mt-2 max-w-[34rem] text-[14px] leading-relaxed text-pretty text-muted-foreground">
-              {greeting ?? "Отвечаю только по базе знаний МТС EnergyTool и показываю источник каждого факта."}
-            </p>
-          </div>
-          <div className="mt-7">{composer}</div>
-          <div className="mt-3">
-            <Starters onPick={send} />
-          </div>
-        </div>
-        <div className="shrink-0 px-5 pb-5">
-          <StandHints />
+      <div className="h-full min-h-0 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[680px] px-5 pt-8 pb-16 sm:px-6">
+          <WizardRunner
+            key={`${chat.activeId}-${openFlow.id}`}
+            flow={openFlow}
+            kb={kb}
+            onOpenChunk={onOpenChunk}
+            onClose={() => setWizardOpen(null)}
+            onFinish={(answers, intent) => finishWizard(openFlow, answers, intent)}
+          />
         </div>
       </div>
     );
   }
 
+  if (!messages.length && !compact) {
+    return (
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[680px] flex-1 flex-col justify-center px-5 pt-6 pb-[10vh] sm:px-6">
+          <div className="msg-in flex flex-col items-center text-center">
+            <AiTag className="mb-3" />
+            <h1 className="flex items-center gap-3 text-[24px] leading-tight font-medium tracking-[-0.022em]">
+              <BrandGlyph className="size-7 sm:size-8" />
+              {heading}
+            </h1>
+            <p className="mt-2 max-w-[34rem] text-[14px] leading-relaxed text-pretty text-muted-foreground">
+              {intro ?? "Отвечаю только по базе знаний МТС EnergyTool и показываю источник каждого факта."}
+            </p>
+          </div>
+          <div className="mt-7">{composer}</div>
+          {showRoles && <RolePicker value={session?.role} onPick={chat.setRole} className="mt-4" />}
+          {showLevel && <LevelSwitch value={session?.level} onPick={chat.setLevel} className="mt-3" />}
+          <div className="mt-4">
+            <Starters onPick={send} items={quick} />
+          </div>
+          {!!wizards?.length && (
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {wizards.map((flow) => (
+                <WizardEntry key={flow.id} flow={flow} onStart={() => startWizard(flow)} />
+              ))}
+            </div>
+          )}
+        </div>
+        {onSelect && (
+          <div className="shrink-0 px-5 pb-5">
+            <StandHints />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="relative flex h-full min-h-0 flex-col">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
         <div
           className={cn(
             "mx-auto flex w-full flex-col",
-            compact ? "gap-5 px-5 pt-4 pb-6" : "max-w-[720px] gap-6 px-5 pt-6 pb-10 sm:px-6",
+            compact ? "gap-5 px-4 pt-4 pb-6" : "max-w-[720px] gap-7 px-5 pt-4 pb-10 sm:px-6",
           )}
         >
-          {!messages.length && compact && (
-            <div className="msg-in pt-2">
-              <BrandGlyph className="size-7" />
-              <h2 className="mt-3 text-[18px] leading-snug font-semibold tracking-[-0.015em]">Здравствуйте! Чем помочь?</h2>
-              <p className="mt-1.5 text-[14px] leading-relaxed text-pretty text-muted-foreground">{greeting ?? GREETING}</p>
-              <div className="mt-5">
-                <Starters onPick={send} compact />
+          <StatusBanner
+            answerDegraded={!!last?.answer?.degraded}
+            compact={compact}
+            onLead={onLead && !session?.lead ? onLead : undefined}
+            pollKey={last?.pending ? undefined : last?.id}
+          />
+          {!messages.length && compact && openFlow && (
+            <WizardRunner
+              key={`${chat.activeId}-${openFlow.id}`}
+              flow={openFlow}
+              kb={kb}
+              compact
+              onOpenChunk={onOpenChunk}
+              onClose={() => setWizardOpen(null)}
+              onFinish={(answers, intent) => finishWizard(openFlow, answers, intent)}
+            />
+          )}
+          {!messages.length && compact && !openFlow && (
+            <div className="space-y-4">
+              <div className="flex items-start gap-2.5">
+                <BotAvatar className="mt-0.5 size-6" />
+                <p className="rounded-2xl rounded-tl-md bg-muted px-3.5 py-2.5 text-[14px] leading-relaxed">
+                  <span className="mb-0.5 block text-[12px] font-medium text-muted-foreground">{AI_INTRO}</span>
+                  {intro ?? GREETING}
+                </p>
               </div>
+              <div className="space-y-1.5 pl-8.5">
+                <Starters onPick={send} compact items={quick} limit={3} />
+                {wizards?.[0] && <WizardEntry flow={wizards[0]} onStart={() => startWizard(wizards[0])} compact />}
+              </div>
+              <EmptyExtras
+                wizards={wizards?.slice(1)}
+                onStart={startWizard}
+                roles={showRoles}
+                role={session?.role}
+                onRole={chat.setRole}
+              />
             </div>
           )}
+          {hasPassport && passport && (
+            <div data-sticky className={cn("sticky top-0 z-10 -mt-1 bg-background/95 pb-1 backdrop-blur", !compact && "pt-1")}>
+              <PassportCard key={session?.id} passport={passport} onEdit={chat.editPassport} compact={compact} />
+            </div>
+          )}
+          {record && recordFlow && messages.length > 0 && (
+            <WizardSummary
+              key={session?.id}
+              flow={recordFlow}
+              answers={record.answers}
+              kb={kb}
+              onOpenChunk={onOpenChunk}
+              compact={compact}
+            />
+          )}
+          {/* Лента (T43): читалка озвучивает готовый ответ целиком — пока идёт генерация, aria-busy держит озвучку. */}
+          <div
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+            aria-busy={chat.busy}
+            aria-label="Диалог с консультантом"
+            className={cn("flex flex-col", compact ? "gap-5" : "gap-7")}
+          >
           {messages.map((m) => (
+            <div key={m.id} data-message-id={m.id} className="min-w-0">
             <MessageItem
-              key={m.id}
               message={m}
               kb={kb}
               compact={compact}
               onOpenChunk={onOpenChunk}
               selected={selectedId === m.id}
+              onLead={onLead}
               onDebug={onSelect && m.role === "assistant" ? () => onSelect(m.id, true) : undefined}
               onRegenerate={
                 m.role === "assistant" && !chat.busy
@@ -189,19 +513,62 @@ export function ChatView({
                   : undefined
               }
               onRate={m.role === "assistant" && m.answer ? (r) => rate(m.id, r) : undefined}
+              onExplain={
+                showLevel && m.role === "assistant" && m.answer && !chat.busy
+                  ? (level) => {
+                      const id = chat.regenerate(m.id, level);
+                      if (id) onSelect?.(id);
+                    }
+                  : undefined
+              }
             />
+            </div>
           ))}
-          <div ref={bottom} />
+          </div>
+          <QuickReplies items={suggestions} onPick={send} compact={compact} />
+          {showInlineLead && session && <InlineLead key={session.id} session={session} onDone={leadDone} compact={compact} />}
         </div>
       </div>
-      <div className={cn("shrink-0", compact ? "px-3 pt-1 pb-1.5" : "mx-auto w-full max-w-[720px] px-4 pb-3 sm:px-6")}>
+      <div className={cn("shrink-0", compact ? "px-3 pt-1 pb-2" : "mx-auto w-full max-w-[720px] px-4 pb-3 sm:px-6")}>
+        {role && messages.length > 0 && (
+          <RoleBadge key={session?.id} role={role} source={session?.roleSource} onPick={chat.setRole} compact={compact} />
+        )}
+        {showLevel && messages.length > 0 && (
+          <LevelSwitch value={session?.level} onPick={chat.setLevel} compact={compact} disabled={chat.busy} className={cn(compact ? "mb-1.5" : "mb-2")} />
+        )}
+        {session?.lead && (
+          <div className={cn("flex", compact ? "mb-2" : "mb-2.5 justify-center")}>
+            <div className="min-w-0 flex-1 sm:flex-none">
+              <PostLeadCard
+                session={session}
+                kb={kb}
+                onOpen={onLead}
+                defaultOpen={freshLead === session.lead.id}
+                compact={compact}
+              />
+            </div>
+          </div>
+        )}
+        {((onLead && offerLead && !session?.lead) || showSummary) && (
+          <div className={cn("flex gap-2", compact ? "mb-2 items-stretch" : "mb-2.5 flex-wrap justify-center")}>
+            {onLead && offerLead && !session?.lead && (
+              <div className={cn(compact && "min-w-0 flex-1")}>
+                <LeadButton onClick={onLead} compact={compact} />
+              </div>
+            )}
+            {showSummary && session && <SummaryButton onClick={() => setSummaryFor(session.id)} compact={compact} />}
+          </div>
+        )}
         {composer}
         {!compact && (
-          <p className="mt-2 text-center text-[11px] text-muted-foreground">
-            Ответы строятся только по базе знаний МТС EnergyTool. Цифры по вашему объекту подтвердит специалист.
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            {AI_DISCLAIMER} Цифры по вашему объекту подтвердит специалист.
           </p>
         )}
       </div>
+      {summaryOpen && session && (
+        <SummaryPanel session={session} kb={kb} compact={compact} onClose={() => setSummaryFor(null)} />
+      )}
     </div>
   );
 }

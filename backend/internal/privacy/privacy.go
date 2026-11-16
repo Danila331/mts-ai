@@ -46,10 +46,12 @@ type Counts struct {
 	Leads    int64
 	Answers  int64
 	Feedback int64
+	// Sessions — разговоры: заголовок сессии — первая реплика клиента.
+	Sessions int64
 }
 
 // Total — всего строк.
-func (c Counts) Total() int64 { return c.Leads + c.Answers + c.Feedback }
+func (c Counts) Total() int64 { return c.Leads + c.Answers + c.Feedback + c.Sessions }
 
 // Subject — чьи данные удалить: по номеру телефона, по номеру заявки или
 // по обоим.

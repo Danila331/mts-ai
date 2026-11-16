@@ -25,6 +25,8 @@ type Config struct {
 	DB        DB        `yaml:"db"`
 	Core      Core      `yaml:"core"`
 	LLM       LLM       `yaml:"llm"`
+	Vision    Vision    `yaml:"vision"`
+	OCR       OCR       `yaml:"ocr"`
 	Limits    Limits    `yaml:"limits"`
 	Log       Log       `yaml:"log"`
 	Metrics   Metrics   `yaml:"metrics"`
@@ -41,6 +43,17 @@ type HTTP struct {
 	// то есть тратит деньги, и открытым в интернет ему быть незачем:
 	// единственный законный клиент — сервер фронта.
 	Token string `env:"EB_API_TOKEN"`
+	// AdminToken — секрет глобальных настроек RAG. «Сохранить» на
+	// /settings меняет бота для всех посетителей, в том числе во время
+	// демо жюри, поэтому это может только администратор стенда: прокси
+	// Next после входа на /settings передаёт токен заголовком
+	// X-Admin-Token. Пусто — глобальные настройки закрыты для всех;
+	// песочница (overrides в /api/chat) работает и без него.
+	AdminToken string `env:"EB_ADMIN_TOKEN"`
+	// ManagerToken — доступ к разговорам и заявкам клиентов (экран
+	// менеджера, T5). Там персональные данные, поэтому пустой токен —
+	// закрыто для всех, как и с администратором.
+	ManagerToken string `env:"EB_MANAGER_TOKEN"`
 	// ShutdownTimeout — сколько ждать текущие ответы при остановке.
 	// Ноль — потолок ответа ядра плюс запас (ShutdownBudget): меньше —
 	// и выкладка обрывает ответы, которые ядро ещё пишет.
@@ -71,6 +84,13 @@ type Core struct {
 	// проверки. Ответ с размышлениями занимает до минуты, перезапрос —
 	// ещё столько же; три минуты — запас, а не ожидание.
 	Timeout time.Duration `yaml:"timeout" env:"EB_CORE_TIMEOUT" env-default:"3m"`
+	// BreakerFailures — сколько вызовов ядра подряд должно не удаться, чтобы
+	// шлюз перестал ходить к нему на BreakerCooldown и отвечал сразу «ядро
+	// перезапускается». 0 выключает предохранитель.
+	BreakerFailures int           `yaml:"breaker_failures" env:"EB_CORE_BREAKER_FAILURES" env-default:"5"`
+	BreakerCooldown time.Duration `yaml:"breaker_cooldown" env:"EB_CORE_BREAKER_COOLDOWN" env-default:"15s"`
+	// Retries — повторы открытия потока ответа; только до первого байта.
+	Retries int `yaml:"retries" env:"EB_CORE_RETRIES" env-default:"1"`
 }
 
 // LLM — модель для резюме заявки. Тот же OpenAI-совместимый прокси и
@@ -88,6 +108,50 @@ type LLM struct {
 	Timeout         time.Duration `yaml:"timeout" env:"EB_SUMMARY_TIMEOUT" env-default:"30s"`
 }
 
+// Vision — модель, которая только переписывает текст с фото документа
+// (T9, ADR 0006). Отвечает клиенту всегда Qwen: текст документа уходит в
+// чат репликой клиента. Пустая модель — фото не принимаются, и кнопка
+// вложения на фронте неактивна.
+type Vision struct {
+	Model string `yaml:"model" env:"EB_VISION_MODEL"`
+	// BaseURL и APIKey — если vision-модель живёт не там же, где модель
+	// ответов. Пусто — те же LLM_BASE_URL и LLM_API_KEY.
+	BaseURL string        `yaml:"base_url" env:"EB_VISION_BASE_URL"`
+	APIKey  string        `env:"EB_VISION_API_KEY"`
+	Timeout time.Duration `yaml:"timeout" env:"EB_VISION_TIMEOUT" env-default:"60s"`
+}
+
+// OCR — пределы загружаемого документа. Файл читается в память целиком и
+// нигде не хранится, поэтому его размер — это и память API.
+type OCR struct {
+	MaxBytes int64 `yaml:"max_bytes" env:"EB_OCR_MAX_BYTES" env-default:"10485760"`
+	// MaxPages — сколько первых страниц PDF читается.
+	MaxPages int `yaml:"max_pages" env:"EB_OCR_MAX_PAGES" env-default:"5"`
+}
+
+// Пределы документа, за которые настройка не выходит: больше — это уже
+// не счёт и не договор, а нагрузка на память API.
+const (
+	MaxOCRBytes = 32 << 20
+	MaxOCRPages = 50
+)
+
+// VisionBaseURL — адрес vision-модели: свой или общий с моделью ответов.
+func (c *Config) VisionBaseURL() string {
+	if c.Vision.BaseURL != "" {
+		return c.Vision.BaseURL
+	}
+	return c.LLM.BaseURL
+}
+
+// VisionAPIKey — ключ vision-модели: свой или общий с моделью ответов.
+func (c *Config) VisionAPIKey() string {
+	if c.Vision.APIKey != "" {
+		return c.Vision.APIKey
+	}
+	return c.LLM.APIKey
+}
+
 // Limits — предохранители от злоупотребления, на адрес клиента.
 // Ноль выключает предел; в бою ноль не проходит Verify.
 type Limits struct {
@@ -97,6 +161,28 @@ type Limits struct {
 	LeadBurst         int `yaml:"lead_burst" env:"EB_LIMIT_LEAD_BURST" env-default:"3"`
 	FeedbackPerMinute int `yaml:"feedback_per_minute" env:"EB_LIMIT_FEEDBACK_PER_MINUTE" env-default:"30"`
 	FeedbackBurst     int `yaml:"feedback_burst" env:"EB_LIMIT_FEEDBACK_BURST" env-default:"10"`
+	// Настройки и вход администратора: перебор токена и дёрганье
+	// глобальных настроек — не то, что человек делает десятки раз в минуту.
+	SettingsPerMinute int `yaml:"settings_per_minute" env:"EB_LIMIT_SETTINGS_PER_MINUTE" env-default:"10"`
+	SettingsBurst     int `yaml:"settings_burst" env:"EB_LIMIT_SETTINGS_BURST" env-default:"5"`
+	// Экран менеджера (T5): список опрашивается раз в десять секунд, плюс
+	// карточки и смена статуса — на порядок чаще настроек, но тоже не
+	// скрипт.
+	ManagerPerMinute int `yaml:"manager_per_minute" env:"EB_LIMIT_MANAGER_PER_MINUTE" env-default:"120"`
+	ManagerBurst     int `yaml:"manager_burst" env:"EB_LIMIT_MANAGER_BURST" env-default:"30"`
+	// Документы (T9): каждый — до десяти мегабайт в памяти и, для фото,
+	// запрос к платной vision-модели. Человек прикладывает несколько
+	// документов за разговор, а не десятки в минуту.
+	OCRPerHour int `yaml:"ocr_per_hour" env:"EB_LIMIT_OCR_PER_HOUR" env-default:"30"`
+	OCRBurst   int `yaml:"ocr_burst" env:"EB_LIMIT_OCR_BURST" env-default:"5"`
+	// ChatPerDay — потолок вопросов с одного адреса за сутки (T35): минутный
+	// предел не останавливает того, кто льёт медленно, но всё время.
+	// Каждый ответ стоит денег на модель.
+	ChatPerDay int `yaml:"chat_per_day" env:"EB_LIMIT_CHAT_PER_DAY" env-default:"300"`
+	// LeadMinFill — быстрее этого заявка не принимается (антибот без
+	// CAPTCHA, T35): человек форму за долю секунды не заполняет. Ноль
+	// выключает проверку.
+	LeadMinFill time.Duration `yaml:"lead_min_fill" env:"EB_LEAD_MIN_FILL" env-default:"2s"`
 	// RedisURL — общее хранилище пределов для нескольких реплик. Пусто —
 	// пределы в памяти процесса: верно ровно для одной реплики, на двух
 	// каждый предел молча удваивается. REDIS_URL — имя, под которым
@@ -193,6 +279,9 @@ func (c *Config) ShutdownBudget() time.Duration {
 	return c.Core.Timeout + 15*time.Second
 }
 
+// MinSecretLen — минимальная длина токенов администратора и менеджера в бою.
+const MinSecretLen = 32
+
 // Verify отказывается запускать бой без того, без чего он не работает
 // или работает открытым для всех.
 //
@@ -210,6 +299,12 @@ func (c *Config) Verify() error {
 	if c.HTTP.ShutdownTimeout > 0 && c.HTTP.ShutdownTimeout < c.Core.Timeout {
 		errs = append(errs, errors.New("EB_SHUTDOWN_TIMEOUT меньше EB_CORE_TIMEOUT: выкладка будет обрывать ответы"))
 	}
+	if c.OCR.MaxBytes <= 0 || c.OCR.MaxBytes > MaxOCRBytes {
+		errs = append(errs, fmt.Errorf("EB_OCR_MAX_BYTES вне 1…%d", MaxOCRBytes))
+	}
+	if c.OCR.MaxPages <= 0 || c.OCR.MaxPages > MaxOCRPages {
+		errs = append(errs, fmt.Errorf("EB_OCR_MAX_PAGES вне 1…%d", MaxOCRPages))
+	}
 	if !c.Production() {
 		return errors.Join(errs...)
 	}
@@ -225,13 +320,23 @@ func (c *Config) Verify() error {
 	if c.HTTP.Token == "" {
 		errs = append(errs, errors.New("EB_API_TOKEN не задан: API, тратящий деньги на модель, открыт всем"))
 	}
+	// Пустые — значит закрыто; заданные, но короткие — подбираются перебором.
+	for _, s := range []struct{ name, value string }{
+		{"EB_ADMIN_TOKEN", c.HTTP.AdminToken}, {"EB_MANAGER_TOKEN", c.HTTP.ManagerToken},
+	} {
+		if s.value != "" && len(s.value) < MinSecretLen {
+			errs = append(errs, fmt.Errorf("%s короче %d знаков", s.name, MinSecretLen))
+		}
+	}
 	r := c.Retention
 	if r.LeadsDays <= 0 || r.AnswersDays <= 0 || r.FeedbackDays <= 0 {
 		errs = append(errs, errors.New("EB_RETENTION_*_DAYS в бою не могут быть нулевыми: бессрочное хранение персональных данных"))
 	}
 	l := c.Limits
 	if l.ChatPerMinute <= 0 || l.ChatBurst <= 0 || l.LeadPerHour <= 0 || l.LeadBurst <= 0 ||
-		l.FeedbackPerMinute <= 0 || l.FeedbackBurst <= 0 {
+		l.FeedbackPerMinute <= 0 || l.FeedbackBurst <= 0 || l.SettingsPerMinute <= 0 || l.SettingsBurst <= 0 ||
+		l.ManagerPerMinute <= 0 || l.ManagerBurst <= 0 ||
+		l.OCRPerHour <= 0 || l.OCRBurst <= 0 || l.ChatPerDay <= 0 {
 		errs = append(errs, errors.New("пределы EB_LIMIT_* в бою не могут быть нулевыми"))
 	}
 	return errors.Join(errs...)

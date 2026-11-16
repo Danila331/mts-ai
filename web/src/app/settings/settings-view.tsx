@@ -1,13 +1,14 @@
 "use client";
 
-import { AlertCircle, ChevronDown, Loader2, RotateCcw } from "lucide-react";
+import { AlertCircle, ChevronDown, FlaskConical, Loader2, LogIn, LogOut, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { getSettings, resetSettings, saveSettings } from "@/lib/api";
+import { type AdminSession, adminLogin, adminLogout, getAdminSession, getSettings, resetSettings, saveSettings } from "@/lib/api";
+import { type Sandbox, readSandbox, writeSandbox } from "@/lib/sandbox";
 import type { RagSettings, SettingField, SettingValue } from "@/lib/types";
 
 /** Подписи и пояснения — на фронте: ядро отдаёт только ключи, типы и пределы. */
@@ -164,12 +165,15 @@ function Row({
   draft,
   saved,
   envValue,
+  baseLabel,
   onChange,
 }: {
   field: SettingField;
   draft: SettingValue | string;
   saved: SettingValue;
+  /** С чем сравнивать: у администратора — окружение ядра, в песочнице — общие настройки стенда. */
   envValue: SettingValue;
+  baseLabel: string;
   onChange: (v: SettingValue | string) => void;
 }) {
   const copy = COPY[field.key] ?? { label: field.key, hint: "" };
@@ -192,7 +196,9 @@ function Row({
           {offEnv && (
             <>
               <span aria-hidden>·</span>
-              <span className="font-sans">в окружении: {show(field, envValue)}</span>
+              <span className="font-sans">
+                {baseLabel}: {show(field, envValue)}
+              </span>
               <button
                 type="button"
                 onClick={() => onChange(field.kind === "int" || field.kind === "float" ? String(envValue) : envValue)}
@@ -212,26 +218,97 @@ function Row({
   );
 }
 
+function toDraft(fields: SettingField[], values: Record<string, SettingValue>): Draft {
+  return Object.fromEntries(fields.map((f) => [f.key, f.kind === "int" || f.kind === "float" ? String(values[f.key]) : values[f.key]]));
+}
+
+/** Свои значения песочницы — только по известным ядру ключам: остальное ядро отвергло бы. */
+function overlay(data: RagSettings, sandbox: Sandbox): Record<string, SettingValue> {
+  const known = new Set(data.fields.map((f) => f.key));
+  return { ...data.values, ...Object.fromEntries(Object.entries(sandbox).filter(([k]) => known.has(k))) };
+}
+
+function AdminLogin({ onDone }: { onDone: () => void }) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await adminLogin(token);
+      toast.success("Вы вошли как администратор: «Сохранить» меняет бота для всех");
+      onDone();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={submit} className="mt-4 flex flex-wrap items-center gap-2" aria-label="Вход администратора">
+      <label htmlFor="admin-token" className="sr-only">
+        Токен администратора
+      </label>
+      <input
+        id="admin-token"
+        type="password"
+        autoComplete="current-password"
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        placeholder="Токен администратора (EB_ADMIN_TOKEN)"
+        className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-[13.5px] outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+      />
+      <Button type="submit" size="sm" disabled={!token || busy}>
+        {busy && <Loader2 className="animate-spin" />}
+        Войти
+      </Button>
+    </form>
+  );
+}
+
 /**
  * Настройки RAG в духе Claude Code: одна колонка, разделы с приглушёнными заголовками, строки
- * «название и пояснение — переключатель», волосяные линии. Настройки глобальные: сохранение меняет
- * консультанта для всех ответов стенда до перезапуска ядра.
+ * «название и пояснение — переключатель», волосяные линии.
+ *
+ * Два режима. Администратор (вошёл с EB_ADMIN_TOKEN) меняет консультанта для всех ответов стенда до
+ * перезапуска ядра. Все остальные — в песочнице: значения хранятся в этом браузере и уходят с каждым
+ * вопросом стенда полем overrides, то есть действуют только на свои ответы. Так жюри может пробовать
+ * настройки, не ломая бота другим посетителям и демо.
  */
 export function SettingsView() {
   const [data, setData] = useState<RagSettings | null>(null);
+  const [session, setSession] = useState<AdminSession>({ enabled: false, admin: false });
+  const [sandbox, setSandbox] = useState<Sandbox>({});
   const [draft, setDraft] = useState<Draft>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"" | "save" | "reset">("");
+  const [login, setLogin] = useState(false);
+  const admin = session.admin;
 
-  const adopt = useCallback((d: RagSettings) => {
+  /** Поля с пределами режима: в песочнице у контекста и токенов потолок ниже, чем у администратора. */
+  const fields = useMemo(
+    () =>
+      (data?.fields ?? []).map((f) => (!admin && f.sandbox_max !== undefined ? { ...f, max: f.sandbox_max } : f)),
+    [data, admin],
+  );
+
+  /** Значения, от которых считаются правки: у администратора — общие, в песочнице — общие поверх своих. */
+  const current = useMemo(() => (data ? (admin ? data.values : overlay(data, sandbox)) : {}), [data, admin, sandbox]);
+
+  const adopt = useCallback((d: RagSettings, values: Record<string, SettingValue>) => {
     setData(d);
-    setDraft(Object.fromEntries(d.fields.map((f) => [f.key, f.kind === "int" || f.kind === "float" ? String(d.values[f.key]) : d.values[f.key]])));
+    setDraft(toDraft(d.fields, values));
   }, []);
 
   const load = useCallback(() => {
     setError("");
-    getSettings()
-      .then(adopt)
+    Promise.all([getSettings(), getAdminSession()])
+      .then(([d, s]) => {
+        const own = readSandbox();
+        setSession(s);
+        setSandbox(own);
+        adopt(d, s.admin ? d.values : overlay(d, own));
+      })
       .catch((e: Error) => setError(e.message));
   }, [adopt]);
 
@@ -241,23 +318,38 @@ export function SettingsView() {
   }, [load]);
 
   const parsed = useMemo(() => {
-    if (!data) return { changes: {} as Record<string, SettingValue>, invalid: 0 };
+    if (!data) return { changes: {} as Record<string, SettingValue>, values: {} as Record<string, SettingValue>, invalid: 0 };
     const changes: Record<string, SettingValue> = {};
+    const values: Record<string, SettingValue> = {};
     let invalid = 0;
-    for (const f of data.fields) {
+    for (const f of fields) {
       const { value, error: err } = parse(f, draft[f.key]);
       if (err) invalid++;
-      else if (value !== undefined && value !== data.values[f.key]) changes[f.key] = value;
+      else if (value !== undefined) {
+        values[f.key] = value;
+        if (value !== current[f.key]) changes[f.key] = value;
+      }
     }
-    return { changes, invalid };
-  }, [data, draft]);
+    return { changes, values, invalid };
+  }, [data, fields, draft, current]);
   const dirty = Object.keys(parsed.changes).length;
 
   const save = async () => {
+    if (!data) return;
+    if (!admin) {
+      // В песочнице храним только то, что отличается от общих настроек: общие могут поменяться.
+      const own = Object.fromEntries(Object.entries(parsed.values).filter(([k, v]) => v !== data.values[k]));
+      writeSandbox(own);
+      setSandbox(own);
+      adopt(data, overlay(data, own));
+      toast.success("Сохранено для вас — действует на ваши ответы на стенде со следующего вопроса");
+      return;
+    }
     setBusy("save");
     try {
-      adopt(await saveSettings(parsed.changes));
-      toast.success("Настройки сохранены — действуют со следующего ответа");
+      const d = await saveSettings(parsed.changes);
+      adopt(d, d.values);
+      toast.success("Настройки сохранены для всех — действуют со следующего ответа");
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -266,9 +358,18 @@ export function SettingsView() {
   };
 
   const reset = async () => {
+    if (!data) return;
+    if (!admin) {
+      writeSandbox({});
+      setSandbox({});
+      adopt(data, data.values);
+      toast.success("Свои настройки сброшены — ответы снова с общими");
+      return;
+    }
     setBusy("reset");
     try {
-      adopt(await resetSettings());
+      const d = await resetSettings();
+      adopt(d, d.values);
       toast.success("Вернули значения из окружения");
     } catch (e) {
       toast.error((e as Error).message);
@@ -277,23 +378,48 @@ export function SettingsView() {
     }
   };
 
+  const logout = async () => {
+    await adminLogout();
+    load();
+  };
+
   const offEnv = data?.changed.length ?? 0;
+  const own = data ? Object.keys(sandbox).filter((k) => data.fields.some((f) => f.key === k)).length : 0;
+  const resetLabel = admin ? "Сбросить к окружению" : "Сбросить свои";
 
   return (
     <AppShell>
-      <PageBar title="Настройки RAG">
+      <PageBar icon={SlidersHorizontal} title="Настройки RAG" subtitle={admin ? "для всех посетителей" : "песочница"}>
+        {admin ? (
+          <Button variant="ghost" className="text-muted-foreground max-sm:size-9 max-sm:px-0" onClick={logout} aria-label="Выйти" title="Выйти">
+            <LogOut />
+            <span className="max-sm:hidden">Выйти</span>
+          </Button>
+        ) : session.enabled ? (
+          <Button
+            variant="ghost"
+            className="text-muted-foreground max-sm:size-9 max-sm:px-0"
+            onClick={() => setLogin((v) => !v)}
+            aria-expanded={login}
+            aria-label="Войти как администратор"
+            title="Войти как администратор"
+          >
+            <LogIn />
+            <span className="max-sm:hidden">Администратор</span>
+          </Button>
+        ) : null}
         {/* На узком экране — только значок: подпись съедала место заголовка страницы. */}
         <Button
           variant="ghost"
           size="sm"
           className="text-muted-foreground max-sm:size-8 max-sm:px-0"
           onClick={reset}
-          disabled={!data || !!busy || !offEnv}
-          aria-label="Сбросить к окружению"
-          title="Сбросить к окружению"
+          disabled={!data || !!busy || !(admin ? offEnv : own)}
+          aria-label={resetLabel}
+          title={resetLabel}
         >
           {busy === "reset" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-          <span className="max-sm:hidden">Сбросить к окружению</span>
+          <span className="max-sm:hidden">{resetLabel}</span>
         </Button>
         <Button size="sm" onClick={save} disabled={!dirty || !!parsed.invalid || !!busy}>
           {busy === "save" && <Loader2 className="animate-spin" />}
@@ -319,12 +445,27 @@ export function SettingsView() {
           )}
           {data && (
             <>
-              <p className="text-[13px] leading-relaxed text-muted-foreground">
-                Действуют сразу для всех ответов стенда — со следующего вопроса — и до перезапуска ядра.{" "}
-                {offEnv
-                  ? `Отличаются от окружения: ${offEnv} из ${data.fields.length}.`
-                  : "Сейчас всё как в окружении."}
-              </p>
+              {admin ? (
+                <p className="text-[13.5px] leading-relaxed text-muted-foreground">
+                  Вы администратор: изменения действуют сразу для всех ответов стенда — со следующего вопроса — и до
+                  перезапуска ядра.{" "}
+                  {offEnv
+                    ? `Отличаются от окружения: ${offEnv} из ${data.fields.length}.`
+                    : "Сейчас всё как в окружении."}
+                  {own > 0 && ` В этом браузере ещё действуют ваши настройки песочницы: ${own}.`}
+                </p>
+              ) : (
+                <div className="flex gap-3 rounded-xl bg-muted/60 px-4 py-3 text-[13.5px] leading-relaxed">
+                  <FlaskConical className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <p className="text-muted-foreground">
+                    <span className="font-medium text-foreground">Песочница.</span> Изменения хранятся в этом браузере
+                    и действуют только на ваши ответы в чате стенда — у остальных посетителей и в виджете бот отвечает
+                    с общими настройками. В отладке такой ответ помечен «ответ с вашими настройками».{" "}
+                    {own ? `Своих значений: ${own}.` : "Сейчас всё как у всех."}
+                  </p>
+                </div>
+              )}
+              {!admin && login && <AdminLogin onDone={() => { setLogin(false); load(); }} />}
 
               {GROUPS.map((g) => (
                 <section key={g.key} className="mt-9" aria-labelledby={`g-${g.key}`}>
@@ -332,15 +473,16 @@ export function SettingsView() {
                     {g.title}
                   </h2>
                   <ul className="mt-2 divide-y border-y">
-                    {data.fields
+                    {fields
                       .filter((f) => f.group === g.key)
                       .map((f) => (
                         <Row
                           key={f.key}
                           field={f}
                           draft={draft[f.key]}
-                          saved={data.values[f.key]}
-                          envValue={data.defaults[f.key]}
+                          saved={current[f.key]}
+                          envValue={admin ? data.defaults[f.key] : data.values[f.key]}
+                          baseLabel={admin ? "в окружении" : "у всех"}
                           onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
                         />
                       ))}
@@ -375,11 +517,11 @@ export function SettingsView() {
             <span className="text-muted-foreground">
               {parsed.invalid ? "Исправьте значения с ошибкой" : `Не сохранено: ${dirty}`}
             </span>
-            <Button variant="ghost" size="sm" onClick={() => adopt(data)} disabled={!!busy}>
+            <Button variant="ghost" size="sm" onClick={() => adopt(data, current)} disabled={!!busy}>
               Отменить
             </Button>
             <Button size="sm" onClick={save} disabled={!!parsed.invalid || !!busy}>
-              Сохранить
+              {admin ? "Сохранить для всех" : "Сохранить для себя"}
             </Button>
           </div>
         </div>

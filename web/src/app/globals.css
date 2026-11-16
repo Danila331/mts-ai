@@ -88,11 +88,12 @@
   --primary: #1b1c1e;
   --primary-foreground: #ffffff;
 
-  /* красный МТС: только знак, отправка, источники */
-  --brand: #ff0032;
+  /* красный МТС: только знак, отправка, источники. Мягкий кирпично-коралловый вместо кислотного #ff0032
+     (решение владельца, ноябрь 2026). */
+  --brand: #d0424a;
   --brand-foreground: #ffffff;
-  --brand-text: #d6002a;
-  --brand-soft: #fff0f2;
+  --brand-text: #c23a41;
+  --brand-soft: #fbeeee;
 
   --secondary: #f2f2f4;
   --secondary-foreground: #1b1c1e;
@@ -100,7 +101,7 @@
   --muted-foreground: #66696f;
   --accent: #eeeef0;
   --accent-foreground: #1b1c1e;
-  --destructive: #cf3a2f;
+  --destructive: #c4362b; /* AA 4,5:1 и на --destructive-soft (axe, /kb) */
 
   --success: #15803d;
   --warning: #b45309;
@@ -116,7 +117,7 @@
   --tone-success: #15803d;
   --tone-warning: #b45309;
   --tone-info: #2563eb;
-  --tone-danger: #cf3a2f;
+  --tone-danger: #c4362b;
 
   --border: #e7e7ea;
   --input: #dadbdf;
@@ -157,7 +158,7 @@
   --primary: #ececee;
   --primary-foreground: #151618;
 
-  --brand: #ff1f4b;
+  --brand: #e60030;
   --brand-foreground: #ffffff;
   --brand-text: #ff6680;
   --brand-soft: #3b151d;
@@ -272,6 +273,48 @@
   animation: kb-flash 2.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* Строка раздела, на которую опирается ответ: мягкий фон проявляется и затухает за ~3 с */
+@keyframes kb-line-flash {
+  0% {
+    background-color: transparent;
+  }
+  15% {
+    background-color: var(--brand-soft);
+  }
+  70% {
+    background-color: var(--brand-soft);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.line-mark {
+  border-radius: 6px;
+}
+.kb-line-flash {
+  animation: kb-line-flash 3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Карточка источника у номера: лёгкий fade + сдвиг 5 px от чипа; закрывается быстрее */
+.cite-card {
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 170ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 170ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.cite-card[data-starting-style] {
+  opacity: 0;
+  transform: translateY(5px) scale(0.97);
+}
+.cite-card[data-side="bottom"][data-starting-style] {
+  transform: translateY(-5px) scale(0.97);
+}
+.cite-card[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.98);
+  transition-duration: 100ms;
+}
+
 /*
  * «Консультант думает» — как у Claude и ChatGPT: стрелка прибора качается маятником,
  * по тексту медленно идёт мягкий блик, фразы сменяются по очереди: старая гаснет, затем проявляется новая.
@@ -353,6 +396,23 @@
   animation: answer-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* Каретка печатающегося ответа (T13). */
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  border-radius: 1px;
+  background: var(--brand-text, currentColor);
+  animation: caret-blink 1s steps(1) infinite;
+}
+
 /* Появление нового сообщения */
 @keyframes msg-in {
   from {
@@ -364,6 +424,18 @@
   animation: msg-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* T43: при prefers-reduced-motion гасим любые анимации и переходы, включая утилиты Tailwind (animate-ping и др.). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .kb-flash,
   .msg-in,
@@ -372,11 +444,54 @@
   .think-out,
   .think-fade,
   .answer-in,
+  .stream-caret,
   .shimmer-text {
     animation: none;
+  }
+  .kb-line-flash {
+    animation: none;
+    background-color: var(--brand-soft);
   }
   .shimmer-text {
     background: none;
     -webkit-text-fill-color: currentColor;
+  }
+}
+
+/*
+ * «Итоги консультации» (T10): «Скачать PDF» = window.print(). Копия документа живёт в .eb-print-root прямо
+ * в <body>; на экране она скрыта, а в печати остаётся только она — без сайдбара, чата и всплывающих слоёв.
+ */
+.eb-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm 15mm;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+  }
+
+  body:has(> .eb-print-root) > :not(.eb-print-root) {
+    display: none !important;
+  }
+
+  .eb-print-root {
+    display: block;
+    color: #1d2023;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .eb-print-root a {
+    color: inherit;
   }
 }

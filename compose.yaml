@@ -1,11 +1,13 @@
-# Бэкенд стенда одной командой: база, Redis, шлюз к моделям (со своей базой),
-# Python-ядро, Go-API и Prometheus (http://localhost:9090).
+# Весь стенд одной командой: фронт и виджет (Next), Go-API, Python-ядро,
+# шлюз к моделям (со своей базой), Postgres, Redis и Prometheus.
 #
-#   docker compose up --build        # API: http://localhost:8787
-#   cd web && npm run dev            # стенд: http://localhost:3000
+#   docker compose up --build        # стенд: http://localhost:3000
+#                                    # API: http://localhost:8787, Prometheus: http://localhost:9090
 #
-# Порт API — 8787, тот же, что был у Python-API: прокси Next по
-# умолчанию ходит именно туда (EB_API_URL), и фронт переезда не заметит.
+# Для разработки фронта с горячей перезагрузкой — `cd web && npm run dev`
+# поверх того же compose: службу web тогда можно не поднимать
+# (docker compose up --build api), а прокси Next по умолчанию ходит на
+# API по 127.0.0.1:8787 (EB_API_URL).
 #
 # Ключ модели берётся из .env в корне — того же, что читает ядро при
 # запуске без docker, — но знает его только шлюз (llm-gateway): ядро и
@@ -19,7 +21,7 @@ name: energytool
 
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
     restart: unless-stopped
     environment:
       POSTGRES_USER: energytool
@@ -36,7 +38,7 @@ services:
   # Общее хранилище пределов частоты: с ним пределы верны при любом
   # числе реплик api. Без него api считает пределы в памяти.
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
     restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
@@ -49,7 +51,7 @@ services:
   # сервер, а не схема в db: LiteLLM сам ведёт свою схему (Prisma), и
   # пускать её в базу с заявками незачем.
   llm-db:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
     restart: unless-stopped
     environment:
       POSTGRES_USER: litellm
@@ -80,6 +82,9 @@ services:
       GW_FALLBACK_BASE_URL: ${GW_FALLBACK_BASE_URL:-}
       GW_FALLBACK_API_KEY: ${GW_FALLBACK_API_KEY:-}
       GW_FALLBACK_CHAT_MODEL: ${GW_FALLBACK_CHAT_MODEL:-}
+      # Распознавание фото документов (T9) — только OCR. Пусто — псевдонима
+      # energy-vision нет, api фото не принимает.
+      GW_VISION_MODEL: ${GW_VISION_MODEL:-}
       DATABASE_URL: postgresql://litellm:litellm@llm-db:5432/litellm
       # Ключи служб: у каждой свои модели и пределы (llm-gateway/keys.py).
       # Здесь — значения для разработки; на хостинге — свои.
@@ -164,6 +169,11 @@ services:
       EB_CORE_URL: http://core:8788
       EB_CORE_TOKEN: ${EB_CORE_TOKEN:-dev-core-token}
       EB_API_TOKEN: ${EB_API_TOKEN:-}
+      # Глобальные настройки RAG (/settings) — только с этим токеном; пусто — только песочница.
+      EB_ADMIN_TOKEN: ${EB_ADMIN_TOKEN:-}
+      # Разговоры и заявки клиентов (GET /api/sessions/:id, экран менеджера) —
+      # только с этим токеном; пусто — закрыто для всех.
+      EB_MANAGER_TOKEN: ${EB_MANAGER_TOKEN:-}
       EB_ALLOWED_ORIGINS: http://localhost:3000
       EB_REDIS_URL: redis://redis:6379/0
       # Резюме заявок — через шлюз, тем же псевдонимом, что ответы ядра,
@@ -171,6 +181,9 @@ services:
       LLM_BASE_URL: http://llm-gateway:4000/v1
       LLM_API_KEY: ${GW_KEY_API:-sk-dev-api-0123456789abcdef}
       LLM_MODEL: energy-chat
+      # Текст с фото документа (T9) — псевдоним шлюза, если GW_VISION_MODEL
+      # задан; иначе пусто, и кнопка вложения неактивна.
+      EB_VISION_MODEL: ${GW_VISION_MODEL:+energy-vision}
     ports:
       - "127.0.0.1:${EB_API_PORT:-8787}:8080"
       - "127.0.0.1:${EB_METRICS_PORT:-9091}:9091"
@@ -200,6 +213,35 @@ services:
       timeout: 3s
       retries: 3
 
+  # Стенд и виджет (web/, Next standalone). Браузер ходит только сюда:
+  # /api/* сервер Next проксирует в api по сети compose, подставляя
+  # EB_API_TOKEN, — адрес и токен API в браузер не попадают.
+  web:
+    build:
+      context: ./web
+    image: energytool-web:local
+    restart: unless-stopped
+    environment:
+      EB_API_URL: http://api:8080
+      EB_API_TOKEN: ${EB_API_TOKEN:-}
+      # Вход администратора на /settings — тот же токен, что у api; пусто — только песочница.
+      EB_ADMIN_TOKEN: ${EB_ADMIN_TOKEN:-}
+      # Демо-экран менеджера /manager без входа (T5): токен подставляет сервер Next, в браузер он не попадает.
+      # Тот же токен, что у api; пусто — экран просит его задать.
+      EB_MANAGER_TOKEN: ${EB_MANAGER_TOKEN:-}
+      # Кто может встроить /embed (T35): origin'ы через запятую; пусто — свой origin и локальные стенды.
+      EB_EMBED_ALLOWED_ORIGINS: ${EB_EMBED_ALLOWED_ORIGINS:-}
+      # Верить ли X-Forwarded-For (T35). Перед Next в compose прокси нет — заголовок задаёт клиент; ставьте 1 только за
+      # своим nginx или балансировщиком, который его перезаписывает.
+      EB_TRUST_PROXY_HEADERS: ${EB_TRUST_PROXY_HEADERS:-}
+    ports: ["127.0.0.1:${EB_WEB_PORT:-3000}:3000"]
+    # Только старт api: стенд открывается сразу, а пока api и ядро
+    # поднимаются, прокси честно отвечает «API не запущен».
+    depends_on:
+      api:
+        condition: service_started
+    # Healthcheck — в образе (web/Dockerfile): статика /widget.js.
+
   # Сбор метрик api и шлюза, правила тревог (monitoring/). Интерфейс —
   # http://localhost:9090, вкладка Alerts — сработавшие правила.
   prometheus:
@@ -217,8 +259,45 @@ services:
       api:
         condition: service_started
 
+  # Дашборды поверх Prometheus (monitoring/grafana/): provisioning и
+  # дашборды монтируются из репозитория, руками в интерфейсе настраивать
+  # нечего. Интерфейс — http://localhost:3001; вход — admin и пароль из
+  # GF_SECURITY_ADMIN_PASSWORD. Без него — пароль разработки, как у других
+  # служебных секретов этого файла: стенд поднимается одной командой (T28),
+  # а порт слушает только петля. На хостинге пароль задаётся свой
+  # (docs/deploy.md) — admin/admin Grafana не получает ни там, ни тут.
+  grafana:
+    image: grafana/grafana:12.3.0@sha256:70d9599b186ce287be0d2c5ba9a78acb2e86c1a68c9c41449454d0fc3eeb84e8
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-dev-grafana-local}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      PROMETHEUS_URL: http://prometheus:9090
+    ports: ["127.0.0.1:${EB_GRAFANA_PORT:-3001}:3000"]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      prometheus:
+        condition: service_started
+
 volumes:
   pgdata:
   llmdb:
   core-index:
   prom-data:
+  grafana-data:
