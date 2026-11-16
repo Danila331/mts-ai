@@ -88,3 +88,41 @@ func TestParseMode(t *testing.T) {
 	assert.Equal(t, ModeCopilot, ParseMode("copilot"))
 	assert.Equal(t, Mode(""), ParseMode("debug"))
 }
+
+func TestUnseen(t *testing.T) {
+	u := func(s string) Turn { return Turn{Role: RoleUser, Content: s} }
+	a := func(s string) Turn { return Turn{Role: RoleAssistant, Content: s} }
+
+	t.Run("переписки нет — новое всё, в том числе до сессии", func(t *testing.T) {
+		turns := []Turn{a("Здравствуйте"), u("Привет"), a("Чем помочь?"), u("Сколько стоит?")}
+		assert.Equal(t, turns, Unseen(nil, turns))
+	})
+	t.Run("следующий вопрос — только он (ответ уже сохранён)", func(t *testing.T) {
+		turns := []Turn{u("Привет"), a("Чем  помочь?\n"), u("Сколько стоит?")}
+		assert.Equal(t, []Turn{u("Сколько стоит?")}, Unseen(&Turn{Role: RoleAssistant, Content: "Чем помочь?"}, turns))
+	})
+	t.Run("ответ не сохранился — приходит со следующим вопросом", func(t *testing.T) {
+		turns := []Turn{u("Привет"), a("Чем помочь?"), u("Сколько стоит?")}
+		assert.Equal(t, []Turn{a("Чем помочь?"), u("Сколько стоит?")}, Unseen(&Turn{Role: RoleUser, Content: "Привет"}, turns))
+	})
+	t.Run("повтор вопроса после сбоя ничего не дублирует", func(t *testing.T) {
+		turns := []Turn{u("Привет")}
+		assert.Empty(t, Unseen(&Turn{Role: RoleUser, Content: "Привет"}, turns))
+	})
+	t.Run("реплика фронта между вопросами сохраняется", func(t *testing.T) {
+		turns := []Turn{u("Привет"), a("Ответ"), a("Оставьте контакты"), u("Вот")}
+		assert.Equal(t, []Turn{a("Оставьте контакты"), u("Вот")}, Unseen(&Turn{Role: RoleAssistant, Content: "Ответ"}, turns))
+	})
+	t.Run("история переписана — только последняя реплика", func(t *testing.T) {
+		turns := []Turn{u("Другое"), a("Иначе"), u("Новый вопрос")}
+		assert.Equal(t, []Turn{u("Новый вопрос")}, Unseen(&Turn{Role: RoleAssistant, Content: "Ответ"}, turns))
+	})
+	t.Run("длинный ответ сравнивается как обрезанный", func(t *testing.T) {
+		long := strings.Repeat("ж", MaxContent+50)
+		clipped := []Turn{u("q"), {Role: RoleAssistant, Content: string([]rune(long)[:MaxContent])}, u("q2")}
+		assert.Equal(t, []Turn{u("q2")}, Unseen(&Turn{Role: RoleAssistant, Content: long}, clipped))
+	})
+	t.Run("пустой запрос", func(t *testing.T) {
+		assert.Nil(t, Unseen(nil, nil))
+	})
+}

@@ -75,10 +75,17 @@ func (q *Queries) ForgetLeadsMentioning(ctx context.Context, phone10 string) (in
 }
 
 const forgetSessionsMentioning = `-- name: ForgetSessionsMentioning :execrows
-DELETE FROM sessions WHERE regexp_replace(title, '\D', '', 'g') LIKE '%' || $1::text || '%'
+DELETE FROM sessions
+WHERE regexp_replace(title, '\D', '', 'g') LIKE '%' || $1::text || '%'
+   OR EXISTS (
+       SELECT 1 FROM session_messages m
+       WHERE m.session_id = sessions.id
+         AND regexp_replace(m.content, '\D', '', 'g') LIKE '%' || $1::text || '%')
 `
 
-// Заголовок сессии — первая реплика клиента: номер мог оказаться и там.
+// Заголовок сессии — первая реплика клиента, а переписка лежит в
+// session_messages: номер мог оказаться и там. Сессия уходит целиком, с
+// перепиской (ON DELETE CASCADE).
 func (q *Queries) ForgetSessionsMentioning(ctx context.Context, phone10 string) (int64, error) {
 	result, err := q.db.Exec(ctx, forgetSessionsMentioning, phone10)
 	if err != nil {

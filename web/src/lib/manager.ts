@@ -2,8 +2,9 @@
 // /api/manager/* (токен менеджера подставляет сервер Next, в браузере его нет) и чистая логика списка.
 
 import { humanizeCallbackLabel } from "./callback.ts";
+import { ROLES, isRole } from "./roles.ts";
 import type { LeadKind } from "./lead-kinds";
-import type { Passport, PassportGroup } from "./types";
+import type { Passport, PassportField, PassportGroup } from "./types";
 
 export type LeadStatus = "new" | "in_progress" | "done" | "rejected";
 export type LeadGrade = "hot" | "warm" | "cold" | "";
@@ -68,7 +69,46 @@ export interface LeadCard extends LeadItem {
   /** Диалог на момент отправки: остаётся, даже когда сессию удалили по сроку хранения. */
   messages: { role: string; content: string }[];
   status_changed_at?: string;
-  history: { session: { channel: string; title: string }; turns: HistoryTurn[] } | null;
+  history: DialogHistory | null;
+}
+
+// ---------- диалоги (GET /api/sessions, /api/sessions/:id): все разговоры клиентов, с заявкой и без ----------
+
+export interface DialogItem {
+  id: string;
+  channel: string;
+  title: string;
+  role: string;
+  product: PassportGroup;
+  product_label: string;
+  /** Реплик в переписке: вопросы клиента и ответы консультанта. */
+  messages: number;
+  has_lead: boolean;
+  lead_code?: string;
+  lead_kind?: LeadKind;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DialogList {
+  items: DialogItem[];
+  total: number;
+}
+
+export interface DialogHistory {
+  session: {
+    id?: string;
+    channel: string;
+    title: string;
+    role?: string;
+    role_source?: string;
+    created_at?: string;
+    updated_at?: string;
+    passport?: Passport;
+  };
+  turns: HistoryTurn[];
+  lead_code?: string;
+  lead_kind?: LeadKind;
 }
 
 /**
@@ -111,6 +151,9 @@ export const setLeadStatus = (code: string, status: LeadStatus) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
   });
+
+export const getDialogs = (limit = 100, signal?: AbortSignal) => call<DialogList>(`/dialogs?limit=${limit}`, { signal });
+export const getDialog = (id: string, signal?: AbortSignal) => call<DialogHistory>(`/dialogs/${id}`, { signal });
 
 /** Период опроса списка: на демо заявка «прилетает» за несколько секунд. */
 export const POLL_MS = 10_000;
@@ -181,3 +224,50 @@ export function formatPhone(raw: string): string {
   if (!ru) return raw.trim();
   return `+7 ${ru.slice(0, 3)} ${ru.slice(3, 6)}-${ru.slice(6, 8)}-${ru.slice(8)}`;
 }
+
+/** Диалоги по убыванию времени последней реплики — порядок списка, даже если API отдаст иначе. */
+export function latestDialogsFirst<T extends Pick<DialogItem, "updated_at">>(items: readonly T[]): T[] {
+  return [...items].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+}
+
+/** Заголовок строки списка диалогов: первая реплика клиента; у разговора без текста — «Без названия». */
+export const dialogTitle = (d: Pick<DialogItem, "title">) => d.title.trim() || "Без названия";
+
+/** «1 реплика», «3 реплики», «5 реплик» — по правилам русского множественного числа. */
+export function messagesLabel(n: number): string {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  const word = mod100 >= 11 && mod100 <= 14 ? "реплик" : mod10 === 1 ? "реплика" : mod10 >= 2 && mod10 <= 4 ? "реплики" : "реплик";
+  return `${n} ${word}`;
+}
+
+export const CHANNEL_LABEL: Record<string, string> = { embed: "виджет", playground: "стенд", telegram: "Telegram" };
+export const channelLabel = (channel: string) => CHANNEL_LABEL[channel] ?? channel;
+
+/**
+ * Переписка для карточки заявки. Полная переписка сессии на сервере главнее; диалог из заявки (на момент отправки)
+ * берётся, когда сессии нет — удалена по сроку хранения — или в ней реплик меньше (сессия старше хранения переписки).
+ */
+export function pickTranscript(
+  history: Pick<DialogHistory, "turns"> | null,
+  messages: readonly { role: string; content: string }[] | null | undefined,
+  sentAt: string,
+): HistoryTurn[] {
+  const saved = messages ?? [];
+  if (history && history.turns.length >= saved.length) return history.turns;
+  return saved.map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.content, at: sentAt }));
+}
+
+/**
+ * Что показать в паспорте: все заполненные поля, в том числе контакты и «Удобное время для звонка». Раньше группа
+ * контактов скрывалась — и сказанное клиентом в чате пропадало из карточки.
+ */
+export function filledFields(passport: Partial<Passport> | null | undefined): PassportField[] {
+  return (passport?.fields ?? []).filter((f) => f.value?.trim());
+}
+
+/** Роль собеседника для менеджера: «Бизнес»; неизвестная или пустая роль — пустая строка. */
+export const dialogRole = (role: string | undefined) => (isRole(role) ? ROLES[role].label : "");
+
+/** id диалога (сессии): как проверяет Go-API — латиница, цифры, «-» и «_», 8–64 знака. Шире не пускаем в путь прокси. */
+export const DIALOG_ID = /^[A-Za-z0-9_-]{8,64}$/;

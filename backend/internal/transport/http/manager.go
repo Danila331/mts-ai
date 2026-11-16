@@ -48,6 +48,27 @@ func (s *Server) leadList(c echo.Context) error {
 	}{page, lead.Statuses})
 }
 
+// sessionList — все диалоги клиентов, с заявкой и без, новые сверху:
+// ?limit=&offset=. Экран менеджера опрашивает его, как список заявок.
+func (s *Server) sessionList(c echo.Context) error {
+	if s.deps.Sessions == nil {
+		return fail(c, http.StatusNotFound, "not found")
+	}
+	limit, err := intParam(c, "limit", leadsDefaultLimit, 1, leadsMaxLimit)
+	if err != nil {
+		return fail(c, http.StatusBadRequest, err.Error())
+	}
+	offset, err := intParam(c, "offset", 0, 0, 1<<30)
+	if err != nil {
+		return fail(c, http.StatusBadRequest, err.Error())
+	}
+	page, err := s.deps.Sessions.SessionList(c.Request().Context(), limit, offset)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, page)
+}
+
 // leadCardResponse — заявка и история её разговора. History пуст, если
 // заявка из старой формы или сессию удалили по сроку хранения: диалог на
 // момент отправки в таком случае остаётся в messages.

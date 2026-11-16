@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	chatuc "github.com/Danila331/mts-ai/backend/internal/chat/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/config"
 	"github.com/Danila331/mts-ai/backend/internal/core"
+	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	feedbackuc "github.com/Danila331/mts-ai/backend/internal/feedback/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/health"
@@ -40,11 +42,13 @@ import (
 
 // memStore — база в памяти.
 type memStore struct {
-	mu        sync.Mutex
-	answers   []chat.Record
-	leads     []lead.Lead
-	feedback  []feedback.Feedback
-	sessions  map[string]session.Session
+	mu       sync.Mutex
+	answers  []chat.Record
+	leads    []lead.Lead
+	feedback []feedback.Feedback
+	sessions map[string]session.Session
+	// messages — переписка сессий (как session_messages).
+	messages  map[string][]dialog.Turn
 	passports map[string]passport.Passport
 	// model — модель извлечения паспорта; nil — только телефон кодом.
 	model passport.Model
@@ -104,6 +108,23 @@ func (m *memStore) TouchSession(_ context.Context, ref session.Ref, mode, title 
 	return nil
 }
 
+func (m *memStore) SyncTurns(_ context.Context, id string, turns []dialog.Turn) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[id]; !ok {
+		return nil
+	}
+	if m.messages == nil {
+		m.messages = map[string][]dialog.Turn{}
+	}
+	var last *dialog.Turn
+	if h := m.messages[id]; len(h) > 0 {
+		last = &h[len(h)-1]
+	}
+	m.messages[id] = append(m.messages[id], dialog.Unseen(last, turns)...)
+	return nil
+}
+
 func (m *memStore) History(_ context.Context, id string) (session.History, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -112,19 +133,76 @@ func (m *memStore) History(_ context.Context, id string) (session.History, error
 		return session.History{}, session.ErrNotFound
 	}
 	h := session.History{Session: s, Turns: []session.Turn{}}
+	answers := map[string]chat.Record{}
 	for _, a := range m.answers {
-		if a.SessionID == id {
-			h.Turns = append(h.Turns, session.Turn{Role: "user", Content: a.Question},
-				session.Turn{Role: "assistant", Content: a.Text, AnswerID: a.ID, Sources: a.Sources()})
+		answers[a.ID] = a
+	}
+	if msgs := m.messages[id]; len(msgs) > 0 {
+		for _, t := range msgs {
+			turn := session.Turn{Role: string(t.Role), Content: t.Content}
+			// Ответ знает свой id: так же, как в хранилище, по тексту.
+			for _, a := range m.answers {
+				if a.SessionID == id && t.Role == dialog.RoleAssistant && a.Text == t.Content {
+					turn.AnswerID, turn.Sources = a.ID, a.Sources()
+				}
+			}
+			h.Turns = append(h.Turns, turn)
+		}
+	} else {
+		for _, a := range m.answers {
+			if a.SessionID == id {
+				h.Turns = append(h.Turns, session.Turn{Role: "user", Content: a.Question},
+					session.Turn{Role: "assistant", Content: a.Text, AnswerID: a.ID, Sources: a.Sources()})
+			}
+		}
+	}
+	for _, l := range m.leads {
+		if l.SessionID == id {
+			h.LeadCode, h.LeadKind = l.Code, string(l.Kind)
 		}
 	}
 	return h, nil
+}
+
+func (m *memStore) SessionList(_ context.Context, limit, offset int) (session.ListPage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var all []session.ListItem
+	for _, s := range m.sessions {
+		if s.Mode != "" && s.Mode != "chat" {
+			continue
+		}
+		item := session.ListItem{ID: s.ID, Channel: s.Channel, Title: s.Title, Role: s.Role,
+			Messages: len(m.messages[s.ID]), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt}
+		for _, l := range m.leads {
+			if l.SessionID == s.ID {
+				item.HasLead, item.LeadCode, item.LeadKind = true, l.Code, string(l.Kind)
+			}
+		}
+		all = append(all, item)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].UpdatedAt.After(all[j].UpdatedAt) })
+	total := len(all)
+	if offset > len(all) {
+		offset = len(all)
+	}
+	all = all[offset:]
+	if limit < len(all) {
+		all = all[:limit]
+	}
+	return session.ListPage{Items: append([]session.ListItem{}, all...), Total: total}, nil
 }
 
 func (m *memStore) SaveAnswer(_ context.Context, r chat.Record) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.answers = append(m.answers, r)
+	if sess := m.sessions[r.SessionID]; r.SessionID != "" && sess.Mode == "chat" {
+		if m.messages == nil {
+			m.messages = map[string][]dialog.Turn{}
+		}
+		m.messages[r.SessionID] = append(m.messages[r.SessionID], dialog.Turn{Role: dialog.RoleAssistant, Content: r.Text})
+	}
 	return nil
 }
 

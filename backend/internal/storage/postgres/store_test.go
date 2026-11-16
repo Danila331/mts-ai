@@ -36,7 +36,7 @@ func openTest(t *testing.T) *Store {
 	s, err := Open(context.Background(), config.DB{DSN: dsn, MaxConns: 4})
 	require.NoError(t, err)
 	t.Cleanup(s.Close)
-	_, err = s.Pool.Exec(context.Background(), "TRUNCATE answers, leads, feedback, sessions")
+	_, err = s.Pool.Exec(context.Background(), "TRUNCATE answers, leads, feedback, sessions, session_messages")
 	require.NoError(t, err)
 	return s
 }
@@ -134,9 +134,13 @@ func TestStore(t *testing.T) {
 		var first chat.Answer
 		require.NoError(t, json.Unmarshal([]byte(`{"id": "s1", "text": "Ответ 1", "mode": "chat",
 			"citations": [{"support": [{"id": "kb-1"}, {"id": "kb-2"}]}]}`), &first))
+		q1 := dialog.Turn{Role: dialog.RoleUser, Content: "Первый вопрос"}
 		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Первый вопрос", session.RoleHint{}, session.LevelChoice{}))
+		require.NoError(t, s.SyncTurns(ctx, ref.ID, []dialog.Turn{q1}))
 		require.NoError(t, s.SaveAnswer(ctx, chat.Record{Answer: first, Question: "Первый вопрос", Turns: 1, SessionID: ref.ID}))
 		require.NoError(t, s.TouchSession(ctx, ref, "chat", "Второй вопрос", session.RoleHint{}, session.LevelChoice{}))
+		require.NoError(t, s.SyncTurns(ctx, ref.ID, []dialog.Turn{q1, {Role: dialog.RoleAssistant, Content: "Ответ 1"},
+			{Role: dialog.RoleUser, Content: "Второй вопрос"}}))
 		require.NoError(t, s.SaveAnswer(ctx, chat.Record{
 			Answer: chat.Answer{ID: "s2", Text: "Ответ 2", Mode: "chat"}, Question: "Второй вопрос", Turns: 3, SessionID: ref.ID,
 		}))
@@ -243,7 +247,7 @@ func TestPrivacy(t *testing.T) {
 	}
 
 	t.Run("очистка по сроку", func(t *testing.T) {
-		exec("TRUNCATE answers, leads, feedback, sessions")
+		exec("TRUNCATE answers, leads, feedback, sessions, session_messages")
 		exec(`INSERT INTO leads (code, summary, created_at) VALUES ('old', 's', now() - interval '100 days'), ('new', 's', now())`)
 		exec(`INSERT INTO answers (id, mode, question, answer, turns, created_at)
 		      VALUES ('a-old', 'chat', 'q', 'a', 1, now() - interval '40 days'), ('a-new', 'chat', 'q', 'a', 1, now())`)
@@ -277,7 +281,7 @@ func TestPrivacy(t *testing.T) {
 	})
 
 	t.Run("удаление по запросу", func(t *testing.T) {
-		exec("TRUNCATE answers, leads, feedback, sessions")
+		exec("TRUNCATE answers, leads, feedback, sessions, session_messages")
 		exec(`INSERT INTO leads (code, phone, summary) VALUES ('c1', '8 (900) 123-45-67', 's'), ('c2', '+7 911 000-00-00', 's')`)
 		exec(`INSERT INTO leads (code, phone, summary, messages) VALUES ('c3', '', 's', '[{"role":"user","content":"звоните +7 900 1234567"}]')`)
 		exec(`INSERT INTO answers (id, mode, question, answer, turns) VALUES ('a1', 'chat', 'мой номер 900-123-45-67', 'a', 1), ('a2', 'chat', 'АСКУЭ', 'a', 1)`)

@@ -73,3 +73,13 @@ type Session struct {
 	RoleSource string
 	Level      string
 }
+
+type SessionMessage struct {
+	ID        int64
+	SessionID string
+	Seq       int32
+	Role      string
+	Content   string
+	AnswerID  *string
+	CreatedAt time.Time
+}

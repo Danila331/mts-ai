@@ -1,6 +1,7 @@
 "use client";
 
 import { Inbox } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppShell, PageBar } from "@/components/app-shell";
@@ -27,9 +28,11 @@ import { cn } from "@/lib/utils";
  * как заявка из чата «прилетает» менеджеру; новая подсвечивается, пока её не откроют.
  */
 export function LeadsView() {
+  const wanted = useSearchParams().get("lead") ?? "";
+  const initialCode = /^[0-9a-f]{6,32}$/.test(wanted) ? wanted : null;
   const [list, setList] = useState<LeadList | null>(null);
   const [error, setError] = useState<ManagerError | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialCode);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set());
   const [now, setNow] = useState(0);
   const seen = useRef<ReadonlySet<string> | null>(null);
