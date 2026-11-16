@@ -117,7 +117,7 @@ Deploy; служба с томом (базы) переезжает вместе 
 | Source | `Danila331/mts-ai`, ветка `main`, **Wait for CI** включён |
 | Root Directory | пусто (корень репозитория: ядру нужны `energybot/` и `knowledge-base/`) |
 | Dockerfile Path | `core/Dockerfile` |
-| Watch Paths | `/core/**`, `/energybot/**`, `/knowledge-base/**`, `/scripts/core_api.py`, `/scripts/index_cache.py`, `/scripts/callback_promise.py`, `/scripts/honest_no.py`, `/scripts/logmask.py`, `/scripts/quick_replies.py`, `/solution-requirements.txt` — те же модули `scripts/`, что копирует `core/Dockerfile` (сверяет `tests/test_core_image.py`); новый модуль ядра добавлять и сюда |
+| Watch Paths | `/core/**`, `/energybot/**`, `/knowledge-base/**`, `/scripts/core_api.py`, `/scripts/index_cache.py`, `/scripts/callback_promise.py`, `/scripts/handoff.py`, `/scripts/honest_no.py`, `/scripts/logmask.py`, `/scripts/quick_replies.py`, `/solution-requirements.txt` — те же модули `scripts/`, что копирует `core/Dockerfile` (сверяет `tests/test_core_image.py`); новый модуль ядра добавлять и сюда |
 | Volume | смонтировать в `/data/index` — кеш векторов базы между выкладками |
 | Healthcheck | `/healthz`, тайм-аут 300 с (ядро на старте считает эмбеддинги базы) |
 | Restart Policy | On Failure, 5 попыток |
