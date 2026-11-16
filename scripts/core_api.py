@@ -28,7 +28,9 @@
                                 honest_no — «честные нет» (T26, только chat): [{rule, product, reason, fact,
                                 section, alternative}] по правилам из scripts/honest_no.py; suggestions — кнопки
                                 быстрых ответов на вопрос бота (T31, только chat, 2–4 строки или []; правила
-                                scripts/quick_replies.py, без модели). Необязательный
+                                scripts/quick_replies.py, без модели); handoff {reason} — бот сам предложил
+                                передать разговор менеджеру (только chat; фраза уже в text; правила scripts/handoff.py,
+                                без модели; не при "has_lead": true в запросе — заявка уже отправлена). Необязательный
                                 "passport": {поле: значение} — паспорт задачи как ещё один источник фактов.
     GET  /core/settings         настройки RAG: текущие значения, значения из окружения, пределы
     POST /core/settings         {"values": {ключ: значение}} — поменять на лету для всех ответов (до перезапуска)
@@ -78,6 +80,7 @@ load_dotenv(ROOT / ".env")
 os.environ.setdefault("EB_STYLE", "jury")
 
 import callback_promise  # noqa: E402 — scripts/callback_promise.py: без обещаний времени звонка, только режим chat
+import handoff  # noqa: E402 — scripts/handoff.py: бот сам предлагает передать менеджеру, только режим chat
 import honest_no  # noqa: E402 — scripts/honest_no.py: «честные нет» (T26), только режим chat
 import httpx  # noqa: E402 — зависимость energybot/llm.py
 import index_cache  # noqa: E402 — scripts/index_cache.py, рядом с этим файлом
@@ -1044,12 +1047,13 @@ class App:
         # Весь ответ — и поиск, и представление для отладки — с настройками этого запроса.
         stream = self.stream and mode != "eval" and body.get("stream") is not False
         with overridden(values):
-            payload = self._chat(turns, mode, emit, body.get("passport"), stream, role, level)
+            payload = self._chat(turns, mode, emit, body.get("passport"), stream, role, level,
+                                 has_lead=body.get("has_lead") is True)
         payload["overrides"] = applied
         return payload
 
     def _chat(self, turns: list, mode: str, emit, passport=None, stream: bool = False, role: str = "",
-              level: str = "") -> dict:
+              level: str = "", has_lead: bool = False) -> dict:
         TRACE.reset(emit)
         TRACE.stream = bool(stream and emit)
         t0 = time.perf_counter()
@@ -1135,7 +1139,19 @@ class App:
         if degraded:
             payload["degraded"] = degraded
         # Кнопки быстрых ответов (T31): детерминированно по вопросу бота и паспорту, без вызова модели; только chat.
-        payload["suggestions"] = quick_replies.suggest(answer.text, passport, client=client_text(turns)) \
+        # Предложение менеджера (handoff): детерминированно, только chat, не при уточнении ниже порога, запасном
+        # ответе и сбое модели. Фраза дописывается после расчёта опоры — она не утверждение из базы, — и до кнопок:
+        # под ней появляются «Да, передайте менеджеру» / «Пока продолжим здесь».
+        if mode == "chat" and not gated and not degraded and not payload["fallback"]:
+            offer = handoff.decide(turns, passport, answer.text, has_lead)
+            if offer:
+                payload["text"] = handoff.append(answer.text, offer)
+                payload["handoff"] = {"reason": offer["reason"]}
+                # Интерфейс рисует ответ по предложениям citations — фраза-предложение тоже должна быть среди них
+                # (вопрос клиенту, опора не нужна), иначе на экране её нет, хотя text её содержит.
+                payload["citations"].append({"sentence": offer["text"], "question": True, "support": [],
+                                             "unsupported_numbers": []})
+        payload["suggestions"] = quick_replies.suggest(payload["text"], passport, client=client_text(turns)) \
             if mode == "chat" and not payload["fallback"] else []
         return payload
 

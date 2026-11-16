@@ -29,7 +29,7 @@ COPY energybot ./energybot
 COPY knowledge-base ./knowledge-base
 # Все модули scripts/, которые импортирует core_api.py (tests/test_core_image.py сверяет список).
 COPY scripts/core_api.py scripts/index_cache.py scripts/callback_promise.py scripts/honest_no.py \
-     scripts/logmask.py scripts/quick_replies.py ./scripts/
+     scripts/logmask.py scripts/quick_replies.py scripts/handoff.py ./scripts/
 
 # Каталог кеша векторов (EB_INDEX_CACHE_DIR). Создаётся здесь, с владельцем
 # core: том docker перенимает владельца каталога образа, и непривилегированное

@@ -117,7 +117,7 @@ Deploy; служба с томом (базы) переезжает вместе 
 | Source | `Danila331/mts-ai`, ветка `main`, **Wait for CI** включён |
 | Root Directory | пусто (корень репозитория: ядру нужны `energybot/` и `knowledge-base/`) |
 | Dockerfile Path | `core/Dockerfile` |
-| Watch Paths | `/core/**`, `/energybot/**`, `/knowledge-base/**`, `/scripts/core_api.py`, `/scripts/index_cache.py`, `/solution-requirements.txt` |
+| Watch Paths | `/core/**`, `/energybot/**`, `/knowledge-base/**`, `/scripts/core_api.py`, `/scripts/index_cache.py`, `/scripts/callback_promise.py`, `/scripts/handoff.py`, `/scripts/honest_no.py`, `/scripts/logmask.py`, `/scripts/quick_replies.py`, `/solution-requirements.txt` — те же модули `scripts/`, что копирует `core/Dockerfile` (сверяет `tests/test_core_image.py`); новый модуль ядра добавлять и сюда |
 | Volume | смонтировать в `/data/index` — кеш векторов базы между выкладками |
 | Healthcheck | `/healthz`, тайм-аут 300 с (ядро на старте считает эмбеддинги базы) |
 | Restart Policy | On Failure, 5 попыток |
@@ -223,10 +223,18 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `GF_AUTH_ANONYMOUS_ENABLED` | `false` |
 | `GF_USERS_ALLOW_SIGN_UP` | `false` |
 | `GF_SERVER_HTTP_PORT` | `3000` — тот же порт, что у домена |
+| `PORT` | `3000` — обязательно: Railway сам задаёт службе `PORT=8080` и туда же шлёт проверку здоровья; без этой строки Grafana поднимается, а выкладка падает на healthcheck (проверено 16.11.2026) |
 | `GF_SERVER_HTTP_ADDR` | `::` — приватная сеть Railway адресует по IPv6 |
 | `GF_SERVER_ROOT_URL` | публичный адрес Grafana, если включён домен |
 | `GF_ANALYTICS_REPORTING_ENABLED`, `GF_ANALYTICS_CHECK_FOR_UPDATES` | `false` |
 | `PROMETHEUS_URL` | `http://${{prometheus.RAILWAY_PRIVATE_DOMAIN}}:9090` |
+
+Служба создана 16.11.2026 из CLI (`railway add --service grafana --repo Danila331/mts-ai --branch main`) и сразу
+получила регион Сингапур — переставлен на EU West. Корень, Dockerfile, Watch Paths, healthcheck и регион выставлены
+через GraphQL (`railway api`, мутация `serviceInstanceUpdate`), «Wait for CI» — `deploymentTriggerUpdate`
+(`checkSuites: true`): `railway environment edit --service-config …` в CLI 5.71 ответил «No changes to apply» и ничего
+не поменял. Том не подключён: пароль администратора — из переменной, дашборды — в образе. Публичный адрес:
+https://grafana-production-47698040.up.railway.app (включён после пароля, без входа — только `/api/health`).
 
 Проверка: `GET /api/health` отвечает без входа; `GET /api/search` без пароля — 401; после входа видны три дашборда
 («Консультант», «Модель и шлюз», «Заявки»). Сами `/metrics` api и шлюза остаются только в приватной сети.

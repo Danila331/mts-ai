@@ -2,7 +2,7 @@
  * Загрузчик виджета ИИ-консультанта МТС EnergyTool. Собирается в public/widget.js (npm run build:widget).
  *
  *   <script src="https://<хост>/widget.js" async data-title="…" data-color="#FF0032" data-position="right"
- *           data-greeting="…" data-greeting-delay="6" data-topics='{"/solar":"solar","/askue":"askue"}'></script>
+ *           data-greeting="…" data-greeting-delay="6" data-topics='{"/askue":"askue","/orem":"orem"}'></script>
  *
  * Кнопка и подсказка живут в Shadow DOM (стили сайта их не ломают и наоборот), чат — в iframe на /embed.
  * Связь с iframe — postMessage: отправка на точный origin загрузчика (не «*»), приём только от этого origin и из
@@ -62,6 +62,35 @@ declare global {
 const VERSION = "1.0.0";
 const STORAGE_OPEN = "energytool-chat:open";
 const STORAGE_GREETED = "energytool-chat:greeted";
+
+/**
+ * sessionStorage может бросать SecurityError: страница в чужом (cross-site) iframe при заблокированных сторонних
+ * данных, режим приватности, запрет в настройках сайта. Без защиты исключение обрывало mount() (подсказка не
+ * показывалась) и open() до отправки вопроса в чат — поэтому все обращения идут через эти обёртки.
+ */
+const store = {
+  get(key: string): string | null {
+    try {
+      return sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key: string, value: string) {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* не запомнили — подсказка может показаться ещё раз, это не страшно */
+    }
+  },
+  remove(key: string) {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      /* см. выше */
+    }
+  },
+};
 
 (function init() {
   if (window.EnergyToolChat) return;
@@ -264,8 +293,8 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     wrap.classList.remove("unread");
     launcher.setAttribute("aria-expanded", "true");
     launcher.setAttribute("aria-label", "Закрыть чат");
-    sessionStorage.setItem(STORAGE_OPEN, "1");
-    sessionStorage.setItem(STORAGE_GREETED, "1");
+    store.set(STORAGE_OPEN, "1");
+    store.set(STORAGE_GREETED, "1");
     if (ready) sendPage();
     post({ type: "eb:open" });
   }
@@ -275,7 +304,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     wrap.classList.remove("open");
     launcher.setAttribute("aria-expanded", "false");
     launcher.setAttribute("aria-label", "Открыть чат с консультантом");
-    sessionStorage.removeItem(STORAGE_OPEN);
+    store.remove(STORAGE_OPEN);
     launcher.focus({ preventScroll: true });
   }
 
@@ -316,7 +345,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     }
     if ((e.target as Element).closest(".x")) {
       hideBubble();
-      sessionStorage.setItem(STORAGE_GREETED, "1");
+      store.set(STORAGE_GREETED, "1");
       return;
     }
     open();
@@ -327,8 +356,8 @@ const STORAGE_GREETED = "energytool-chat:greeted";
 
   const mount = () => {
     document.body.appendChild(host);
-    if (cfg.open || sessionStorage.getItem(STORAGE_OPEN)) open();
-    else if (cfg.greeting && !sessionStorage.getItem(STORAGE_GREETED) && cfg.greetingDelay >= 0) {
+    if (cfg.open || store.get(STORAGE_OPEN)) open();
+    else if (cfg.greeting && !store.get(STORAGE_GREETED) && cfg.greetingDelay >= 0) {
       setTimeout(() => {
         if (isOpen) return;
         preconnect();

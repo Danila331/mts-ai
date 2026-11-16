@@ -105,6 +105,8 @@ export interface ChatOptions {
   roleSource?: RoleSource;
   /** Уровень объяснения (T16): только режим chat. undefined — не отправляется; "" — обычный уровень. */
   level?: LevelId | "";
+  /** По разговору уже отправлена заявка: ядро не предлагает менеджера повторно (только режим chat). */
+  hasLead?: boolean;
 }
 
 /** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → delta… → answer → passport → done. */
@@ -112,12 +114,13 @@ export async function streamChat(
   messages: Turn[],
   mode: ChatMode,
   handlers: StreamHandlers,
-  { signal, overrides, sessionId, channel, page, role, roleSource, level }: ChatOptions = {},
+  { signal, overrides, sessionId, channel, page, role, roleSource, level, hasLead }: ChatOptions = {},
 ): Promise<void> {
   const body: Record<string, unknown> = { messages, mode };
   if (overrides && Object.keys(overrides).length) body.overrides = overrides;
   if (mode === "chat" && roleSource) Object.assign(body, { role: role ?? "", role_source: roleSource });
   if (mode === "chat" && level !== undefined) body.level = level;
+  if (mode === "chat" && hasLead) body.has_lead = true;
   if (sessionId) {
     Object.assign(body, { session_id: sessionId, channel: channel ?? "playground" });
     if (page && Object.keys(page).length) body.page = page;

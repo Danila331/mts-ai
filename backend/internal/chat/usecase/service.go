@@ -26,6 +26,9 @@ type Journal interface {
 	// не стирает; уровень объяснения (T16) пишется, только если клиент его
 	// прислал.
 	TouchSession(ctx context.Context, ref session.Ref, mode, title string, role session.RoleHint, level session.LevelChoice) error
+	// SyncTurns дописывает в переписку сессии реплики запроса, которых в
+	// ней ещё нет (dialog.Unseen). Ответ в переписку кладёт SaveAnswer.
+	SyncTurns(ctx context.Context, sessionID string, turns []dialog.Turn) error
 }
 
 // journalTimeout — потолок на запись ответа в журнал.
@@ -309,6 +312,16 @@ func (s *Service) touch(ctx context.Context, req chat.Request) {
 	title := session.Title(dialog.LastQuestion(req.Turns))
 	if err := s.journal.TouchSession(jctx, req.Session, string(req.Mode), title, req.Role, s.levelFor(req)); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("session_id", req.Session.ID).Msg("сессия не записана")
+		return
+	}
+	// Переписка — только чата клиента: копилот менеджера и автопроверка
+	// чужих разговоров не ведут. Вопрос ложится до ответа ядра, чтобы
+	// остаться в истории, даже если ответа не будет.
+	if req.Mode != dialog.ModeChat {
+		return
+	}
+	if err := s.journal.SyncTurns(jctx, req.Session.ID, req.Turns); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("session_id", req.Session.ID).Msg("переписка не записана")
 	}
 }
 

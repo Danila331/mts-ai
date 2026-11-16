@@ -6,7 +6,7 @@
  * стенд вместе с каждой выкладкой стенда EnergyTool AI, и стенд сайта МТС не нужно пересобирать.
  *
  * Настройки превью приходят в адресе страницы: ?w_title=…&w_color=…&w_position=…&w_greeting=…
- * &w_greetingDelay=…&w_quick=a|b&w_topics={"/solar":"solar"}&w_path=/solar. Чего нет в адресе, то виджет берёт из своих умолчаний — ровно как на
+ * &w_greetingDelay=…&w_quick=a|b&w_topics={"/orem":"orem"}&w_path=/orem. Чего нет в адресе, то виджет берёт из своих умолчаний — ровно как на
  * сайте клиента с тегом без настроек. ?w_preview=1 заново показывает подсказку у кнопки и принимает
  * команды ask/toggle от страницы /widget (iframe с другого origin не может вызвать EnergyToolChat напрямую).
  */
@@ -33,7 +33,7 @@
     });
   }
 
-  // ?w_path=/solar — превью страницы с темой: виджет видит этот путь (адрес меняется без перезагрузки).
+  // ?w_path=/orem — превью страницы с темой: виджет видит этот путь (адрес меняется без перезагрузки).
   var path = params.get("w_path");
   if (path && /^\/[^\s"'<>]{0,199}$/.test(path)) {
     try {
@@ -52,6 +52,17 @@
     if (value === null) return;
     if (key === "color" && !/^#[0-9a-f]{3,8}$/i.test(value)) return;
     tag.setAttribute("data-" + key.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }), value);
+  });
+  // Превью на /widget ждёт событие load страницы, а у копии сайта оно приходит поздно (карты, видео, сторонние
+  // скрипты) или не приходит вовсе, и до него кнопки «Спросить в превью» молчали, а через 15 с превью подменялось
+  // пустой страницей. Поэтому, как только виджет подключён, сообщаем об этом странице /widget сами.
+  tag.addEventListener("load", function () {
+    if (window.parent === window) return;
+    try {
+      window.parent.postMessage({ type: "eb:preview-ready" }, "*"); // без данных; получатель сверяет окно и origin
+    } catch {
+      /* родитель недоступен — превью дождётся load */
+    }
   });
   document.body.appendChild(tag);
 })();

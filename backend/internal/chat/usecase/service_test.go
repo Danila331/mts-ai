@@ -61,7 +61,15 @@ type journal struct {
 	sessions []string
 	roles    []session.RoleHint
 	levels   []session.LevelChoice
+	synced   [][]dialog.Turn
 	err      error
+}
+
+func (j *journal) SyncTurns(_ context.Context, _ string, turns []dialog.Turn) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.synced = append(j.synced, turns)
+	return j.err
 }
 
 func (j *journal) TouchSession(_ context.Context, ref session.Ref, _, title string, role session.RoleHint,
@@ -213,6 +221,25 @@ func TestSessionTouchedAndAnswerLinked(t *testing.T) {
 	require.Len(t, j.recs, 1)
 	assert.Equal(t, "sess-0001", j.recs[0].SessionID)
 	assert.Equal(t, []string{"k1", "k2"}, j.recs[0].Sources(), "разделы без повторов, по первому упоминанию")
+}
+
+func TestTranscriptSyncedOnlyForChatSession(t *testing.T) {
+	ask := func(mode dialog.Mode, sessionID string) *journal {
+		st := &script{events: []chat.Event{ev("answer", `{"id": "a1", "text": "Ответ"}`), ev("done", `{}`)}}
+		j := &journal{}
+		r := chat.Request{Mode: mode, Session: session.Ref{ID: sessionID, Channel: session.Embed}, Turns: []dialog.Turn{
+			{Role: dialog.RoleAssistant, Content: "Здравствуйте"}, {Role: dialog.RoleUser, Content: "Привет"}}}
+		relay, err := New(&fakeCore{stream: st}, j, time.Minute).Ask(context.Background(), r)
+		require.NoError(t, err)
+		relay.Forward(func(chat.Event) error { return nil })
+		return j
+	}
+	j := ask(dialog.ModeChat, "sess-0001")
+	require.Len(t, j.synced, 1)
+	assert.Len(t, j.synced[0], 2, "реплики до сессии уходят в переписку целиком")
+
+	assert.Empty(t, ask(dialog.ModeCopilot, "sess-0001").synced, "копилот менеджера переписку не ведёт")
+	assert.Empty(t, ask(dialog.ModeChat, "").synced, "без сессии переписки нет")
 }
 
 func TestNoSessionNoTouch(t *testing.T) {

@@ -9,9 +9,13 @@ import {
   ANSWER_PAD_PX,
   MAX_SUGGESTIONS,
   TASK_BUTTONS,
+  HANDOFF_NO,
+  HANDOFF_YES,
   followTarget,
+  handoffOffer,
   hasUnsentLead,
   hasUsefulAnswer,
+  isHandoffYes,
   leadAfterText,
   leadChecklists,
   nextFollowing,
@@ -214,5 +218,39 @@ describe("прокрутка", () => {
     assert.equal(nextFollowing(false, 900, box(950)), false);
     assert.equal(nextFollowing(false, 900, box(2390)), true);
     assert.equal(nextFollowing(true, 900, box(1000)), true);
+  });
+});
+
+describe("предложение менеджера (handoff)", () => {
+  const offered = () => [user("Сколько стоит?"), bot(answer({ handoff: { reason: "commercial" } }))];
+
+  test("карточка под последним готовым ответом с handoff", () => {
+    const messages = offered();
+    assert.equal(handoffOffer(messages, false), messages[1]);
+  });
+
+  test("без поля handoff, при заявке, закрытой карточке, запасном ответе, ошибке и печати карточки нет", () => {
+    assert.equal(handoffOffer([user("Привет"), bot(answer())], false), undefined);
+    assert.equal(handoffOffer(offered(), true), undefined);
+    const messages = offered();
+    assert.equal(handoffOffer(messages, false, new Set([messages[1].id])), undefined);
+    assert.equal(handoffOffer([user("?"), bot(answer({ handoff: { reason: "unknown" }, fallback: true }))], false), undefined);
+    assert.equal(handoffOffer([user("?"), bot(answer({ handoff: { reason: "unknown" } }), { error: "x" })], false), undefined);
+    assert.equal(handoffOffer([user("?"), bot(answer({ handoff: { reason: "unknown" } }), { pending: true })], false), undefined);
+  });
+
+  test("после новой реплики клиента карточка уходит", () => {
+    assert.equal(handoffOffer([...offered(), user("Расскажите ещё")], false), undefined);
+  });
+
+  test("кнопка «Да, передайте менеджеру» узнаётся, «Пока продолжим здесь» — нет", () => {
+    assert.equal(isHandoffYes(HANDOFF_YES), true);
+    assert.equal(isHandoffYes("  да,  передайте менеджеру "), true);
+    assert.equal(isHandoffYes(HANDOFF_NO), false);
+  });
+
+  test("кнопки совпадают с ядром (scripts/quick_replies.py)", () => {
+    const core = text("../../../scripts/quick_replies.py");
+    assert.ok(core.includes(`"${HANDOFF_YES}"`) && core.includes(`"${HANDOFF_NO}"`));
   });
 });

@@ -68,8 +68,8 @@ const DEFAULTS: Settings = {
   quick: ["Как снизить расходы на электроэнергию?", "Окупится ли солнечная станция?"],
   delay: 3,
   topics: [
-    { prefix: "/solar", topic: "solar" },
     { prefix: "/askue", topic: "askue" },
+    { prefix: "/orem", topic: "orem" },
   ],
 };
 
@@ -119,10 +119,16 @@ function useCopy() {
   return {
     done,
     copy: (text: string) => {
-      void navigator.clipboard.writeText(text);
-      setDone(true);
-      toast.success("Код скопирован");
-      setTimeout(() => setDone(false), 1500);
+      // Буфер обмена недоступен на http (кроме localhost) и без разрешения: не рапортуем об успехе, пока не записали.
+      const write = navigator.clipboard?.writeText(text) ?? Promise.reject(new Error("clipboard unavailable"));
+      write.then(
+        () => {
+          setDone(true);
+          toast.success("Код скопирован");
+          setTimeout(() => setDone(false), 1500);
+        },
+        () => toast.error("Не удалось скопировать — выделите код и скопируйте вручную"),
+      );
     },
   };
 }
@@ -232,7 +238,7 @@ function TopicRules({ value, onChange }: { value: TopicRule[]; onChange: (v: Top
                 <Input
                   value={r.prefix}
                   maxLength={LIMITS.prefix}
-                  placeholder="/solar"
+                  placeholder="/orem"
                   aria-label={`Префикс пути ${i + 1}`}
                   aria-invalid={bad}
                   onChange={(e) => patch(i, { prefix: e.target.value })}
@@ -455,6 +461,21 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
   const frameKey = `${device}-${mts}`;
   const frameReady = src !== "" && seenKey === frameKey;
   const loaded = src !== "" && loadedSrc === src;
+
+  // Копия сайта сама сообщает, что виджет на ней подключён (public/stand.js): её событие load может прийти поздно или
+  // не прийти вовсе, и тогда превью считалось бы незагруженным, а кнопки «Спросить в превью» молчали бы.
+  useEffect(() => {
+    if (!mts || !src) return;
+    const onReady = (e: MessageEvent) => {
+      if (e.origin !== standOrigin || e.source !== frame.current?.contentWindow) return;
+      if ((e.data as { type?: string } | null)?.type !== "eb:preview-ready") return;
+      setLoadedSrc(src);
+      setSeenKey(frameKey);
+      dispatch({ type: "loaded" });
+    };
+    window.addEventListener("message", onReady);
+    return () => window.removeEventListener("message", onReady);
+  }, [mts, src, standOrigin, frameKey]);
 
   // Копия сайта не загрузилась за отведённое время — переходим на пустую страницу с предложением повторить.
   useEffect(() => {
