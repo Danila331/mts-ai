@@ -107,10 +107,10 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     position: fixed; bottom: ${cfg.offsetY}px; ${side}: ${cfg.offsetX}px;
     width: 56px; height: 56px; border-radius: 50%; border: 0; cursor: pointer; padding: 0;
     background: var(--c); color: #fff; display: grid; place-items: center;
-    box-shadow: 0 2px 4px rgba(29,32,35,.12), 0 10px 28px rgba(29,32,35,.20);
+    box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 8px 24px -6px rgba(0,0,0,.28);
     transition: transform .25s cubic-bezier(.16,1,.3,1), box-shadow .25s ease;
   }
-  .launcher:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(29,32,35,.14), 0 14px 36px rgba(29,32,35,.24); }
+  .launcher:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(0,0,0,.14), 0 12px 32px -6px rgba(0,0,0,.32); }
   .launcher:active { transform: translateY(0) scale(.97); }
   .launcher:focus-visible { outline: 3px solid color-mix(in srgb, var(--c) 35%, white); outline-offset: 3px; }
   .launcher svg { width: 26px; height: 26px; transition: transform .3s cubic-bezier(.16,1,.3,1), opacity .2s ease; position: absolute; }
@@ -119,46 +119,46 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   .open .launcher .i-close { transform: none; opacity: 1; }
   .badge {
     position: absolute; top: 1px; ${side === "right" ? "right" : "left"}: 1px; width: 14px; height: 14px;
-    border-radius: 50%; background: #1D2023; border: 2.5px solid #fff; display: none;
+    border-radius: 50%; background: #1b1c1e; border: 2.5px solid #fff; display: none;
   }
   .unread .badge { display: block; }
   .bubble {
     position: fixed; bottom: ${cfg.offsetY + 70}px; ${side}: ${cfg.offsetX}px; width: 304px;
-    background: #fff; color: #1D2023; border-radius: 20px; border-${side === "right" ? "bottom-right" : "bottom-left"}-radius: 6px;
-    padding: 14px 14px 14px 14px; font: 14px/1.45 ${font};
-    box-shadow: 0 2px 6px rgba(29,32,35,.06), 0 14px 40px rgba(29,32,35,.16), 0 0 0 1px rgba(29,32,35,.06); cursor: pointer;
+    background: #fff; color: #1b1c1e; border-radius: 16px; border-${side === "right" ? "bottom-right" : "bottom-left"}-radius: 4px;
+    padding: 14px; font: 14px/1.45 ${font}; -webkit-font-smoothing: antialiased;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.07), 0 4px 8px -2px rgba(0,0,0,.06), 0 16px 40px -8px rgba(0,0,0,.18); cursor: pointer;
     opacity: 0; transform: translateY(8px) scale(.98); transform-origin: bottom ${side};
     pointer-events: none; transition: opacity .3s ease, transform .35s cubic-bezier(.16,1,.3,1);
   }
   .bubble.show { opacity: 1; transform: none; pointer-events: auto; }
   .bubble .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-right: 22px; }
-  .bubble .ava { width: 32px; height: 32px; border-radius: 50%; background: var(--c); color: #fff; display: grid; place-items: center; flex: none; }
-  .bubble .ava svg { width: 24px; height: 24px; }
-  .bubble b { display: block; font-size: 13.5px; color: #1D2023; font-weight: 600; line-height: 1.2; }
-  .bubble .st { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #626C77; margin-top: 2px; }
-  .bubble .st i { width: 6px; height: 6px; border-radius: 50%; background: #0B7F45; }
+  .bubble .ava { width: 28px; height: 28px; border-radius: 8px; background: var(--c); color: #fff; display: grid; place-items: center; flex: none; }
+  .bubble .ava svg { width: 21px; height: 21px; }
+  .bubble b { display: block; font-size: 13px; color: #1b1c1e; font-weight: 600; line-height: 1.25; }
+  .bubble .st { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #66696f; margin-top: 1px; }
+  .bubble .st i { width: 6px; height: 6px; border-radius: 50%; background: #15803d; }
   .bubble .text { display: block; }
   .bubble .quick { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
-  .bubble .quick button { all: unset; box-sizing: border-box; cursor: pointer; padding: 8px 12px; border-radius: 12px;
-    background: #F2F3F7; color: #1D2023; font: 500 13px/1.3 ${font}; transition: background .15s, color .15s; }
-  .bubble .quick button:hover { background: var(--c); color: #fff; }
+  .bubble .quick button { all: unset; box-sizing: border-box; cursor: pointer; padding: 8px 11px; border-radius: 10px;
+    border: 1px solid #e7e7ea; color: #1b1c1e; font: 500 13px/1.3 ${font}; transition: background .15s, border-color .15s; }
+  .bubble .quick button:hover { background: #f8f8f9; border-color: #dadbdf; }
   .bubble .quick button:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 45%, white); outline-offset: 1px; }
   .bubble .x { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border: 0; padding: 0; background: none;
     color: #626C77; cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
   .bubble .x svg { width: 14px; height: 14px; }
-  .bubble .x:hover { background: #F2F3F7; color: #1D2023; }
+  .bubble .x:hover { background: #f2f2f4; color: #1b1c1e; }
   .panel {
     position: fixed; bottom: ${cfg.offsetY + 72}px; ${side}: ${cfg.offsetX}px;
     width: 400px; height: min(680px, calc(100vh - ${cfg.offsetY + 96}px));
-    border-radius: 20px; overflow: hidden; background: #fff;
-    box-shadow: 0 4px 12px rgba(29,32,35,.08), 0 24px 64px rgba(29,32,35,.22), 0 0 0 1px rgba(29,32,35,.06);
+    border-radius: 16px; overflow: hidden; background: #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.07), 0 6px 12px -4px rgba(0,0,0,.08), 0 24px 56px -12px rgba(0,0,0,.28);
     opacity: 0; transform: translateY(12px) scale(.98); transform-origin: bottom ${side};
     pointer-events: none; visibility: hidden;
     transition: opacity .2s ease, transform .3s cubic-bezier(.16,1,.3,1), visibility 0s linear .3s;
   }
   .open .panel { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition-delay: 0s; }
   iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
-  .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #626C77; font: 13px ${font}; }
+  .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #66696f; font: 13px ${font}; }
   @media (max-width: 640px) {
     /* T43: цели касания ≥ 44 px */
     .bubble .x { width: 44px; height: 44px; top: 0; right: 0; }

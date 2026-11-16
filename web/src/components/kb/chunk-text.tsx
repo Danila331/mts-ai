@@ -26,7 +26,7 @@ function inline(text: string, kb: KbIndex | null, onDoc?: (doc: string) => void,
         key={`l${m.index}`}
         type="button"
         onClick={() => onDoc(doc.doc)}
-        className="font-medium text-brand-text underline decoration-brand-text/30 underline-offset-[3px] hover:decoration-brand-text"
+        className="font-medium text-foreground underline decoration-border underline-offset-[3px] hover:decoration-foreground"
       >
         {label ?? doc.title}
       </button>,
@@ -43,7 +43,7 @@ function mark(text: string, highlight?: string): ReactNode[] {
   const parts = text.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"));
   return parts.map((p, i) =>
     i % 2 ? (
-      <mark key={i} className="rounded-[3px] bg-primary px-0.5 text-white">
+      <mark key={i} className="rounded-[3px] bg-mark px-0.5 text-foreground">
         {p}
       </mark>
     ) : (
@@ -98,7 +98,7 @@ export function ChunkText({
         // «Кто: …», «Что: …» — пары «ключ — значение» по одной в строке.
         if (rows.every((r) => r && r.length === 1) && rows.length > 1) {
           return (
-            <dl key={i} className="divide-y overflow-hidden rounded-xl border">
+            <dl key={i} className="divide-y overflow-hidden rounded-lg border">
               {(rows as [string, string][][]).map(([[k, v]], j) => (
                 <div key={j} {...at(b.idx[j])} className="line-mark grid gap-1 px-4 py-2.5 sm:grid-cols-[minmax(0,12rem)_1fr] sm:gap-4">
                   <dt className="text-[13px] font-medium text-muted-foreground sm:pt-px">{k}</dt>
@@ -110,7 +110,7 @@ export function ChunkText({
         }
         if (rows.length === 1 && rows[0] && rows[0].length > 1) {
           return (
-            <dl key={i} {...at(b.idx[0])} className="line-mark grid gap-x-4 gap-y-1.5 rounded-xl border px-4 py-3 sm:grid-cols-[minmax(0,12rem)_1fr]">
+            <dl key={i} {...at(b.idx[0])} className="line-mark grid gap-x-4 gap-y-1.5 rounded-lg border px-4 py-3 sm:grid-cols-[minmax(0,12rem)_1fr]">
               {rows[0].map(([k, v], j) => (
                 <div key={j} className="contents">
                   <dt className="text-[13px] font-medium text-muted-foreground sm:pt-px">{k}</dt>
@@ -176,12 +176,12 @@ function KvTable({
 }) {
   // На узких экранах строка таблицы превращается в карточку «подпись — значение».
   return (
-    <div className="overflow-hidden rounded-xl border">
-      <table className="w-full border-collapse text-left text-[13.5px] leading-snug max-sm:block">
+    <div className="overflow-hidden rounded-lg border">
+      <table className="w-full border-collapse text-left text-[13px] leading-snug max-sm:block">
         <thead className="max-sm:hidden">
           <tr className="bg-surface">
             {head.map((h) => (
-              <th key={h} scope="col" className="px-3.5 py-2.5 text-[12.5px] font-medium whitespace-nowrap text-muted-foreground">
+              <th key={h} scope="col" className="px-3.5 py-2.5 text-[12px] font-medium whitespace-nowrap text-muted-foreground">
                 {h}
               </th>
             ))}

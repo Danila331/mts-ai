@@ -56,7 +56,7 @@ function Field({
       <Label htmlFor={id} className="text-[13px]">
         {label}
         {required ? (
-          <span className="text-brand-text" aria-hidden>
+          <span className="text-muted-foreground" aria-hidden>
             *
           </span>
         ) : (
@@ -65,7 +65,7 @@ function Field({
       </Label>
       {children}
       {error && (
-        <p id={`${id}-error`} className="-mt-0.5 text-[12.5px] text-destructive">
+        <p id={`${id}-error`} className="-mt-0.5 text-[12px] text-destructive">
           {error}
         </p>
       )}
@@ -189,7 +189,7 @@ function LeadForm({
             <span className="mb-2 flex size-10 items-center justify-center rounded-full bg-tone-success text-white">
               <Check className="size-5" strokeWidth={2.5} />
             </span>
-            <Title className="font-heading text-[19px] leading-snug font-semibold tracking-[-0.015em]">
+            <Title className="font-heading text-[18px] leading-snug font-semibold tracking-[-0.015em]">
               {LEAD_SAVED_TITLE}
             </Title>
             <Description className="text-[14px] leading-relaxed text-muted-foreground">
@@ -213,7 +213,7 @@ function LeadForm({
     <form onSubmit={submit} className={cn(panel ? "flex h-full min-h-0 flex-col" : "grid gap-6")} noValidate>
       <div className={cn(body, "grid grid-cols-[minmax(0,1fr)] content-start gap-6")}>
         <div className={cn("grid gap-1.5", !panel && "pr-8")}>
-          <Title className={cn("font-heading text-[19px] leading-snug font-semibold tracking-[-0.015em]", panel && "sr-only")}>
+          <Title className={cn("font-heading text-[18px] leading-snug font-semibold tracking-[-0.015em]", panel && "sr-only")}>
             Передать запрос менеджеру
           </Title>
           <Description className="text-[14px] leading-relaxed text-muted-foreground">

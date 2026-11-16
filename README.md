@@ -320,7 +320,14 @@ set -a; source .env; set +a
 .venv/bin/python eval/personas.py --mock   # стресс-тест по персонам на заглушке; настоящий (--real) — платно, см. eval/personas/README.md
 ```
 
-Сабмит:
+Итоговый сабмит AIblanki находится в [`submissions/final/`](submissions/final/README.md).
+
+```bash
+.venv/bin/python scripts/build_submission.py --final   # → dist/submission-final.zip
+.venv/bin/python scripts/check_submission.py --final
+```
+
+Сборка варианта `energybot` для локальной оценки:
 
 ```bash
 .venv/bin/python scripts/build_submission.py   # → dist/submission.zip

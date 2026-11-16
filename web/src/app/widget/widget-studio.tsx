@@ -4,7 +4,6 @@ import {
   ArrowUpRight,
   Check,
   ChevronDown,
-  Code2,
   Copy,
   FileCode2,
   Globe,
@@ -14,10 +13,8 @@ import {
   Braces,
   LoaderCircle,
   TriangleAlert,
-  MessageCircle,
   Monitor,
   MousePointerClick,
-  Palette,
   Pipette,
   Plus,
   RotateCcw,
@@ -133,8 +130,8 @@ function useCopy() {
 function CopyBlock({ code, label }: { code: string; label: string }) {
   const { done, copy } = useCopy();
   return (
-    <div className="relative overflow-hidden rounded-xl bg-[#17191c] ring-1 ring-border dark:ring-white/8">
-      <div className="flex h-10 items-center justify-between border-b border-white/8 pr-1.5 pl-4">
+    <div className="relative overflow-hidden rounded-lg bg-[#141517] ring-1 ring-border dark:ring-white/8">
+      <div className="flex h-9 items-center justify-between border-b border-white/8 pr-1.5 pl-3.5">
         <span className="font-mono text-xs text-white/50">{label}</span>
         <button
           type="button"
@@ -145,7 +142,7 @@ function CopyBlock({ code, label }: { code: string; label: string }) {
           {done ? "Скопировано" : "Копировать"}
         </button>
       </div>
-      <pre className="overflow-x-auto px-4 py-3.5 font-mono text-[12.5px] leading-relaxed text-white/90">{code}</pre>
+      <pre className="overflow-x-auto px-3.5 py-3 font-mono text-[12px] leading-relaxed text-white/90">{code}</pre>
     </div>
   );
 }
@@ -154,8 +151,8 @@ function CopyBlock({ code, label }: { code: string; label: string }) {
 function OneLine({ origin, full }: { origin: string; full: string }) {
   const { done, copy } = useCopy();
   return (
-    <div className="flex h-12 w-fit max-w-full items-center gap-4 rounded-xl bg-[#17191c] pr-1.5 pl-4 ring-1 ring-border dark:ring-white/8">
-      <code className="min-w-0 truncate font-mono text-[13px] text-white/90">
+    <div className="flex h-11 w-fit max-w-full items-center gap-4 rounded-lg bg-[#141517] pr-1.5 pl-3.5 ring-1 ring-border dark:ring-white/8">
+      <code className="min-w-0 truncate font-mono text-[12px] text-white/90">
         <span className="text-white/45">&lt;</span>
         <span className="text-[#ff7a8f]">script</span> <span className="text-[#9cc4ff]">src</span>
         <span className="text-white/45">=</span>
@@ -167,9 +164,9 @@ function OneLine({ origin, full }: { origin: string; full: string }) {
       <button
         type="button"
         onClick={() => copy(full)}
-        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#2c2f34] px-3 text-[13px] font-medium text-white transition-colors hover:bg-[#383c42]"
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-white/16"
       >
-        {done ? <Check className="size-4" /> : <Copy className="size-4" />}
+        {done ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
         {done ? "Скопировано" : "Скопировать тег"}
       </button>
     </div>
@@ -211,53 +208,13 @@ function Field({
   );
 }
 
-function Panel({ icon: Icon, title, children }: { icon: React.ElementType; title: string; children: React.ReactNode }) {
+/** Иконка раздела в новой рамке не рисуется (оставлена в сигнатуре, чтобы не трогать места вызова). */
+function Panel({ title, children }: { icon?: React.ElementType; title: string; children: React.ReactNode }) {
   return (
-    <section className="grid gap-5 border-t p-5 first:border-t-0">
-      <h2 className="flex items-center gap-2.5 text-[14px] font-semibold">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-white">
-          <Icon className="size-4" />
-        </span>
-        {title}
-      </h2>
+    <section className="grid gap-4 border-t py-4 first:border-t-0">
+      <h2 className="text-[14px] font-medium">{title}</h2>
       {children}
     </section>
-  );
-}
-
-/** Сторона экрана — схемой экрана, а не словами: видно, где окажется кнопка. */
-function SidePicker({ value, onChange, color }: { value: Settings["position"]; onChange: (v: Settings["position"]) => void; color: string }) {
-  return (
-    <div className="grid grid-cols-2 gap-2.5" role="radiogroup" aria-label="Сторона экрана">
-      {(["left", "right"] as const).map((side) => {
-        const on = value === side;
-        return (
-          <button
-            key={side}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            onClick={() => onChange(side)}
-            className={cn(
-              "grid gap-2 rounded-xl border p-2.5 text-left transition-colors hover:bg-muted",
-              on && "border-foreground/70 ring-1 ring-foreground/70 hover:bg-transparent",
-            )}
-          >
-            <span className="relative block h-12 rounded-md border bg-surface">
-              <span className="absolute inset-x-2 top-2 h-1 rounded-full bg-border" />
-              <span className="absolute top-4.5 left-2 h-1 w-1/2 rounded-full bg-border" />
-              <span
-                className={cn("absolute bottom-1.5 size-3 rounded-full transition-all", side === "left" ? "left-1.5" : "right-1.5")}
-                style={{ background: on ? color : "var(--muted-foreground)", opacity: on ? 1 : 0.45 }}
-              />
-            </span>
-            <span className={cn("px-0.5 text-[13px]", on ? "font-medium" : "text-muted-foreground")}>
-              {side === "left" ? "Слева" : "Справа"}
-            </span>
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -338,7 +295,7 @@ function Segmented<T extends string>({
   label: string;
 }) {
   return (
-    <div className="inline-flex w-fit max-w-full overflow-x-auto rounded-lg bg-muted p-1" role="radiogroup" aria-label={label}>
+    <div className="inline-flex w-fit max-w-full overflow-x-auto rounded-md bg-muted p-0.5" role="radiogroup" aria-label={label}>
       {options.map(({ value: v, label: l, icon: Icon, iconOnly, disabled }) => (
         <button
           key={v}
@@ -350,7 +307,7 @@ function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(v)}
           className={cn(
-            "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-[5px] px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
             value === v && "bg-background text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-accent",
           )}
         >
@@ -520,8 +477,8 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
 
   return (
     <AppShell>
-      <PageBar icon={Code2} title="Виджет для сайта" subtitle="встраивание консультанта">
-        <Button nativeButton={false} render={<a href={stand} target="_blank" rel="noreferrer" />}>
+      <PageBar title="Виджет для сайта">
+        <Button size="sm" nativeButton={false} render={<a href={stand} target="_blank" rel="noreferrer" />}>
           Сайт МТС с виджетом <ArrowUpRight />
         </Button>
       </PageBar>
@@ -546,10 +503,10 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
             <Summary state={pv} scriptSize={scriptSize} />
           </header>
 
-          <div className="mt-12 grid gap-8 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-10">
+          <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-8">
             <div className="grid content-start gap-3">
-              <div className="overflow-hidden rounded-2xl border bg-background shadow-[var(--shadow-float)] dark:bg-card">
-                <Panel icon={Palette} title="Внешний вид">
+              <div className="border-y">
+                <Panel title="Внешний вид">
                   <Field label="Заголовок" htmlFor="w-title" aside={<Counter value={s.title.length} max={LIMITS.title} />}>
                     <Input
                       id="w-title"
@@ -568,7 +525,7 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
                             type="button"
                             onClick={() => set("color", c.value)}
                             className={cn(
-                              "flex size-9 items-center justify-center rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14),0_0_0_1px_var(--border)] transition-transform outline-none hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                              "flex size-8 items-center justify-center rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14),0_0_0_1px_var(--border)] transition-transform outline-none hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                               on && "ring-2 ring-foreground/80 ring-offset-2 ring-offset-background",
                             )}
                             style={{ background: c.value }}
@@ -582,7 +539,7 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
                       })}
                       <label
                         title="Свой цвет"
-                        className="relative flex size-9 cursor-pointer items-center justify-center rounded-full border border-dashed text-muted-foreground transition-colors hover:border-input hover:text-foreground"
+                        className="relative flex size-8 cursor-pointer items-center justify-center rounded-full border border-dashed text-muted-foreground transition-colors hover:border-input hover:text-foreground"
                       >
                         <Pipette className="size-4" />
                         <input
@@ -609,11 +566,19 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
                     </div>
                   </Field>
                   <Field label="Сторона экрана">
-                    <SidePicker value={s.position} onChange={(v) => set("position", v)} color={isHex(s.color) ? s.color : DEFAULTS.color} />
+                    <Segmented
+                      label="Сторона экрана"
+                      value={s.position}
+                      onChange={(v) => set("position", v)}
+                      options={[
+                        { value: "left", label: "Слева" },
+                        { value: "right", label: "Справа" },
+                      ]}
+                    />
                   </Field>
                 </Panel>
 
-                <Panel icon={MessageCircle} title="Подсказка у кнопки">
+                <Panel title="Подсказка у кнопки">
                   <Field
                     label="Приветствие"
                     htmlFor="w-greeting"
@@ -681,7 +646,7 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
                       step={1}
                       value={s.delay}
                       onChange={(e) => set("delay", Number(e.target.value))}
-                      className="h-5 w-full cursor-pointer accent-[var(--brand)]"
+                      className="h-5 w-full cursor-pointer accent-[var(--foreground)]"
                     />
                     <div className="tnum -mt-1 flex justify-between text-[11px] text-muted-foreground">
                       <span>сразу</span>
@@ -715,7 +680,7 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
 
             <section aria-labelledby="w-preview" className="min-w-0 lg:sticky lg:top-4 lg:self-start">
               <div className="mb-3 flex flex-wrap items-center gap-2">
-                <h2 id="w-preview" className="mr-auto text-[15px] font-semibold">
+                <h2 id="w-preview" className="mr-auto text-[14px] font-medium">
                   Превью
                 </h2>
                 <Segmented
@@ -738,14 +703,14 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
                 />
               </div>
 
-              <div className="overflow-hidden rounded-2xl border bg-background shadow-[var(--shadow-pop)] dark:bg-card">
-                <div className="flex h-11 items-center gap-3 border-b bg-surface px-3.5">
+              <div className="overflow-hidden rounded-xl border bg-background dark:bg-card">
+                <div className="flex h-10 items-center gap-3 border-b bg-surface px-3">
                   <span className="flex gap-1.5" aria-hidden>
                     <span className="size-2.5 rounded-full bg-dim" />
                     <span className="size-2.5 rounded-full bg-dim" />
                     <span className="size-2.5 rounded-full bg-dim" />
                   </span>
-                  <div className="mx-auto flex h-7 w-full max-w-[380px] min-w-0 items-center justify-center gap-1.5 rounded-full border bg-background px-3 text-[12.5px] text-muted-foreground dark:bg-background">
+                  <div className="mx-auto flex h-7 w-full max-w-[380px] min-w-0 items-center justify-center gap-1.5 rounded-full border bg-background px-3 text-[12px] text-muted-foreground dark:bg-background">
                     <Lock className="size-3 shrink-0" />
                     <span className="truncate text-foreground/80">
                       {host}
@@ -793,7 +758,7 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
                       }}
                       title={mts ? "Превью: сайт МТС EnergyTool с виджетом" : "Превью виджета на странице сайта"}
                       className={cn(
-                        "block h-[clamp(600px,calc(100dvh-170px),780px)] border-0 bg-white",
+                        "block h-[clamp(460px,calc(100dvh-390px),760px)] border-0 bg-white",
                         device === "phone" ? "w-[390px] border-x" : "w-full",
                       )}
                     />
@@ -854,18 +819,18 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
             </section>
           </div>
 
-          <section aria-labelledby="w-install" className="mt-20">
-            <h2 id="w-install" className="text-[24px] font-semibold tracking-[-0.02em]">
+          <section aria-labelledby="w-install" className="mt-16 border-t pt-8">
+            <h2 id="w-install" className="text-[18px] font-semibold tracking-[-0.015em]">
               Установка
             </h2>
             <ol className="mt-6 grid gap-10 lg:grid-cols-2 lg:gap-12">
               <li className="grid content-start gap-4">
                 <div className="flex gap-3">
-                  <span className="tnum flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background">
+                  <span className="tnum flex size-6 shrink-0 items-center justify-center rounded-full border font-mono text-[11px] text-muted-foreground">
                     1
                   </span>
                   <div>
-                    <h3 className="text-[15px] leading-7 font-semibold">Вставьте тег перед &lt;/body&gt;</h3>
+                    <h3 className="text-[14px] leading-6 font-medium">Вставьте тег перед &lt;/body&gt;</h3>
                     <p className="text-[13px] text-muted-foreground">Настройки слева уже в коде, адрес стенда подставлен</p>
                   </div>
                 </div>
@@ -873,11 +838,11 @@ export function WidgetStudio({ standUrl, scriptSize = null }: { standUrl: string
               </li>
               <li className="grid content-start gap-4">
                 <div className="flex gap-3">
-                  <span className="tnum flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[13px] font-semibold text-muted-foreground">
+                  <span className="tnum flex size-6 shrink-0 items-center justify-center rounded-full border font-mono text-[11px] text-muted-foreground">
                     2
                   </span>
                   <div>
-                    <h3 className="text-[15px] leading-7 font-semibold">
+                    <h3 className="text-[14px] leading-6 font-medium">
                       Свяжите кнопки сайта <span className="font-normal text-muted-foreground">— по желанию</span>
                     </h3>
                     <p className="text-[13px] text-muted-foreground">Например, «Спросить консультанта» в карточке продукта</p>
@@ -897,15 +862,6 @@ EnergyToolChat.ask("Подойдут ли нам солнечные панели
               </li>
             </ol>
           </section>
-
-          <dl className="mt-20 grid gap-8 border-t pt-8 sm:grid-cols-3">
-            {FACTS.map(({ title, text }) => (
-              <div key={title}>
-                <dt className="text-[14px] font-semibold">{title}</dt>
-                <dd className="mt-1.5 text-[14px] leading-relaxed text-muted-foreground">{text}</dd>
-              </div>
-            ))}
-          </dl>
         </div>
       </div>
     </AppShell>

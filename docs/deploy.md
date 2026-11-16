@@ -49,6 +49,30 @@ Vercel поэтому показывает пропущенную сборку �
 config-as-code (`railway.json`) Railway для новых проектов больше не читает, поэтому таких файлов в
 репозитории нет. Ниже — что выставлено, чтобы повторить или сверить.
 
+### Регионы: всё рядом, в Европе
+
+| Где | Регион |
+|---|---|
+| Все службы и базы Railway | **EU West (Amsterdam)**, `europe-west4` |
+| Функция-прокси Vercel (`/api/*`) | **`fra1`** (Франкфурт) — `web/vercel.json` |
+
+Регион новой службы Railway **проверять сразу после создания**: служба, созданная через CLI (`railway add`)
+или шаблоном базы, получает регион по умолчанию, и он бывает не Амстердам. Проверка — Settings → Deploy →
+Regions у службы или из CLI в каталоге, привязанном к проекту:
+
+```bash
+railway status --json | python3 -c "import json,sys; [print(e['node']['serviceName'], list(((e['node'].get('latestDeployment') or {}).get('meta') or {}).get('serviceManifest',{}).get('deploy',{}).get('multiRegionConfig') or {})) for e in json.load(sys.stdin)['environments']['edges'][0]['node']['serviceInstances']['edges']]"
+```
+
+У каждой службы должен быть только `europe-west4-…`. Сменить регион — Settings → Deploy → Regions → EU West и
+Deploy; служба с томом (базы) переезжает вместе с данными и на время копирования недоступна (база стенда, 150 МБ, —
+около полутора минут).
+
+Цена ошибки (замерено 15.11.2026): база стенда стояла в Сингапуре, а `api` — в Амстердаме, и каждый запрос к базе
+пересекал полмира: `/healthz` отвечал 325 мс вместо 157. Шлюз к моделям в Сингапуре делал поиск в чате 1,8–2,3 с
+вместо 0,65. Функция Vercel в `iad1` (США) добавляла ~200 мс к каждому вызову API. Вместе — ответ в чате ~6 с
+вместо ~3,5, `/api/health` 589 мс вместо 194.
+
 ### 1. Railway: базы и Redis
 
 - New → Database → **PostgreSQL**. Служба называется `Postgres`, публичного адреса нет.
@@ -64,13 +88,13 @@ config-as-code (`railway.json`) Railway для новых проектов бо�
 | Root Directory | `/llm-gateway` |
 | Dockerfile Path | `Dockerfile` (внутри `/llm-gateway`) |
 | Watch Paths | `/llm-gateway/**` |
-| Healthcheck | `/health/liveliness`, тайм-аут 180 с (миграции базы шлюза на первом старте) |
+| Healthcheck | `/health/liveliness`, тайм-аут 600 с: на пустой базе LiteLLM накатывает 220+ миграций своей схемы, на Railway это минуты. Оборванный тайм-аутом прогон оставляет миграцию в состоянии failed (Prisma P3009), и дальше шлюз не стартует |
 | Restart Policy | On Failure, 5 попыток |
 | Public Networking | **не включать** |
 
 | Переменная | Значение |
 |---|---|
-| `GW_HOST` | `::` — приватная сеть Railway адресует по IPv6 |
+| `GW_HOST` | `0.0.0.0` — **не** `::`: на `::` Uvicorn (asyncio) слушает только IPv6, и healthcheck Railway не проходит. Приватная сеть проекта `energytool` ходит и по IPv4 — Prometheus снимает метрики шлюза по `llm-gateway.railway.internal` |
 | `PORT` | `4000` — обязательно: Railway сам задаёт `PORT=8080` |
 | `LITELLM_MASTER_KEY` | `sk-` + `openssl rand -hex 24` — ключ администратора шлюза |
 | `DATABASE_URL` | `${{llm-db.DATABASE_URL}}` |
@@ -78,7 +102,7 @@ config-as-code (`railway.json`) Railway для новых проектов бо�
 | `GW_BASE_URL`, `GW_API_KEY` | адрес и ключ провайдера модели (раньше это были `LLM_BASE_URL`, `LLM_API_KEY` ядра) |
 | `GW_CHAT_MODEL` | `openai/qwen/qwen3.8-27b` — префикс `openai/` = OpenAI-совместимый сервер |
 | `GW_EMBED_MODEL` | `openai/baai/bge-m3` |
-| `GW_RERANK_MODEL` | `hosted_vllm/qwen/qwen3-reranker-8b` |
+| `GW_RERANK_MODEL` | `hosted_vllm/qwen/qwen3-reranker-8b` — только если реранкер включён у ядра (`EB_USE_RERANKER`); без переменной `energy-rerank` выключен |
 | `GW_FALLBACK_BASE_URL`, `GW_FALLBACK_API_KEY`, `GW_FALLBACK_CHAT_MODEL` | запасной провайдер той же модели; не заданы — запаса нет |
 | `GW_KEY_CORE_RPM`, `GW_KEY_API_RPM`, `…_PARALLEL`, `…_BUDGET` | пределы ключей (по умолчанию 240 и 60 запросов в минуту, 16 и 4 одновременных, бюджета нет) |
 | `GW_CHAT_PRICE_IN`, `GW_CHAT_PRICE_OUT`, `GW_EMBED_PRICE_IN` | цена за миллион токенов, $; без цен расход считается нулевым и бюджеты не срабатывают |
@@ -115,9 +139,13 @@ config-as-code (`railway.json`) Railway для новых проектов бо�
 Ключ провайдера ядру не нужен — его знает только шлюз. Если на старте модель недоступна, ядро отвечает на
 BM25 и само достраивает векторы в фоне раз в `EB_DENSE_RETRY_SEC` (30 с): порядок старта служб не важен.
 
-Ядро в образе работает не от root, а том Railway монтируется владельцем root. Если в журнале ядра «кеш не
-записан: Permission denied» — нужен `RAILWAY_RUN_UID=0` у службы (по документации Railway — запуск от root ради
-прав на том) либо работа без кеша. Без тома кеш живёт до перезапуска контейнера.
+Ядро в образе работает не от root (uid 65532), а новый том Railway монтируется владельцем root — кеш не пишется
+(«кеш не записан: Permission denied»). Права выставляются один раз, владелец на томе сохраняется:
+
+1. У `core` временно: переменная `RAILWAY_RUN_UID=0` и Custom Start Command
+   `sh -c 'chown -R 65532:65532 /data/index && exec python scripts/core_api.py'`; выкатить.
+2. Убрать обе настройки и выкатить снова — ядро опять не от root и пишет кеш (в журнале `saved=true`, на
+   следующем старте `from_cache=true`).
 
 ### 3. Railway: служба `api` (Go)
 
@@ -145,7 +173,7 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `PORT` | `8080` — тот же порт, что у домена |
 | `EB_REDIS_URL` | `${{Redis.REDIS_URL}}` — пределы частоты общие для всех реплик; без него — в памяти, верно для одной реплики |
 | `EB_RETENTION_LEADS_DAYS`, `…_ANSWERS_DAYS`, `…_FEEDBACK_DAYS` | сроки хранения ПДн, по умолчанию 90 / 30 / 90 — утвердить у оператора (`docs/privacy.md`) |
-| `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | `200` — сколько Railway ждёт между SIGTERM и SIGKILL. API ждёт текущие ответы до `EB_CORE_TIMEOUT` + 15 с; меньшее значение обрывает их на середине. Имя переменной сверить в настройках Railway при первой выкладке |
+| Settings → Deploy → Draining Seconds | `200` — настройка службы (`drainingSeconds`), а не переменная: сколько Railway ждёт между SIGTERM и SIGKILL. API ждёт текущие ответы до `EB_CORE_TIMEOUT` + 15 с; меньшее значение обрывает их на середине |
 
 Метрики api — `:9091/metrics`, только из приватной сети; их забирает служба `prometheus`.
 
@@ -162,7 +190,7 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | Root Directory | `/monitoring` |
 | Dockerfile Path | `Dockerfile` (внутри `/monitoring`) |
 | Watch Paths | `/monitoring/**` |
-| Healthcheck | `/-/ready`, тайм-аут 60 с |
+| Healthcheck | `/api/v1/status/buildinfo`, тайм-аут 60 с (путь `/-/ready` Railway не принимает) |
 | Volume | по желанию — в `/prometheus`; без него ряды теряются при выкладке (та же оговорка о правах, что у ядра: образ работает от nobody) |
 | Public Networking | по желанию — интерфейс Prometheus (графики, вкладка Alerts с правилами `monitoring/rules.yml`) |
 
@@ -172,6 +200,7 @@ BM25 и само достраивает векторы в фоне раз в `EB
 | `GATEWAY_TARGET` | `${{llm-gateway.RAILWAY_PRIVATE_DOMAIN}}:4000` |
 | `STAND` | `railway` |
 | `LISTEN` | `[::]:9090` — приватная сеть Railway адресует по IPv6 |
+| `PORT` | `9090` — по нему Railway делает healthcheck; без него — 8080, где Prometheus не слушает |
 
 ### 3b. Railway: служба `grafana` (дашборды)
 

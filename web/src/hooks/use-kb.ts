@@ -12,11 +12,13 @@ export interface KbIndex {
   byFile: Map<string, KbDoc>;
 }
 
-export function useKb() {
+/** enabled=false откладывает загрузку базы (виджет: сначала чат, потом база для сводок и ссылок). */
+export function useKb(enabled = true) {
   const [data, setData] = useState<KbData | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     getKb()
       .then((d) => alive && setData(d))
@@ -24,7 +26,7 @@ export function useKb() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [enabled]);
 
   const index = useMemo<KbIndex | null>(() => {
     if (!data) return null;

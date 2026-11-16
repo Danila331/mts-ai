@@ -8,8 +8,8 @@ const nextConfig: NextConfig = {
   output: "standalone",
   cacheComponents: true,
   partialPrefetching: true,
-  // Значок dev-сервера справа: слева внизу — строка стенда в сайдбаре, он её перекрывал.
-  devIndicators: { position: "bottom-right" },
+  // Значок dev-сервера перекрывал панель отладки и поле ввода на демо.
+  devIndicators: false,
   // Постоянные заголовки безопасности (T35). headers() вычисляется при сборке, поэтому здесь только то, что не
   // зависит от окружения; frame-ancestors по EB_EMBED_ALLOWED_ORIGINS читается при запуске — src/proxy.ts.
   async headers() {

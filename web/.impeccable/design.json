@@ -1,30 +1,82 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-10T20:30:00Z",
+  "generatedAt": "2026-11-15T12:30:00Z",
   "title": "Design System: EnergyTool AI",
   "extensions": {
     "colorMeta": {
-      "brand": { "role": "primary", "displayName": "МТС красный", "canonical": "#ff0032" },
-      "primary": { "role": "primary", "displayName": "Красный для кнопок с текстом", "canonical": "#e0002c" },
-      "foreground": { "role": "neutral", "displayName": "Графит МТС", "canonical": "#1d2023" },
-      "surface": { "role": "neutral", "displayName": "Второй слой", "canonical": "#f7f8fa" }
+      "brand": {
+        "role": "accent",
+        "displayName": "МТС красный — только сигнал",
+        "canonical": "#ff0032"
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "Графит — главное действие",
+        "canonical": "#1b1c1e"
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "Графит текста",
+        "canonical": "#1b1c1e"
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Второй слой",
+        "canonical": "#f8f8f9"
+      }
     },
     "typographyMeta": {
-      "chat-body": { "displayName": "Текст ответа", "purpose": "Ответы бота и тексты базы знаний." },
-      "code": { "displayName": "Моноширинный", "purpose": "Только код, id разделов, промпт, JSON, имя модели." }
+      "chat-body": {
+        "displayName": "Текст ответа",
+        "purpose": "Ответы бота и тексты базы знаний, 15/1,7."
+      },
+      "panel-section": {
+        "displayName": "Заголовок секции разбора",
+        "purpose": "Секции правой панели, как в Claude Code."
+      },
+      "data": {
+        "displayName": "Моноширинные данные",
+        "purpose": "Скоры, тайминги, счётчики, id, промпт, JSON."
+      }
     },
     "shadows": [
-      { "name": "shadow-float", "value": "0 1px 2px rgb(29 32 35 / 0.04), 0 4px 16px rgb(29 32 35 / 0.06)", "purpose": "Поле ввода сообщения." },
-      { "name": "shadow-pop", "value": "0 2px 6px rgb(29 32 35 / 0.06), 0 16px 48px rgb(29 32 35 / 0.14)", "purpose": "Диалоги, листы, меню, превью источника." }
+      {
+        "name": "shadow-float",
+        "value": "0 1px 1px rgb(0 0 0 / 0.03), 0 6px 20px -6px rgb(0 0 0 / 0.08)",
+        "purpose": "Поле ввода сообщения."
+      },
+      {
+        "name": "shadow-pop",
+        "value": "0 0 0 1px rgb(0 0 0 / 0.06), 0 4px 8px -2px rgb(0 0 0 / 0.06), 0 16px 40px -8px rgb(0 0 0 / 0.14)",
+        "purpose": "Меню, диалоги, листы, палитра ⌘K, превью источника."
+      }
     ],
     "motion": [
-      { "name": "ease-out-expo", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Появление сообщений, листов, подсветка раздела базы." },
-      { "name": "msg-in", "value": "320ms", "purpose": "Новое сообщение поднимается на 6px." },
-      { "name": "kb-flash", "value": "2400ms", "purpose": "Раздел базы, открытый по ссылке из ответа." }
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Появление сообщений, листов, подсветка раздела базы."
+      },
+      {
+        "name": "msg-in",
+        "value": "320ms",
+        "purpose": "Новое сообщение поднимается на 6px."
+      },
+      {
+        "name": "kb-flash",
+        "value": "2400ms",
+        "purpose": "Раздел базы, открытый по ссылке из ответа."
+      }
     ],
     "breakpoints": [
-      { "name": "sm", "value": "640px" },
-      { "name": "lg", "value": "1024px" }
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
     ]
   },
   "components": [
@@ -32,49 +84,70 @@
       "name": "Send Button",
       "kind": "button",
       "refersTo": "send-button",
-      "description": "Круглая кнопка отправки: серая, пока поле пустое, красная, когда можно отправить.",
-      "html": "<button class=\"ds-send\" aria-label=\"Отправить\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"m5 12 7-7 7 7\"/><path d=\"M12 19V5\"/></svg></button>",
-      "css": ".ds-send{width:36px;height:36px;border-radius:999px;border:0;background:#ff0032;color:#fff;display:grid;place-items:center;cursor:pointer;transition:background .15s}.ds-send:hover{background:#e0002c}.ds-send:focus-visible{outline:3px solid rgb(255 0 50/.3);outline-offset:2px}"
+      "description": "Круглая кнопка отправки 32px: серая пустая, красная готовая, графитовая «стоп».",
+      "html": "<button class=\"ds-send\" aria-label=\"Отправить\">↑</button>",
+      "css": ".ds-send{width:32px;height:32px;border-radius:999px;border:0;background:#ff0032;color:#fff;display:grid;place-items:center}"
     },
     {
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Главное действие с текстом: «Отправить заявку», «Сайт МТС с виджетом».",
-      "html": "<button class=\"ds-btn-primary\">Отправить заявку</button>",
-      "css": ".ds-btn-primary{height:40px;padding:0 16px;border-radius:10px;border:0;background:#e0002c;color:#fff;font:500 14px Onest,system-ui,sans-serif;cursor:pointer;transition:background .15s}.ds-btn-primary:hover{background:#c60027}.ds-btn-primary:focus-visible{outline:3px solid rgb(154 161 171/.5);outline-offset:2px}"
+      "description": "Главное действие — графит, как у Vercel.",
+      "html": "<button class=\"ds-btn\">Сохранить</button>",
+      "css": ".ds-btn{height:32px;padding:0 12px;border-radius:8px;border:0;background:#1b1c1e;color:#fff;font:500 13px Geist,system-ui,sans-serif}"
     },
     {
-      "name": "Source Chip",
+      "name": "Source Marker",
       "kind": "chip",
-      "refersTo": "source-number",
-      "description": "Источник под ответом: красный номер + раздел базы.",
-      "html": "<button class=\"ds-source\"><span class=\"ds-source-n\">1</span>Солнечные станции</button>",
-      "css": ".ds-source{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 4px;border-radius:999px;border:1px solid #e4e6eb;background:#fff;color:#626c77;font:12.5px Onest,system-ui,sans-serif;cursor:pointer}.ds-source:hover{background:#f2f3f7;color:#1d2023}.ds-source-n{display:inline-grid;place-items:center;min-width:17px;height:17px;border-radius:999px;background:#fff0f2;color:#d9002b;font-size:10.5px;font-weight:600}"
+      "refersTo": "source-marker",
+      "description": "Номер источника после предложения; при наведении — сплошной красный.",
+      "html": "<button class=\"ds-src\">1</button>",
+      "css": ".ds-src{height:16px;min-width:16px;padding:0 3px;border-radius:4px;border:0;background:#fff0f2;color:#d6002a;font:500 10px 'Geist Mono',monospace}.ds-src:hover{background:#ff0032;color:#fff}"
     },
     {
-      "name": "Composer",
-      "kind": "input",
-      "refersTo": "composer",
-      "description": "Поле сообщения: скругление 26px, мягкая тень, кнопка отправки справа внизу.",
-      "html": "<div class=\"ds-composer\"><textarea rows=\"1\" placeholder=\"Опишите задачу: объект, что хотите посчитать или улучшить\"></textarea></div>",
-      "css": ".ds-composer{border:1px solid #d6dae0;border-radius:26px;padding:8px 12px;background:#fff;box-shadow:0 1px 2px rgb(29 32 35/.04),0 4px 16px rgb(29 32 35/.06)}.ds-composer:focus-within{border-color:#9aa1ab}.ds-composer textarea{width:100%;border:0;outline:0;resize:none;font:15px/1.6 Onest,system-ui,sans-serif;background:transparent}"
+      "name": "Panel Row",
+      "kind": "row",
+      "refersTo": "panel-row",
+      "description": "Строка панели разбора: иконка — подпись — значение справа.",
+      "html": "<div class=\"ds-row\"><span>Модель</span><span>qwen3.8-27b</span></div>",
+      "css": ".ds-row{display:flex;justify-content:space-between;min-height:28px;align-items:center;font:13px Geist,system-ui,sans-serif}.ds-row span:last-child{color:#66696f;font:12px 'Geist Mono',monospace}"
     },
     {
       "name": "Sidebar Item",
       "kind": "nav",
       "refersTo": "sidebar-item",
-      "description": "Пункт боковой панели: навигация и история диалогов.",
-      "html": "<a class=\"ds-side-item\" aria-current=\"page\">Чат и отладка</a>",
-      "css": ".ds-side-item{display:flex;align-items:center;height:36px;padding:0 10px;border-radius:10px;color:#1d2023;font:14px Onest,system-ui,sans-serif;text-decoration:none}.ds-side-item:hover,.ds-side-item[aria-current]{background:#eaecf0}.ds-side-item[aria-current]{font-weight:500}"
+      "description": "Пункт сайдбара 32px.",
+      "html": "<a class=\"ds-side\" aria-current=\"page\">Чат и отладка</a>",
+      "css": ".ds-side{display:flex;align-items:center;height:32px;padding:0 8px;border-radius:6px;color:#1b1c1e;font:13px Geist,system-ui,sans-serif}.ds-side[aria-current]{background:#ececee;font-weight:500}"
     }
   ],
   "narrative": {
-    "northStar": "Разговор первым, опора на виду",
-    "overview": "Каркас Claude/ChatGPT в нейтралях МТС; красный только для действия и источников. Каждый ответ ведёт в раздел базы одним кликом.",
-    "keyCharacteristics": ["Одна боковая панель", "Колонка 720px", "Плоские ответы бота", "Красные номера источников", "Светлая и тёмная темы"],
-    "rules": [{ "name": "Красный — только по делу", "body": "Красный означает действие или опору на базу; всё остальное графит и серые.", "section": "colors" }],
-    "dos": ["Собирать экраны из AppShell + PageBar", "Проверять обе темы"],
-    "donts": ["Карточки в карточках", "Кикеры над заголовками", "Сырые цвета Tailwind вместо токенов"]
+    "northStar": "Один инструмент, разбор ответа на виду",
+    "overview": "Каркас Claude Code, точность Linear, графитовые кнопки Vercel; красный МТС только как сигнал. Каждый ответ ведёт в раздел базы одним кликом, разбор читается сверху вниз.",
+    "keyCharacteristics": [
+      "Одна рамка на всех экранах",
+      "Панель разбора секциями",
+      "Графитовые кнопки",
+      "Красный — знак, отправка, источники",
+      "Светлая и тёмная темы",
+      "⌘K"
+    ],
+    "rules": [
+      {
+        "name": "Красный — только сигнал",
+        "body": "Знак, отправка и номера источников; всё остальное графит и серые.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Собирать экраны из AppShell + PageBar",
+      "Шкала 24/18/15/14/13/12/11",
+      "Проверять обе темы"
+    ],
+    "donts": [
+      "Карточки в карточках",
+      "Маркетинговые заголовки в рабочих экранах",
+      "Сырые цвета Tailwind"
+    ]
   }
 }

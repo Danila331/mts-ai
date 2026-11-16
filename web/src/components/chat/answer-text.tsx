@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, ChevronDown } from "lucide-react";
+import { ArrowUpRight, BookOpenText, ChevronRight, FileText } from "lucide-react";
 import { useId, useMemo, useRef, useState } from "react";
 import { createHoverCardHandle, HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { KbIndex } from "@/hooks/use-kb";
@@ -29,12 +29,12 @@ export function citationOrder(answer: AnswerPayload | undefined): string[] {
   return order;
 }
 
-/** Номер источника: красный, как сноска. */
+/** Номер источника — тихая сноска: мягкая красная подложка, при наведении — сплошной красный. */
 export function SourceNumber({ n, className }: { n: number; className?: string }) {
   return (
     <span
       className={cn(
-        "tnum inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-[5px] bg-primary px-[3px] text-[10.5px] leading-none font-semibold text-white",
+        "tnum inline-flex h-4 min-w-4 items-center justify-center rounded-[4px] bg-brand-soft px-[3px] font-mono text-[10px] leading-none font-medium text-brand-text",
         className,
       )}
     >
@@ -74,16 +74,19 @@ function SourcePreview({
   // Если строка нашлась, показываем именно её — то, на что опирается предложение; иначе начало раздела.
   const preview = match ? textLines(entry.chunk.text)[match.line] : entry.chunk.text;
   return (
-    <div className="space-y-2">
-      <div className="text-xs text-muted-foreground">{entry.doc.title}</div>
-      <div className="text-[14px] leading-snug font-medium">{entry.chunk.path.split(" > ").pop()}</div>
-      <p className="line-clamp-5 text-[13px] leading-relaxed text-muted-foreground">{plainPreview(preview)}</p>
+    <div>
+      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+        <FileText className="size-3.5" />
+        <span className="truncate">{entry.doc.title}</span>
+      </div>
+      <div className="mt-1.5 text-[13px] leading-snug font-medium">{entry.chunk.path.split(" > ").pop()}</div>
+      <p className="mt-1 line-clamp-4 text-[12px] leading-relaxed text-muted-foreground">{plainPreview(preview)}</p>
       <button
         type="button"
         onClick={() => onOpen(id, match?.line)}
-        className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-text hover:underline"
+        className="mt-2.5 inline-flex items-center gap-1 text-[12px] font-medium text-foreground underline decoration-border underline-offset-[3px] hover:decoration-foreground"
       >
-        Открыть раздел в базе <ArrowUpRight className="size-3.5" />
+        Открыть раздел <ArrowUpRight className="size-3.5" />
       </button>
     </div>
   );
@@ -130,30 +133,30 @@ export function SourceChip({
             const entry = kb?.byId.get(id);
             onOpen(id, entry ? bestLine(sentence, entry.chunk.text)?.line : undefined);
           }}
-          className="group/chip ml-[3px] inline-flex -translate-y-[1.5px] align-middle outline-none last:mr-0.5"
+          className="group/chip ml-[3px] inline-flex -translate-y-[2px] align-middle outline-none last:mr-0.5"
           aria-label={`Источник ${n}`}
         />
       }
     >
       <SourceNumber
         n={n}
-        className="transition-colors group-hover/chip:bg-brand group-hover/chip:text-white group-focus-visible/chip:bg-brand group-focus-visible/chip:text-white"
+        className="transition-colors group-hover/chip:bg-brand group-hover/chip:text-brand-foreground group-focus-visible/chip:bg-brand group-focus-visible/chip:text-brand-foreground"
       />
     </HoverCardTrigger>
   );
 }
 
-function plural(n: number) {
+const plural = (n: number, one: string, few: string, many: string) => {
   const m10 = n % 10;
   const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return "источник";
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return "источника";
-  return "источников";
-}
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+};
 
 /**
- * Источники под ответом: свёрнуто — стопка номеров и счётчик, развёрнуто — список
- * «раздел / документ», каждый пункт открывает раздел базы, который видела модель.
+ * Источники под ответом — строка, как Sources в агентских чатах: «3 раздела из 1 документа ›».
+ * Развёрнуто — список за тонкой линией, каждая строка открывает раздел базы, который видела модель.
  */
 export function SourcesRow({
   answer,
@@ -170,40 +173,22 @@ export function SourcesRow({
   if (!order.length) return null;
   const docs = new Set(order.map((id) => kb?.byId.get(id)?.doc.doc ?? id)).size;
   return (
-    <div className="mt-3.5">
+    <div className="mt-3">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className={cn(
-          "group/src inline-flex h-8 items-center gap-2 rounded-full border bg-background pr-2.5 pl-1.5 text-[13px] text-muted-foreground transition-colors hover:border-input hover:text-foreground dark:bg-transparent",
-          open && "border-input text-foreground",
-        )}
+        className="group/src -ml-1 inline-flex h-7 items-center gap-1.5 rounded-md px-1 text-[13px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        <span className="flex">
-          {order.slice(0, 4).map((id, i) => (
-            <span
-              key={id}
-              className="tnum -ml-1 flex size-5 items-center justify-center rounded-[6px] bg-primary text-[10.5px] font-semibold text-white ring-2 ring-background first:ml-0"
-            >
-              {i + 1}
-            </span>
-          ))}
-        </span>
+        <BookOpenText className="size-3.5" />
         <span className="tnum">
-          {order.length} {plural(order.length)}
-          <span className="text-muted-foreground">
-            {" "}
-            · {docs} {docs === 1 ? "документ" : docs < 5 ? "документа" : "документов"}
-          </span>
+          {order.length} {plural(order.length, "раздел", "раздела", "разделов")} базы из {docs}{" "}
+          {plural(docs, "документа", "документов", "документов")}
         </span>
-        <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+        <ChevronRight className={cn("size-3.5 transition-transform duration-200", open && "rotate-90")} />
       </button>
       {open && (
-        <ol
-          className="msg-in mt-2 divide-y overflow-hidden rounded-xl border bg-background dark:bg-card"
-          aria-label="Источники ответа"
-        >
+        <ol className="msg-in mt-1 ml-[7px] border-l pl-3" aria-label="Источники ответа">
           {order.map((id, i) => {
             const entry = kb?.byId.get(id);
             const section = entry ? entry.chunk.path.split(" > ").pop() || entry.doc.title : `#${id}`;
@@ -218,14 +203,15 @@ export function SourcesRow({
                       entry && answer ? bestCitationLine(answer.citations, id, entry.chunk.text)?.line : undefined,
                     );
                   }}
-                  className="group/row flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted"
+                  className="group/row flex w-full items-center gap-2.5 rounded-md py-1.5 pr-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 >
-                  <SourceNumber n={i + 1} className="size-5 rounded-[6px]" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13.5px] font-medium">{section}</span>
-                    {entry && <span className="block truncate text-xs text-muted-foreground">{entry.doc.title}</span>}
+                  <SourceNumber n={i + 1} className="group-hover/row:bg-brand group-hover/row:text-brand-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-[13px]">
+                    <span className="text-foreground group-hover/row:underline group-hover/row:decoration-border group-hover/row:underline-offset-[3px]">
+                      {section}
+                    </span>
+                    {entry && <span className="text-muted-foreground"> · {entry.doc.title}</span>}
                   </span>
-                  <ArrowUpRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/row:opacity-100" />
                 </button>
               </li>
             );

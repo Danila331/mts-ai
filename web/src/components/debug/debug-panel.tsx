@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  Braces,
   CheckCircle2,
   ChevronRight,
   CircleHelp,
@@ -9,98 +10,199 @@ import {
   Cpu,
   FileText,
   Gauge,
-  Info,
   Loader2,
-  MessageCircleQuestion,
+  MessageSquareText,
   ScanSearch,
+  SlidersHorizontal,
+  ShieldCheck,
+  SquareTerminal,
   Timer,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { citationOrder, SourceNumber } from "@/components/chat/answer-text";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { KbIndex } from "@/hooks/use-kb";
+import { getSettings } from "@/lib/api";
 import type { AnswerPayload, Citation, Confidence, HonestNo, Hit, Message, Retrieval } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/*
+ * Разбор ответа — как правая панель сессии в Claude Code: одна прокрутка, секции с заголовками,
+ * строки «иконка — подпись — значение справа», сегментная полоса с легендой, сворачиваемые группы со счётчиком.
+ * Цвет — только у категорий данных (документы, этапы) и у проблем; всё остальное — графит и серые.
+ */
+
+const fmt = (n: number) => n.toLocaleString("ru");
+const sec = (ms: number) => `${(ms / 1000).toFixed(1).replace(".", ",")} с`;
+const short = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace(".", ",").replace(",0", "")}k` : String(n));
+
+const SWATCH = ["bg-chart-1", "bg-chart-2", "bg-chart-3", "bg-chart-4", "bg-chart-5", "bg-chart-6"];
 
 const STAGES: Record<string, { label: string; color: string }> = {
   retrieval: { label: "Поиск", color: "bg-chart-1" },
   generation: { label: "Генерация", color: "bg-chart-2" },
-  refine: { label: "Доработка", color: "bg-chart-3" },
-  guard: { label: "Проверка", color: "bg-chart-4" },
+  refine: { label: "Доработка", color: "bg-chart-4" },
+  guard: { label: "Проверка", color: "bg-chart-3" },
 };
 
-const fmt = (n: number) => n.toLocaleString("ru");
-const sec = (ms: number) => `${(ms / 1000).toFixed(1).replace(".", ",")} с`;
+const plural = (n: number, one: string, few: string, many: string) => {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+};
 
-/** Раздел базы: название раздела и документ отдельной строкой; клик открывает раздел. */
-function ChunkRow({
-  id,
-  kb,
-  onOpen,
+// ---------- кирпичи ----------
+
+function Section({
   title,
-  path,
   aside,
-  sub,
-  dim,
+  children,
+  defaultOpen = true,
 }: {
-  id: string;
-  kb: KbIndex | null;
-  onOpen: (id: string) => void;
-  title?: string;
-  path?: string;
+  title: string;
   aside?: React.ReactNode;
-  sub?: React.ReactNode;
-  dim?: boolean;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
-  const e = kb?.byId.get(id);
-  const section = (path ?? e?.chunk.path ?? id).split(" > ").pop();
-  const doc = title ?? e?.doc.title;
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(id)}
-      title={`#${id}`}
-      className={cn(
-        "group/row flex w-full min-w-0 items-start gap-3 text-left transition-opacity",
-        dim && "opacity-55 hover:opacity-100",
-      )}
-    >
-      <span className="min-w-0 flex-1">
-        <span className="block text-[13.5px] leading-snug font-medium decoration-border underline-offset-[3px] group-hover/row:underline">
-          {section}
-        </span>
-        {doc && doc !== section && <span className="mt-0.5 block truncate text-xs text-muted-foreground">{doc}</span>}
-        {sub}
-      </span>
-      {aside}
-    </button>
-  );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="px-6 py-12 text-center text-[14px] text-muted-foreground">{children}</div>;
-}
-
-function Section({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <section className="space-y-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-[13px] font-medium text-muted-foreground">{title}</h3>
-        {aside && <div className="text-xs text-muted-foreground">{aside}</div>}
-      </div>
-      {children}
+    <section className="border-b px-4 py-3.5 last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="group/sec -mx-1 flex h-7 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md px-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <h3 className="text-[15px] font-medium tracking-[-0.01em]">{title}</h3>
+        <ChevronRight
+          className={cn(
+            "size-3.5 text-muted-foreground/60 transition-[transform,color] group-hover/sec:text-foreground",
+            open && "rotate-90",
+          )}
+        />
+        {aside && <span className="tnum ml-auto truncate text-[12px] text-muted-foreground">{aside}</span>}
+      </button>
+      {open && <div className="mt-2">{children}</div>}
     </section>
   );
 }
 
-function Footnote({ children }: { children: React.ReactNode }) {
+/** Строка «иконка — подпись — значение справа». */
+function Row({
+  icon: Icon,
+  label,
+  children,
+  mono,
+}: {
+  icon?: React.ElementType;
+  label: React.ReactNode;
+  children?: React.ReactNode;
+  mono?: boolean;
+}) {
   return (
-    <p className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
-      <Info className="mt-px size-3.5 shrink-0" />
-      <span>{children}</span>
-    </p>
+    <div className="flex min-h-7 items-center gap-2.5 text-[13px]">
+      {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
+      <span className="min-w-0 truncate">{label}</span>
+      {children !== undefined && (
+        <span className={cn("tnum ml-auto shrink-0 text-muted-foreground", mono && "font-mono text-[12px]")}>{children}</span>
+      )}
+    </div>
+  );
+}
+
+/** Сворачиваемая группа: «› Кандидаты   30». */
+function Group({
+  label,
+  count,
+  icon: Icon,
+  defaultOpen,
+  children,
+}: {
+  label: React.ReactNode;
+  count?: React.ReactNode;
+  icon?: React.ElementType;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="-mx-1 flex min-h-7 w-[calc(100%+0.5rem)] items-center gap-2 rounded-md px-1 text-left text-[13px] outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <ChevronRight
+          className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150", open && "rotate-90")}
+        />
+        {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />}
+        <span className="min-w-0 truncate">{label}</span>
+        {count !== undefined && <span className="tnum ml-auto shrink-0 font-mono text-[12px] text-muted-foreground">{count}</span>}
+      </button>
+      {open && <div className="mt-1 mb-2 ml-[7px] border-l pl-3.5">{children}</div>}
+    </div>
+  );
+}
+
+/** Сегментная полоса, как «Context 4% used»: доли по категориям, остаток — дорожка. */
+function SegmentBar({ parts, total }: { parts: { value: number; color: string; label: string }[]; total: number }) {
+  return (
+    <div className="flex h-1.5 gap-px overflow-hidden rounded-full bg-muted" aria-hidden>
+      {parts.map((p, i) => (
+        <span
+          key={i}
+          className={cn("h-full first:rounded-l-full", p.color)}
+          style={{ width: `${Math.max(0.6, (p.value / Math.max(total, 1)) * 100)}%` }}
+          title={p.label}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Строка легенды: цветной квадрат, подпись, значение и доля справа. */
+function Legend({
+  color,
+  label,
+  value,
+  share,
+  onClick,
+  tag,
+}: {
+  color: string;
+  label: React.ReactNode;
+  value: React.ReactNode;
+  share?: string;
+  onClick?: () => void;
+  tag?: React.ReactNode;
+}) {
+  const body = (
+    <>
+      <span className={cn("size-2.5 shrink-0 rounded-[3px]", color)} aria-hidden />
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          onClick && "underline decoration-border decoration-dotted underline-offset-[3px] group-hover/leg:decoration-foreground",
+        )}
+      >
+        {label}
+      </span>
+      {tag}
+      <span className="tnum ml-auto shrink-0 font-mono text-[12px] text-muted-foreground">{value}</span>
+      {share && <span className="tnum w-10 shrink-0 text-right font-mono text-[12px] text-muted-foreground">{share}</span>}
+    </>
+  );
+  const cls = "group/leg flex min-h-7 w-full items-center gap-2.5 text-left text-[13px]";
+  return onClick ? (
+    <button type="button" onClick={onClick} className={cn(cls, "outline-none focus-visible:ring-2 focus-visible:ring-ring/50")}>
+      {body}
+    </button>
+  ) : (
+    <div className={cls}>{body}</div>
   );
 }
 
@@ -108,53 +210,65 @@ function Note({ tone = "warning", children }: { tone?: "warning" | "danger"; chi
   return (
     <div
       className={cn(
-        "flex items-start gap-2 rounded-lg px-3 py-2 text-[13px] leading-snug",
+        "mt-2 flex items-start gap-2 rounded-md px-2.5 py-2 text-[12px] leading-snug",
         tone === "warning" ? "bg-warning-soft text-warning" : "bg-destructive-soft text-destructive",
       )}
     >
-      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <AlertTriangle className="mt-px size-3.5 shrink-0" />
       <div>{children}</div>
     </div>
   );
 }
 
-function Fold({
-  summary,
-  open,
-  children,
+function Hint({ children }: { children: React.ReactNode }) {
+  return <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">{children}</p>;
+}
+
+function Tag({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="shrink-0 rounded-[4px] bg-muted px-1.5 py-px text-[11px] font-medium text-muted-foreground">{children}</span>
+  );
+}
+
+function sectionOf(kb: KbIndex | null, id: string, path?: string) {
+  return (path ?? kb?.byId.get(id)?.chunk.path ?? id).split(" > ").pop() ?? id;
+}
+
+/** Ссылка на раздел базы: название раздела, документ приглушённо; клик открывает раздел. */
+function ChunkLink({
+  id,
+  kb,
+  onOpen,
+  path,
+  title,
   className,
 }: {
-  summary: React.ReactNode;
-  open?: boolean;
-  children: React.ReactNode;
+  id: string;
+  kb: KbIndex | null;
+  onOpen: (id: string) => void;
+  path?: string;
+  title?: string;
   className?: string;
 }) {
+  const section = sectionOf(kb, id, path);
+  const doc = title ?? kb?.byId.get(id)?.doc.title;
   return (
-    <details open={open} className={cn("group/fold rounded-xl border", className)}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[13px] [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/fold:rotate-90" />
-        {summary}
-      </summary>
-      <div className="border-t px-3 py-3">{children}</div>
-    </details>
-  );
-}
-
-/** Сколько слов совпало: тёмная полоса — уверенная опора, светлая — слабая (цвет только у проблем). */
-function Overlap({ value }: { value: number }) {
-  const pct = Math.round(value * 100);
-  const tone = pct >= 50 ? "bg-foreground/70" : pct >= 30 ? "bg-foreground/35" : "bg-dim";
-  return (
-    <span className="flex shrink-0 items-center gap-2 pt-0.5">
-      <span className="h-1.5 w-10 overflow-hidden rounded-full bg-muted">
-        <span className={cn("block h-full rounded-full", tone)} style={{ width: `${Math.max(6, pct)}%` }} />
+    <button
+      type="button"
+      onClick={() => onOpen(id)}
+      title={`#${id}`}
+      className={cn("group/ck min-w-0 truncate text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/50", className)}
+    >
+      <span className="underline decoration-transparent underline-offset-[3px] transition-colors group-hover/ck:decoration-border">
+        {section}
       </span>
-      <span className="tnum w-8 text-right font-mono text-[11.5px] text-muted-foreground">{pct}%</span>
-    </span>
+      {doc && doc !== section && <span className="text-muted-foreground"> · {doc}</span>}
+    </button>
   );
 }
 
-// ---------- Уверенность (T12) ----------
+// ---------- Уверенность (T12) и честные «нет» (T26) ----------
+
 const pct = (v: number) => `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%`;
 const num = (v: number) => v.toFixed(2).replace(".", ",");
 
@@ -177,41 +291,44 @@ function Meter({ value, threshold, low }: { value: number; threshold?: number; l
   );
 }
 
-function ConfidenceBlock({ c }: { c: Confidence }) {
+function ConfidenceSection({ c }: { c: Confidence }) {
   const low = c.retrieval < c.threshold;
   const rows = [
     { key: "retrieval", label: "Поиск", hint: "до ответа", value: c.retrieval, threshold: c.threshold, low },
     ...(c.support === null ? [] : [{ key: "support", label: "Опора", hint: "после ответа", value: c.support }]),
   ];
   return (
-    <section className="space-y-3 rounded-xl bg-surface px-3.5 py-3">
-      <div className="flex items-baseline gap-2">
-        <span className="text-[13px] font-medium text-muted-foreground">Уверенность</span>
-        <span className="tnum text-[18px] leading-none font-semibold tracking-tight">{num(c.score)}</span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {c.gated ? (
-            <span className="text-warning">ниже порога — уточняющий вопрос</span>
-          ) : c.gate ? (
-            "порог включён"
-          ) : (
-            "порог выключен"
-          )}
+    <Section
+      title="Уверенность"
+      aside={
+        <span className="tnum font-mono" title={c.explain}>
+          {num(c.score)}
         </span>
-      </div>
-      <dl className="space-y-2.5">
+      }
+    >
+      <p className="text-[12px] text-muted-foreground">
+        {c.gated ? (
+          <span className="text-warning">ниже порога — уточняющий вопрос</span>
+        ) : c.gate ? (
+          "порог включён"
+        ) : (
+          "порог выключен"
+        )}
+      </p>
+      <dl className="mt-2 space-y-2">
         {rows.map((r) => (
-          <div key={r.key} className="grid grid-cols-[88px_1fr_36px] items-center gap-x-3">
-            <dt className="text-[13px]">
-              {r.label} <span className="text-xs text-muted-foreground">{r.hint}</span>
+          <div key={r.key} className="grid grid-cols-[88px_1fr_36px] items-center gap-x-3 text-[13px]">
+            <dt>
+              {r.label} <span className="text-[12px] text-muted-foreground">{r.hint}</span>
             </dt>
             <dd>
               <Meter value={r.value} threshold={"threshold" in r ? r.threshold : undefined} low={"low" in r && r.low} />
             </dd>
-            <dd className="tnum text-right font-mono text-[11.5px] text-muted-foreground">{num(r.value)}</dd>
+            <dd className="tnum text-right font-mono text-[11px] text-muted-foreground">{num(r.value)}</dd>
           </div>
         ))}
       </dl>
-      <ul className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+      <ul className="mt-3 space-y-1 text-[12px] leading-relaxed text-muted-foreground">
         {c.parts.map((p) => (
           <li key={p.key}>
             <span className="text-foreground/80">{p.label}</span> <span className="tnum font-mono">{num(p.value)}</span>
@@ -223,35 +340,113 @@ function ConfidenceBlock({ c }: { c: Confidence }) {
           порог {num(c.threshold)} — по поиску, до генерации; только чат при EB_CONFIDENCE_GATE=1
         </li>
       </ul>
-    </section>
+    </Section>
   );
 }
 
 /** «Честные нет» (T26): какие правила сработали, по какому фрагменту реплики клиента и на какой раздел базы. */
-function HonestNoBlock({ items, kb, onOpen }: { items: HonestNo[]; kb: KbIndex | null; onOpen: (id: string) => void }) {
+function HonestNoSection({ items, kb, onOpen }: { items: HonestNo[]; kb: KbIndex | null; onOpen: (id: string) => void }) {
   return (
-    <section className="space-y-2.5 rounded-xl bg-surface px-3.5 py-3">
-      <div className="flex items-baseline gap-2">
-        <span className="text-[13px] font-medium text-muted-foreground">Честные нет</span>
-        <span className="tnum text-[18px] leading-none font-semibold tracking-tight">{items.length}</span>
-        <span className="ml-auto text-xs text-muted-foreground">правила базы, только чат</span>
-      </div>
+    <Section title="Честные нет" aside={`${items.length} · правила базы, только чат`}>
       <ul className="space-y-2.5">
         {items.map((h) => (
-          <li key={h.rule} className="space-y-1">
-            <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-              <span className="font-mono text-[11.5px] text-foreground/80">{h.rule}</span>
+          <li key={h.rule} className="space-y-0.5">
+            <div className="flex flex-wrap items-baseline gap-x-2 text-[12px] text-muted-foreground">
+              <span className="font-mono text-[11px] text-foreground/80">{h.rule}</span>
               {h.fact && <span>по фразе «{h.fact}»</span>}
             </div>
-            {h.section && <ChunkRow id={h.section.chunk_id} kb={kb} onOpen={onOpen} title={h.section.title} path={h.section.path} />}
+            {h.section && <ChunkLink id={h.section.chunk_id} kb={kb} onOpen={onOpen} title={h.section.title} path={h.section.path} />}
           </li>
         ))}
       </ul>
-    </section>
+    </Section>
+  );
+}
+
+// ---------- Ответ ----------
+
+function AnswerSection({ a, question, message }: { a?: AnswerPayload; question?: string; message: Message }) {
+  const r = a?.retrieval ?? message.retrieval;
+  const total = a ? a.timings.total || a.timings.server_total || 1 : 0;
+  const stages = a ? ["retrieval", "generation", "refine", "guard"].filter((k) => a.timings[k] !== undefined) : [];
+  const g = a?.guard;
+  const fired = !!g && !!(g.unknown_numbers?.length || g.too_long || g.stripped || g.dropped);
+  return (
+    <Section title="Ответ" aside={a ? sec(a.timings.server_total) : undefined}>
+      {question && <p className="mb-2 line-clamp-3 text-[13px] leading-relaxed text-pretty">{question}</p>}
+      {a ? (
+        <>
+          <Row icon={Cpu} label="Модель" mono>
+            {a.model ? a.model.split("/").pop() : "без модели"}
+          </Row>
+          <Row icon={MessageSquareText} label="Режим">
+            {a.mode === "eval" ? "как на проверке" : a.mode === "copilot" ? "копилот" : "чат"}
+          </Row>
+          {a.overrides && Object.keys(a.overrides).length > 0 && (
+            <Row icon={SlidersHorizontal} label="Настройки">
+              <span
+                className="inline-flex h-5 items-center rounded-md bg-brand-soft px-1.5 text-[11px] font-medium whitespace-nowrap text-brand-text"
+                title={Object.entries(a.overrides)
+                  .map(([k, v]) => `${k}: ${String(v)}`)
+                  .join("\n")}
+              >
+                ответ с вашими настройками
+              </span>
+            </Row>
+          )}
+          {a.route === "clarify" && (
+            <Row icon={CircleHelp} label="Маршрут">
+              <span className="inline-flex h-5 items-center rounded-md bg-warning-soft px-1.5 text-[11px] font-medium text-warning">
+                уточнение ниже порога
+              </span>
+            </Row>
+          )}
+          {a.confidence && (
+            <Row icon={Gauge} label="Уверенность">
+              <span className="tnum font-mono text-[12px]" title={a.confidence.explain}>
+                {num(a.confidence.score)} · порог {num(a.confidence.threshold)}
+              </span>
+            </Row>
+          )}
+          <Row icon={ShieldCheck} label="Проверка">
+            <span className={cn("inline-flex items-center gap-1.5", (fired || a.fallback) && "text-destructive")}>
+              <span className={cn("size-1.5 rounded-full", fired || a.fallback ? "bg-destructive" : "bg-success")} />
+              {a.fallback ? "запасной ответ" : fired ? "сработала" : "пройдена"}
+            </span>
+          </Row>
+          <div className="mt-3 space-y-0.5">
+            <Row icon={Timer} label="Время по этапам" mono>
+              {sec(total)}
+            </Row>
+            <div className="py-1.5">
+              <SegmentBar
+                total={total}
+                parts={stages.map((k) => ({ value: a.timings[k], color: STAGES[k].color, label: STAGES[k].label }))}
+              />
+            </div>
+            {stages.map((k) => (
+              <Legend
+                key={k}
+                color={STAGES[k].color}
+                label={STAGES[k].label}
+                value={`${fmt(a.timings[k])} мс`}
+                share={`${Math.round((a.timings[k] / total) * 100)}%`}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="flex min-h-7 items-center gap-2.5 text-[13px] text-muted-foreground">
+          <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+          {r ? "Поиск готов, модель пишет ответ" : "Идёт поиск по базе знаний"}
+        </div>
+      )}
+    </Section>
   );
 }
 
 // ---------- Опора ----------
+
 type Verdict = "strong" | "weak" | "none" | "numbers" | "question";
 
 function verdict(c: Citation): Verdict {
@@ -262,436 +457,299 @@ function verdict(c: Citation): Verdict {
 }
 
 const VERDICT: Record<Verdict, { label: string; bar: string; icon: React.ReactNode }> = {
-  strong: { label: "опора найдена", bar: "bg-foreground/70", icon: <CheckCircle2 className="size-4 text-muted-foreground" /> },
-  weak: { label: "слабая опора", bar: "bg-foreground/30", icon: <CheckCircle2 className="size-4 text-dim" /> },
+  strong: { label: "опора найдена", bar: "bg-foreground/75", icon: <CheckCircle2 className="size-4 text-foreground/70" /> },
+  weak: { label: "слабая опора", bar: "bg-foreground/30", icon: <CheckCircle2 className="size-4 text-muted-foreground/60" /> },
   none: { label: "без опоры", bar: "bg-warning", icon: <AlertTriangle className="size-4 text-warning" /> },
   numbers: { label: "числа без опоры", bar: "bg-destructive", icon: <AlertTriangle className="size-4 text-destructive" /> },
-  question: {
-    label: "вопрос клиенту",
-    bar: "bg-dim",
-    icon: <CircleHelp className="size-4 text-muted-foreground" />,
-  },
+  question: { label: "вопрос клиенту", bar: "bg-dim", icon: <CircleHelp className="size-4 text-muted-foreground" /> },
 };
 
-function SupportTab({ a, kb, onOpen }: { a: AnswerPayload; kb: KbIndex | null; onOpen: (id: string) => void }) {
+function SupportSection({ a, kb, onOpen }: { a: AnswerPayload; kb: KbIndex | null; onOpen: (id: string) => void }) {
   const order = citationOrder(a);
   const verdicts = a.citations.map(verdict);
   const claims = verdicts.filter((v) => v !== "question").length;
   const grounded = verdicts.filter((v) => v === "strong" || v === "weak").length;
-  const questions = verdicts.length - claims;
   const loose = a.citations.reduce((n, c) => n + c.unsupported_numbers.length, 0);
 
   return (
-    <div className="space-y-5 p-5">
-      {a.confidence && <ConfidenceBlock c={a.confidence} />}
-      {a.honest_no && a.honest_no.length > 0 && <HonestNoBlock items={a.honest_no} kb={kb} onOpen={onOpen} />}
-      <div className="space-y-2.5">
-        <div className="flex items-baseline gap-2">
-          <span className="tnum text-[22px] leading-none font-semibold tracking-tight">
-            {grounded}
-            <span className="text-muted-foreground">/{claims}</span>
-          </span>
-          <span className="text-[13px] text-muted-foreground">утверждений опираются на разделы базы</span>
-        </div>
-        <div className="flex h-1 gap-1" aria-hidden>
-          {verdicts.map((v, i) => (
-            <span key={i} className={cn("flex-1 rounded-full", VERDICT[v].bar)} />
-          ))}
-        </div>
-        <div className="tnum flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          {questions > 0 && <span>вопросов клиенту: {questions}</span>}
-          <span className={cn(loose > 0 && "text-destructive")}>чисел без опоры: {loose}</span>
-          <span>источников: {order.length}</span>
-        </div>
+    <Section title="Опора на базу" aside={`${grounded} из ${claims} ${plural(claims, "утверждения", "утверждений", "утверждений")}`}>
+      <div className="flex h-1.5 gap-[3px]" aria-hidden>
+        {verdicts.map((v, i) => (
+          <span key={i} className={cn("flex-1 rounded-full", VERDICT[v].bar)} title={VERDICT[v].label} />
+        ))}
+      </div>
+      <div className="tnum mt-2 flex flex-wrap gap-x-3 text-[12px] text-muted-foreground">
+        <span>источников {order.length}</span>
+        <span className={cn(loose > 0 && "text-destructive")}>чисел без опоры {loose}</span>
       </div>
 
-      <ol className="-mx-5 divide-y border-y">
+      <ol className="mt-3 space-y-3">
         {a.citations.map((c, i) => {
           const v = verdicts[i];
           return (
-            <li key={i} className="grid grid-cols-[20px_1fr] gap-x-3 px-5 py-4">
-              <span className="pt-[3px]" title={VERDICT[v].label}>
+            <li key={i} className="grid grid-cols-[16px_1fr] gap-x-2.5">
+              <span className="pt-0.5" title={VERDICT[v].label}>
                 {VERDICT[v].icon}
               </span>
-              <div className="min-w-0 space-y-3">
-                <p className="text-[14px] leading-relaxed">{c.sentence}</p>
+              <div className="min-w-0">
+                <p className="text-[13px] leading-relaxed text-pretty">{c.sentence}</p>
                 {c.question ? (
-                  <p className="text-xs text-muted-foreground">Уточняющий вопрос — опора не нужна</p>
+                  <p className="mt-0.5 text-[12px] text-muted-foreground">Уточняющий вопрос — опора не нужна</p>
                 ) : c.support.length ? (
-                  <ul className="space-y-2.5">
-                    {c.support.map((s) => (
-                      <li key={s.id} className="flex items-start gap-2.5">
-                        <SourceNumber n={order.indexOf(s.id) + 1} className="mt-px size-[18px]" />
-                        <ChunkRow
-                          id={s.id}
-                          kb={kb}
-                          onOpen={onOpen}
-                          path={s.path}
-                          title={s.title}
-                          aside={<Overlap value={s.overlap} />}
-                          sub={
-                            s.numbers.length > 0 && (
-                              <span className="mt-1.5 flex flex-wrap gap-1">
-                                {s.numbers.map((n) => (
-                                  <span
-                                    key={n}
-                                    className="tnum rounded-md bg-muted px-1.5 py-px font-mono text-[11px] text-foreground/80"
-                                  >
-                                    {n}
-                                  </span>
-                                ))}
-                              </span>
-                            )
-                          }
-                        />
-                      </li>
-                    ))}
+                  <ul className="mt-1">
+                    {c.support.map((s) => {
+                      const pct = Math.round(s.overlap * 100);
+                      return (
+                        <li key={s.id} className="flex min-h-6 items-center gap-2">
+                          <SourceNumber n={order.indexOf(s.id) + 1} />
+                          <ChunkLink id={s.id} kb={kb} onOpen={onOpen} path={s.path} title={s.title} className="flex-1 text-[12px]" />
+                          <span
+                            className={cn(
+                              "tnum shrink-0 font-mono text-[11px]",
+                              pct >= 50 ? "text-foreground/80" : "text-muted-foreground",
+                            )}
+                            title="совпадение слов и чисел"
+                          >
+                            {pct}%
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
-                  <p className="text-[13px] text-warning">Не нашлось раздела с похожей формулировкой</p>
+                  <p className="mt-0.5 text-[12px] text-warning">Не нашлось раздела с похожей формулировкой</p>
                 )}
                 {c.unsupported_numbers.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 text-[13px] text-destructive">
+                  <p className="mt-1 flex flex-wrap items-center gap-1 text-[12px] text-destructive">
                     Числа без опоры:
                     {c.unsupported_numbers.map((n) => (
-                      <span key={n} className="tnum rounded-md bg-destructive-soft px-1.5 py-px font-mono text-[11px] text-destructive">
+                      <span key={n} className="tnum rounded-[4px] bg-destructive-soft px-1 font-mono text-[11px]">
                         {n}
                       </span>
                     ))}
-                  </div>
+                  </p>
                 )}
               </div>
             </li>
           );
         })}
       </ol>
+      <Hint>
+        Эвристика стенда: предложение сопоставлено с разделами контекста по совпадению основ слов и чисел. Модель
+        источники не размечает — по регламенту ответ идёт одной строкой.
+      </Hint>
+    </Section>
+  );
+}
 
-      <Footnote>
-        Эвристика стенда: предложения сопоставлены с разделами контекста по совпадению основ слов и чисел. Модель
-        не размечает источники сама — по регламенту ответ одна строка без разметки.
-      </Footnote>
-    </div>
+// ---------- Контекст ----------
+
+function ContextSection({
+  a,
+  r,
+  kb,
+  onOpen,
+  budget,
+}: {
+  a?: AnswerPayload;
+  r: Retrieval;
+  kb: KbIndex | null;
+  onOpen: (id: string) => void;
+  budget?: number;
+}) {
+  const ids = r.context.chunk_ids;
+  const full = useMemo(() => new Set(r.context.full_docs), [r]);
+  // Символы по документам — по текстам разделов из базы: доли совпадают с тем, что ушло модели.
+  const docs = useMemo(() => {
+    const map = new Map<string, { doc: string; title: string; ids: string[]; chars: number }>();
+    for (const id of ids) {
+      const e = kb?.byId.get(id);
+      const key = e?.doc.doc ?? "?";
+      const row = map.get(key) ?? { doc: key, title: e?.doc.title ?? key, ids: [], chars: 0 };
+      row.ids.push(id);
+      row.chars += e?.chunk.text.length ?? 0;
+      map.set(key, row);
+    }
+    return [...map.values()].sort((x, y) => y.chars - x.chars);
+  }, [ids, kb]);
+  const measured = docs.reduce((n, d) => n + d.chars, 0) || 1;
+  const chars = r.context.chars;
+  // Полные документы могут выйти за бюджет — тогда полоса заполнена, а процент честно больше 100.
+  const cap = Math.max(budget ?? 0, chars);
+  const top = docs.slice(0, 5);
+  const rest = docs.slice(5);
+  const restChars = rest.reduce((n, d) => n + d.chars, 0);
+  // Доля каждого документа — от фактического размера контекста, остаток до бюджета — дорожка.
+  const scale = chars / measured;
+  const parts = [
+    ...top.map((d, i) => ({ value: d.chars * scale, color: SWATCH[i], label: d.title })),
+    ...(rest.length ? [{ value: restChars * scale, color: "bg-dim", label: "остальные" }] : []),
+  ];
+  const docSources = a?.sources.filter((s) => s.kind === "doc") ?? [];
+  const chunkSources = a?.sources.filter((s) => s.kind !== "doc") ?? [];
+
+  return (
+    <Section title="Контекст модели" aside={`${ids.length} ${plural(ids.length, "раздел", "раздела", "разделов")}`}>
+      <div className="flex items-baseline justify-between text-[13px]">
+        <span className={cn(budget && chars > budget && "text-warning")}>
+          {budget ? `${Math.round((chars / budget) * 100)}% бюджета` : "Ушло модели"}
+        </span>
+        <span className="tnum font-mono text-[12px] text-muted-foreground">
+          {short(chars)}
+          {budget ? ` / ${short(budget)}` : ""} симв.
+        </span>
+      </div>
+      <div className="py-2">
+        <SegmentBar total={cap} parts={parts} />
+      </div>
+      {top.map((d, i) => (
+        <Legend
+          key={d.doc}
+          color={SWATCH[i]}
+          label={d.title}
+          tag={full.has(d.doc) ? <Tag>целиком</Tag> : undefined}
+          value={`${d.ids.length} разд.`}
+          share={`${Math.round((d.chars / measured) * 100)}%`}
+          onClick={() => onOpen(d.ids[0])}
+        />
+      ))}
+      {rest.length > 0 && (
+        <Legend
+          color="bg-dim"
+          label={`Ещё ${rest.length} ${plural(rest.length, "документ", "документа", "документов")}`}
+          value={`${rest.reduce((n, d) => n + d.ids.length, 0)} разд.`}
+          share={`${Math.round((restChars / measured) * 100)}%`}
+        />
+      )}
+
+      <div className="mt-2">
+        {docSources.length > 0 && (
+          <Group label="Документы целиком" count={docSources.length} icon={FileText}>
+            {docSources.map((s, i) => (
+              <div key={i} className="flex min-h-7 items-center">
+                {s.chunk_id ? (
+                  <ChunkLink id={s.chunk_id} kb={kb} onOpen={onOpen} path={s.title} />
+                ) : (
+                  <span className="text-[13px]">{s.title}</span>
+                )}
+              </div>
+            ))}
+          </Group>
+        )}
+        {chunkSources.length > 0 && (
+          <Group label="Отдельные фрагменты" count={chunkSources.length} icon={FileText}>
+            {chunkSources.map((s, i) => (
+              <div key={i} className="flex min-h-7 items-center">
+                {s.chunk_id ? (
+                  <ChunkLink id={s.chunk_id} kb={kb} onOpen={onOpen} title={s.title} path={s.path} />
+                ) : (
+                  <span className="text-[13px]">{s.title}</span>
+                )}
+              </div>
+            ))}
+          </Group>
+        )}
+        <Group label="Все разделы по документам" count={docs.length}>
+          {docs.map((d) => (
+            <Group key={d.doc} label={d.title} count={d.ids.length}>
+              {d.ids.map((id) => (
+                <div key={id} className="flex min-h-6 items-center">
+                  <ChunkLink id={id} kb={kb} onOpen={onOpen} title="" className="text-[12px]" />
+                </div>
+              ))}
+            </Group>
+          ))}
+        </Group>
+      </div>
+      <Hint>
+        {full.size
+          ? "Самые релевантные документы уходят целиком, остальные — лучшими фрагментами, плюс справочник: карта продуктов, числа, границы консультации."
+          : "Лучшие фрагменты поиска, соседние разделы главного документа и ограничения по найденным продуктам."}
+      </Hint>
+    </Section>
   );
 }
 
 // ---------- Поиск ----------
-function Score({ hit, max }: { hit: Hit; max: number }) {
-  const v = hit.score ?? 0;
-  const pct = max > 0 ? Math.max(6, (v / max) * 100) : 0;
-  return (
-    <span className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
-      <span className="tnum font-mono text-[11.5px] text-muted-foreground">
-        {hit.score === null ? "—" : v < 0.1 ? v.toFixed(4) : v.toFixed(3)}
-      </span>
-      <span className="h-1 w-12 overflow-hidden rounded-full bg-muted">
-        <span
-          className={cn("block h-full rounded-full", hit.in_context ? "bg-info" : "bg-dim")}
-          style={{ width: `${pct}%` }}
-        />
-      </span>
-    </span>
-  );
-}
 
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (v: T) => void;
-  options: { value: T; label: string; count: number }[];
-}) {
-  return (
-    <div className="inline-flex rounded-lg bg-muted p-0.5" role="radiogroup">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={value === o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
-            value === o.value && "bg-background text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.08)] dark:bg-accent",
-          )}
-        >
-          {o.label}
-          <span className="tnum font-mono text-[11px] text-muted-foreground">{o.count}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function SearchTab({ r, kb, onOpen }: { r: Retrieval; kb: KbIndex | null; onOpen: (id: string) => void }) {
+function SearchSection({ r, kb, onOpen }: { r: Retrieval; kb: KbIndex | null; onOpen: (id: string) => void }) {
   const [filter, setFilter] = useState<"all" | "in" | "out">("all");
   const inContext = r.hits.filter((h) => h.in_context).length;
   const hits = r.hits.filter((h) => (filter === "all" ? true : filter === "in" ? h.in_context : !h.in_context));
   const max = Math.max(...r.hits.map((h) => h.score ?? 0));
   const stage = r.hits[0]?.stage;
   return (
-    <div className="space-y-5 p-5">
-      <Section title="Запрос к базе" aside={<span className="font-mono">{[r.tier ? undefined : stage, r.tier ?? (r.dense ? "bm25 + эмбеддинги" : "bm25"), `схема ${r.arch}`].filter(Boolean).join(" · ")}</span>}>
-        <div className="rounded-xl bg-surface px-3.5 py-3">
-          {!!r.skipped?.length && (
-            <p className="mb-2 text-xs text-tone-warning">
-              Простая ступень, недоступно: {r.skipped.map((k) => (k === "reranker" ? "реранкер" : "эмбеддинги")).join(", ")}
-            </p>
-          )}
-          <div className="mb-1 text-xs font-medium text-muted-foreground">Смысловой{stage === "rerank" ? " · реранкер" : ""}</div>
-          <p className="text-[13.5px] leading-relaxed">{r.queries.semantic || "—"}</p>
-          {r.queries.lexical && (
-            <details className="group/lex mt-3 border-t pt-2.5">
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-                <ChevronRight className="size-3 transition-transform group-open/lex:rotate-90" />
-                Лексический (BM25)
-              </summary>
-              <p className="mt-1.5 font-mono text-[12px] leading-relaxed text-muted-foreground">{r.queries.lexical}</p>
-            </details>
-          )}
-        </div>
-      </Section>
-
-      <Section title="Кандидаты">
-        <Segmented
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: "all", label: "Все", count: r.hits.length },
-            { value: "in", label: "В контексте", count: inContext },
-            { value: "out", label: "Отброшены", count: r.hits.length - inContext },
-          ]}
-        />
-        {hits.length ? (
-          <ol className="-mx-5 divide-y border-y">
-            {hits.map((h) => (
-              <li key={h.id} className="grid grid-cols-[28px_1fr] gap-x-2 px-5 py-3">
-                <span className="flex flex-col items-start gap-1.5 pt-px">
-                  <span className="tnum font-mono text-[11.5px] text-muted-foreground">{String(h.rank).padStart(2, "0")}</span>
-                  <span
-                    className={cn("size-1.5 rounded-full", h.in_context ? "bg-info" : "bg-dim")}
-                    title={h.in_context ? "в контексте" : "отброшен"}
-                  />
-                </span>
-                <ChunkRow
-                  id={h.id}
-                  kb={kb}
-                  onOpen={onOpen}
-                  title={h.title}
-                  path={h.path}
-                  dim={!h.in_context}
-                  aside={<Score hit={h} max={max} />}
-                  sub={<span className="mt-1 line-clamp-1 text-xs text-muted-foreground">{h.preview}</span>}
-                />
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="text-[13px] text-muted-foreground">Пусто.</p>
+    <Section title="Поиск по базе" aside={<span className="font-mono text-[12px]">{[r.tier ? undefined : stage, r.tier ?? (r.dense ? "bm25 + эмбеддинги" : "bm25"), `схема ${r.arch}`].filter(Boolean).join(" · ")}</span>}>
+      {!!r.skipped?.length && (
+        <Note>Простая ступень, недоступно: {r.skipped.map((k) => (k === "reranker" ? "реранкер" : "эмбеддинги")).join(", ")}</Note>
+      )}
+      <p className="text-[13px] leading-relaxed text-pretty">{r.queries.semantic || "—"}</p>
+      <div className="mt-2">
+        {r.queries.lexical && (
+          <Group label="Лексический запрос (BM25)" icon={ScanSearch}>
+            <p className="py-1 font-mono text-[11px] leading-relaxed text-muted-foreground">{r.queries.lexical}</p>
+          </Group>
         )}
-        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-info" /> ушёл модели
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-dim" /> отброшен
-          </span>
-        </div>
-      </Section>
-    </div>
-  );
-}
-
-// ---------- Контекст ----------
-function ContextTab({
-  a,
-  r,
-  kb,
-  onOpen,
-}: {
-  a: AnswerPayload;
-  r: Retrieval | null;
-  kb: KbIndex | null;
-  onOpen: (id: string) => void;
-}) {
-  const ids = useMemo(() => r?.context.chunk_ids ?? [], [r]);
-  const groups = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const id of ids) {
-      const doc = kb?.byId.get(id)?.doc.doc ?? "?";
-      map.set(doc, [...(map.get(doc) ?? []), id]);
-    }
-    return [...map.entries()].sort((x, y) => y[1].length - x[1].length);
-  }, [ids, kb]);
-  const full = new Set(r?.context.full_docs ?? []);
-  const docSources = a.sources.filter((s) => s.kind === "doc");
-  const chunkSources = a.sources.filter((s) => s.kind !== "doc");
-
-  const stats = [
-    { value: fmt(ids.length), label: "разделов" },
-    { value: fmt(full.size), label: "документов целиком" },
-    { value: fmt(r?.context.chars ?? 0), label: "символов" },
-  ];
-
-  return (
-    <div className="space-y-6 p-5">
-      <div className="space-y-3">
-        <dl className="grid grid-cols-3 divide-x overflow-hidden rounded-xl bg-surface">
-          {stats.map((s) => (
-            <div key={s.label} className="px-3.5 py-3">
-              <dd className="tnum text-[18px] leading-none font-semibold tracking-tight">{s.value}</dd>
-              <dt className="mt-1.5 text-xs text-muted-foreground">{s.label}</dt>
-            </div>
-          ))}
-        </dl>
-        <Footnote>
-          {full.size
-            ? "Самые релевантные документы уходят целиком (эталон часто опирается на соседние разделы), остальные — лучшими фрагментами, плюс справочник: карта продуктов, числа, границы консультации."
-            : "Лучшие фрагменты поиска, соседние разделы главного документа и ограничения («можно / нельзя утверждать») по найденным продуктам."}
-        </Footnote>
-      </div>
-
-      {docSources.length > 0 && (
-        <Section title="Документы целиком" aside={<span className="tnum">{docSources.length}</span>}>
-          <ul className="-mx-5 divide-y border-y">
-            {docSources.map((s, i) => (
-              <li key={i} className="flex items-center gap-3 px-5 py-2.5">
-                <FileText className="size-4 shrink-0 text-muted-foreground" />
-                {s.chunk_id ? (
-                  <ChunkRow id={s.chunk_id} kb={kb} onOpen={onOpen} path={s.title} />
-                ) : (
-                  <span className="text-[13.5px] font-medium">{s.title}</span>
-                )}
-                <span className="tnum shrink-0 font-mono text-[11.5px] text-muted-foreground">
-                  {kb?.byDoc.get(s.doc)?.chunks.length ?? ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {chunkSources.length > 0 && (
-        <Section title="Отдельные фрагменты" aside={<span className="tnum">{chunkSources.length}</span>}>
-          <ul className="-mx-5 divide-y border-y">
-            {chunkSources.map((s, i) => (
-              <li key={i} className="px-5 py-2.5">
-                {s.chunk_id ? (
-                  <ChunkRow id={s.chunk_id} kb={kb} onOpen={onOpen} title={s.title} path={s.path} />
-                ) : (
-                  <span className="text-[13.5px]">{s.title}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      <Section title="Все разделы в промпте" aside={<span className="tnum">{groups.length} док.</span>}>
-        <div className="space-y-2">
-          {groups.map(([doc, list]) => (
-            <Fold
-              key={doc}
-              summary={
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="truncate font-medium">{kb?.byDoc.get(doc)?.title ?? doc}</span>
-                  {full.has(doc) && (
-                    <span className="shrink-0 rounded-md bg-muted px-1.5 py-px text-[11px] font-medium text-muted-foreground">
-                      целиком
-                    </span>
-                  )}
-                  <span className="tnum ml-auto shrink-0 font-mono text-[11.5px] text-muted-foreground">{list.length}</span>
-                </span>
-              }
-            >
-              <ol className="space-y-1.5">
-                {list.map((id) => (
-                  <li key={id}>
-                    <button
-                      type="button"
-                      onClick={() => onOpen(id)}
-                      className="text-left text-[13px] leading-snug text-foreground/85 decoration-border underline-offset-[3px] hover:text-foreground hover:underline"
-                    >
-                      {kb?.byId.get(id)?.chunk.path.split(" > ").pop() ?? id}
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            </Fold>
-          ))}
-        </div>
-      </Section>
-    </div>
-  );
-}
-
-// ---------- Промпт ----------
-function PromptTab({ a }: { a: AnswerPayload }) {
-  const [q, setQ] = useState("");
-  if (!a.prompt.length) return <Empty>Модель не вызывалась — ответ собран без неё (запасной режим).</Empty>;
-  return (
-    <div className="space-y-3 p-5">
-      <label className="flex h-9 items-center gap-2 rounded-lg border bg-background px-3 text-muted-foreground focus-within:border-ring">
-        <ScanSearch className="size-4 shrink-0" />
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Найти в промпте"
-          aria-label="Найти в промпте"
-          className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
-        />
-      </label>
-      {a.prompt.map((m, i) => {
-        const count = q.length > 1 ? m.content.toLowerCase().split(q.toLowerCase()).length - 1 : 0;
-        return (
-          <details key={i} className="group/fold overflow-hidden rounded-xl border" open={i === a.prompt.length - 1}>
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[13px] [&::-webkit-details-marker]:hidden">
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/fold:rotate-90" />
-              <span className="font-mono text-xs font-medium">{m.role}</span>
-              <span className="tnum text-muted-foreground">{fmt(m.content.length)} симв.</span>
-              {count > 0 && <span className="text-brand-text">· найдено {count}</span>}
+        <Group label="Кандидаты" count={`${inContext} / ${r.hits.length}`} defaultOpen>
+          <div className="mb-1.5 flex gap-1 pt-1" role="radiogroup" aria-label="Какие кандидаты показать">
+            {(
+              [
+                ["all", "Все", r.hits.length],
+                ["in", "В контексте", inContext],
+                ["out", "Отброшены", r.hits.length - inContext],
+              ] as const
+            ).map(([value, label, count]) => (
               <button
+                key={value}
                 type="button"
-                className="ml-auto flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-label="Скопировать"
-                onClick={(e) => {
-                  e.preventDefault();
-                  void navigator.clipboard.writeText(m.content);
-                  toast.success("Скопировано");
-                }}
+                role="radio"
+                aria-checked={filter === value}
+                onClick={() => setFilter(value)}
+                className={cn(
+                  "flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
+                  filter === value && "bg-muted text-foreground",
+                )}
               >
-                <Copy className="size-3.5" />
+                {label}
+                <span className="tnum font-mono text-[11px] text-muted-foreground">{count}</span>
               </button>
-            </summary>
-            <pre className="max-h-[55vh] overflow-auto border-t bg-surface px-3 py-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">
-              {q.length > 1 ? highlight(m.content, q) : m.content}
-            </pre>
-          </details>
-        );
-      })}
-    </div>
-  );
-}
-
-function highlight(text: string, q: string) {
-  const parts = text.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"));
-  return parts.map((p, i) =>
-    i % 2 ? (
-      <mark key={i} className="rounded-sm bg-mark text-foreground">
-        {p}
-      </mark>
-    ) : (
-      p
-    ),
+            ))}
+          </div>
+          <ol>
+            {hits.map((h: Hit) => {
+              const pct = max > 0 && h.score !== null ? Math.max(4, (h.score / max) * 100) : 0;
+              return (
+                <li key={h.id} className={cn("flex min-h-7 items-center gap-2.5", !h.in_context && "opacity-60 hover:opacity-100")}>
+                  <span className="tnum w-5 shrink-0 font-mono text-[11px] text-muted-foreground">{String(h.rank).padStart(2, "0")}</span>
+                  <span
+                    className={cn("size-1.5 shrink-0 rounded-full", h.in_context ? "bg-chart-1" : "bg-dim")}
+                    title={h.in_context ? "ушёл модели" : "отброшен"}
+                  />
+                  <ChunkLink id={h.id} kb={kb} onOpen={onOpen} title={h.title} path={h.path} className="flex-1 text-[12px]" />
+                  <span className="relative h-1 w-8 shrink-0 overflow-hidden rounded-full bg-muted" aria-hidden>
+                    <span
+                      className={cn("absolute inset-y-0 left-0 rounded-full", h.in_context ? "bg-chart-1" : "bg-dim")}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </span>
+                  <span className="tnum w-12 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+                    {h.score === null ? "—" : h.score < 0.1 ? h.score.toFixed(4) : h.score.toFixed(3)}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+          {!hits.length && <p className="py-1 text-[12px] text-muted-foreground">Пусто</p>}
+        </Group>
+      </div>
+    </Section>
   );
 }
 
 // ---------- Проверка ----------
-function GuardTab({ a }: { a: AnswerPayload }) {
+
+function GuardSection({ a }: { a: AnswerPayload }) {
   const g = a.guard;
-  const total = a.timings.total || a.timings.server_total || 1;
-  const stages = ["retrieval", "generation", "refine", "guard"].filter((k) => a.timings[k] !== undefined);
   const rows: { ok: boolean; label: string; detail?: string }[] = [
     {
       ok: !g.unknown_numbers?.length,
@@ -701,94 +759,183 @@ function GuardTab({ a }: { a: AnswerPayload }) {
     { ok: !g.too_long, label: "Длина ответа в пределах 110 слов" },
   ];
   return (
-    <div className="space-y-6 p-5">
-      <Section title="Время ответа" aside={<span className="tnum">{(total / 1000).toFixed(2).replace(".", ",")} с</span>}>
-        <div className="flex h-2 gap-px overflow-hidden rounded-full bg-muted">
-          {stages.map((k) => (
-            <div
-              key={k}
-              className={STAGES[k].color}
-              style={{ width: `${(a.timings[k] / total) * 100}%` }}
-              title={`${STAGES[k].label}: ${a.timings[k]} мс`}
+    <Section title="Проверка ответа" aside={<span className="font-mono text-[12px]">guard.py</span>}>
+      {rows.map((r) => (
+        <div key={r.label} className="flex min-h-7 items-start gap-2.5 py-1 text-[13px]">
+          {r.ok ? (
+            <CheckCircle2 className="mt-px size-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <AlertTriangle className="mt-px size-4 shrink-0 text-destructive" />
+          )}
+          <div className="min-w-0">
+            {r.label}
+            {r.detail && <div className="text-[12px] text-destructive">{r.detail}</div>}
+          </div>
+        </div>
+      ))}
+      {g.repaired && <Note>Модель переписала ответ по замечанию проверки.</Note>}
+      {g.stripped && <Note>Вырезаны предложения с числами: {g.stripped.join(", ")}</Note>}
+      {g.dropped && <Note tone="danger">Ответ отброшен целиком — показан запасной ответ из базы.</Note>}
+      {a.error && <Note tone="danger">Причина запасного ответа: {a.error}</Note>}
+      {((a.llm_calls?.length ?? 0) > 0 || a.trace) && (
+        <div className="mt-2">
+          {a.llm_calls && a.llm_calls.length > 0 && (
+            <Group label="Вызовы модели" count={a.llm_calls.length} icon={Cpu}>
+              {a.llm_calls.map((c, i) => (
+                <Group
+                  key={i}
+                  label={
+                    <>
+                      {i === 0 ? "Ответ" : `Вызов ${i + 1}`}
+                      {c.error && <span className="text-destructive"> · ошибка</span>}
+                    </>
+                  }
+                  count={`${fmt(c.ms)} мс`}
+                >
+                  <div className="space-y-2 py-1 text-[12px] leading-relaxed">
+                    {c.instruction && (
+                      <div>
+                        <div className="text-[11px] font-medium text-muted-foreground">Указание модели</div>
+                        <p className="whitespace-pre-wrap">{c.instruction}</p>
+                      </div>
+                    )}
+                    <div>
+                      <div className="text-[11px] font-medium text-muted-foreground">
+                        Ответ модели · промпт {fmt(c.prompt_chars)} симв.
+                      </div>
+                      <p className="whitespace-pre-wrap">{c.output || c.error || "—"}</p>
+                    </div>
+                  </div>
+                </Group>
+              ))}
+            </Group>
+          )}
+          {a.trace && (
+            <Group label="Фактическая основа" icon={FileText}>
+              <pre className="py-1 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{a.trace}</pre>
+            </Group>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// ---------- Промпт и JSON ----------
+
+function highlight(text: string, q: string) {
+  const parts = text.split(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"));
+  return parts.map((p, i) =>
+    i % 2 ? (
+      <mark key={i} className="rounded-[2px] bg-mark text-foreground">
+        {p}
+      </mark>
+    ) : (
+      p
+    ),
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  return (
+    <button
+      type="button"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      aria-label={label}
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        toast.success("Скопировано");
+      }}
+    >
+      <Copy className="size-3.5" />
+    </button>
+  );
+}
+
+function RawSection({ a }: { a: AnswerPayload }) {
+  const [q, setQ] = useState("");
+  const json = useMemo(
+    () =>
+      JSON.stringify({ ...a, prompt: `[${a.prompt.length} сообщ., ${a.prompt_chars} симв. — см. «Промпт»]` }, null, 2),
+    [a],
+  );
+  return (
+    <Section title="Сырые данные" aside={`промпт ${short(a.prompt_chars)} симв.`} defaultOpen>
+      {a.prompt.length ? (
+        <Group label="Промпт" count={a.prompt.length} icon={SquareTerminal}>
+          <label className="mt-1 mb-2 flex h-8 items-center gap-2 rounded-md border bg-background px-2.5 text-muted-foreground focus-within:border-ring">
+            <ScanSearch className="size-3.5 shrink-0" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Найти в промпте"
+              aria-label="Найти в промпте"
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
             />
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {stages.map((k) => (
-            <span key={k} className="tnum flex items-center gap-1.5">
-              <span className={cn("size-2 rounded-full", STAGES[k].color)} />
-              {STAGES[k].label} {fmt(a.timings[k])} мс
-            </span>
-          ))}
-        </div>
-      </Section>
-      <Section title="Проверка ответа" aside={<span className="font-mono">energybot/guard.py</span>}>
-        <ul className="-mx-5 divide-y border-y">
-          {rows.map((r) => (
-            <li key={r.label} className="flex items-start gap-2.5 px-5 py-2.5 text-[14px]">
-              {r.ok ? (
-                <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
-              )}
-              <div>
-                {r.label}
-                {r.detail && <div className="text-[13px] text-destructive">{r.detail}</div>}
-              </div>
-            </li>
-          ))}
-        </ul>
-        {g.repaired && <Note>Модель переписала ответ по замечанию проверки.</Note>}
-        {g.stripped && <Note>Вырезаны предложения с числами: {g.stripped.join(", ")}</Note>}
-        {g.dropped && <Note tone="danger">Ответ отброшен целиком — показан запасной ответ из базы.</Note>}
-        {a.error && <Note tone="danger">Причина запасного ответа: {a.error}</Note>}
-      </Section>
-      {a.llm_calls && a.llm_calls.length > 0 && (
-        <Section title={`Вызовы модели · ${a.llm_calls.length}`}>
-          <div className="space-y-2">
-            {a.llm_calls.map((c, i) => (
-              <Fold
+          </label>
+          {a.prompt.map((m, i) => {
+            const count = q.length > 1 ? m.content.toLowerCase().split(q.toLowerCase()).length - 1 : 0;
+            return (
+              <Group
                 key={i}
-                summary={
-                  <span className="tnum min-w-0 flex-1 truncate">
-                    <span className="font-medium">{i === 0 ? "Ответ" : `Вызов ${i + 1}`}</span>
-                    <span className="text-muted-foreground">
-                      {" "}
-                      · {fmt(c.ms)} мс · промпт {fmt(c.prompt_chars)} симв.
-                    </span>
-                    {c.error && <span className="text-destructive"> · ошибка</span>}
+                defaultOpen={i === a.prompt.length - 1}
+                label={
+                  <span className="font-mono text-[12px]">
+                    {m.role}
+                    {count > 0 && <span className="font-sans font-medium text-foreground"> · найдено {count}</span>}
                   </span>
                 }
+                count={`${fmt(m.content.length)} симв.`}
               >
-                <div className="space-y-3 text-[13px] leading-relaxed">
-                  {c.instruction && (
-                    <div>
-                      <div className="mb-0.5 text-xs font-medium text-muted-foreground">Указание модели</div>
-                      <p className="whitespace-pre-wrap">{c.instruction}</p>
-                    </div>
-                  )}
-                  <div>
-                    <div className="mb-0.5 text-xs font-medium text-muted-foreground">Ответ модели</div>
-                    <p className="whitespace-pre-wrap">{c.output || c.error || "—"}</p>
+                <div className="relative">
+                  <div className="absolute top-1 right-0">
+                    <CopyButton text={m.content} label={`Скопировать ${m.role}`} />
                   </div>
+                  <pre className="max-h-[50vh] overflow-auto rounded-md bg-surface py-2 pr-8 pl-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                    {q.length > 1 ? highlight(m.content, q) : m.content}
+                  </pre>
                 </div>
-              </Fold>
-            ))}
+              </Group>
+            );
+          })}
+        </Group>
+      ) : (
+        <Row icon={SquareTerminal} label="Модель не вызывалась — запасной режим" />
+      )}
+      <Group label="JSON ответа API" icon={Braces}>
+        <div className="relative">
+          <div className="absolute top-1 right-0">
+            <CopyButton text={json} label="Скопировать JSON" />
           </div>
-        </Section>
-      )}
-      {a.trace && (
-        <Section title="Фактическая основа (промежуточный шаг)">
-          <pre className="rounded-xl bg-surface p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">
-            {a.trace}
+          <pre className="max-h-[50vh] overflow-auto rounded-md bg-surface py-2 pr-8 pl-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+            {json}
           </pre>
-        </Section>
-      )}
-    </div>
+        </div>
+      </Group>
+    </Section>
   );
 }
 
 // ---------- панель ----------
+
+/** Бюджет контекста из настроек RAG — чтобы полоса показывала «N% бюджета», как «Context 4% used». */
+function useContextBudget() {
+  const [budget, setBudget] = useState<number>();
+  useEffect(() => {
+    let alive = true;
+    getSettings()
+      .then((s) => {
+        const v = s.values.context_chars;
+        if (alive && typeof v === "number") setBudget(v);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return budget;
+}
+
 export function DebugPanel({
   message,
   question,
@@ -802,195 +949,57 @@ export function DebugPanel({
   onOpenChunk: (id: string) => void;
   onClose?: () => void;
 }) {
-  const [tab, setTab] = useState("support");
+  const budget = useContextBudget();
   const a = message?.answer;
   const r = a?.retrieval ?? message?.retrieval ?? null;
 
-  const close = onClose && (
-    <button
-      type="button"
-      onClick={onClose}
-      aria-label="Закрыть отладку"
-      className="-mr-2 flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-    >
-      <X className="size-4" />
-    </button>
+  const header = (
+    <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+      <h2 className="text-[14px] font-medium">Разбор ответа</h2>
+      {message?.pending && <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label="ответ готовится" />}
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Закрыть разбор ответа"
+          className="-mr-1.5 ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-4" />
+        </button>
+      )}
+    </div>
   );
 
   if (!message) {
     return (
       <div className="flex h-full flex-col">
-        <div className="flex h-14 shrink-0 items-center justify-between px-5 text-[15px] font-medium">
-          Отладка ответа
-          {close}
-        </div>
+        {header}
         <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16 text-center">
-          <div className="max-w-[22rem] space-y-2">
-            <p className="text-[15px] font-medium">Здесь появится разбор ответа</p>
-            <p className="text-[14px] leading-relaxed text-muted-foreground">
-              Что нашёл поиск, какие разделы базы ушли модели, полный промпт и на какие факты опирается каждое
-              предложение.
-            </p>
-          </div>
+          <p className="text-[14px] font-medium">Здесь появится разбор ответа</p>
+          <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
+            Что нашёл поиск, какие разделы ушли модели, на что опирается каждое предложение и что поймала проверка.
+          </p>
         </div>
       </div>
     );
   }
 
-  const claims = a ? a.citations.filter((c) => !c.question) : [];
-  const grounded = claims.filter((c) => c.support.length && !c.unsupported_numbers.length).length;
-  const counts: Record<string, string | undefined> = {
-    support: a ? `${grounded}/${claims.length}` : undefined,
-    search: r ? String(r.hits.length) : undefined,
-    context: r ? String(r.context.chunk_ids.length) : undefined,
-  };
-  const guardFired = a && (a.guard.unknown_numbers?.length || a.guard.too_long || a.guard.stripped || a.guard.dropped);
-  const tabs = [
-    { value: "support", label: "Опора" },
-    { value: "search", label: "Поиск" },
-    { value: "context", label: "Контекст" },
-    { value: "prompt", label: "Промпт" },
-    { value: "guard", label: "Проверка" },
-    { value: "json", label: "JSON" },
-  ];
-  const enabled = (v: string) => (v === "search" ? !!r : !!a);
-  const meta = a
-    ? [a.model ? a.model.split("/").pop() : "без модели", a.mode === "eval" ? "автопроверка" : a.mode === "copilot" ? "копилот" : "чат", sec(a.timings.server_total)]
-    : ["ищу в базе…"];
-
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 px-5 pt-2.5 pb-4">
-        <div className="flex h-10 items-center gap-2">
-          <span className="text-[14px] font-semibold">Отладка ответа</span>
-          <span className="ml-auto" />
-          {close}
-        </div>
-        {/* Строки, как панель окружения в Claude: иконка и значение, без плашек и рамок. */}
-        <ul className="mt-1 space-y-2 text-[13.5px]">
-          {question && (
-            <li className="flex gap-3">
-              <MessageCircleQuestion className="mt-[3px] size-4 shrink-0 text-muted-foreground" aria-label="Вопрос клиента" />
-              <p className="line-clamp-2 leading-snug">{question}</p>
-            </li>
-          )}
-          {a ? (
-            <li className="flex items-center gap-3">
-              <Cpu className="size-4 shrink-0 text-muted-foreground" aria-label="Модель" />
-              <span className={cn("truncate", a.model && "font-mono text-[12.5px]")}>{meta[0]}</span>
-            </li>
-          ) : message.pending ? (
-            <li className="flex items-center gap-3 text-muted-foreground">
-              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-              {r ? "Поиск готов, модель пишет ответ" : "Идёт поиск по базе знаний"}
-            </li>
-          ) : null}
-          {a?.confidence && (
-            <li className="flex items-center gap-3" title={a.confidence.explain}>
-              <Gauge className="size-4 shrink-0 text-muted-foreground" aria-label="Уверенность ответа" />
-              <span className="shrink-0 whitespace-nowrap">
-                Уверенность <span className="tnum font-mono text-[12.5px]">{num(a.confidence.score)}</span>
-              </span>
-              <span className="w-24 shrink-0">
-                <Meter
-                  value={a.confidence.retrieval}
-                  threshold={a.confidence.threshold}
-                  low={a.confidence.retrieval < a.confidence.threshold}
-                />
-              </span>
-              <span className="truncate text-xs text-muted-foreground">
-                поиск {num(a.confidence.retrieval)} · порог {num(a.confidence.threshold)}
-              </span>
-            </li>
-          )}
-          {a && (
-            <li className="flex items-center gap-3">
-              <Timer className="size-4 shrink-0 text-muted-foreground" aria-label="Время и режим" />
-              <span className="tnum shrink-0 whitespace-nowrap">{meta[2]}</span>
-              <span className="shrink-0 whitespace-nowrap text-muted-foreground">· {meta[1]}</span>
-              <span className="ml-auto flex min-w-0 flex-wrap justify-end gap-1.5">
-                {a.overrides && Object.keys(a.overrides).length > 0 && (
-                  <span
-                    className="inline-flex h-5 items-center rounded-md bg-brand-soft px-1.5 text-[11px] font-medium whitespace-nowrap text-brand-text"
-                    title={Object.entries(a.overrides)
-                      .map(([k, v]) => `${k}: ${String(v)}`)
-                      .join("\n")}
-                  >
-                    ответ с вашими настройками
-                  </span>
-                )}
-                {a.route === "clarify" && (
-                  <span className="inline-flex h-5 items-center rounded-md bg-warning-soft px-1.5 text-[11px] font-medium text-warning">
-                    уточнение ниже порога
-                  </span>
-                )}
-                {a.fallback && (
-                  <span className="inline-flex h-5 items-center rounded-md bg-warning-soft px-1.5 text-[11px] font-medium text-warning">
-                    запасной ответ
-                  </span>
-                )}
-                {guardFired ? (
-                  <span className="inline-flex h-5 items-center rounded-md bg-destructive-soft px-1.5 text-[11px] font-medium text-destructive">
-                    сработала проверка
-                  </span>
-                ) : null}
-              </span>
-            </li>
-          )}
-        </ul>
+      {header}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <AnswerSection a={a} question={question} message={message} />
+        {a?.confidence && <ConfidenceSection c={a.confidence} />}
+        {a?.honest_no && a.honest_no.length > 0 && <HonestNoSection items={a.honest_no} kb={kb} onOpen={onOpenChunk} />}
+        {a && <SupportSection a={a} kb={kb} onOpen={onOpenChunk} />}
+        {r && <ContextSection a={a} r={r} kb={kb} onOpen={onOpenChunk} budget={budget} />}
+        {r && <SearchSection r={r} kb={kb} onOpen={onOpenChunk} />}
+        {a && <GuardSection a={a} />}
+        {a && <RawSection a={a} />}
+        {!a && !message.pending && (
+          <p className="px-4 py-6 text-[13px] text-muted-foreground">{message.error ?? "Нет данных"}</p>
+        )}
       </div>
-      <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="min-h-0 flex-1 gap-0">
-        <div className="shrink-0 overflow-x-auto border-b px-[13px] max-sm:[mask-image:linear-gradient(to_right,#000_86%,transparent)]">
-          <TabsList variant="line" className="h-10 gap-0 p-0">
-            {tabs.map((t) => (
-              <TabsTrigger
-                key={t.value}
-                value={t.value}
-                disabled={!enabled(t.value)}
-                className="h-10 flex-none gap-1 rounded-none px-[7px] text-[13px] text-muted-foreground after:bottom-0! after:bg-foreground data-active:text-foreground"
-              >
-                {t.label}
-                {counts[t.value] && (
-                  <span className="tnum font-mono text-[10.5px] font-normal text-muted-foreground">{counts[t.value]}</span>
-                )}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {!a && message.pending &&
-            (r ? <SearchTab r={r} kb={kb} onOpen={onOpenChunk} /> : <Empty>Идёт поиск по базе знаний…</Empty>)}
-          {!a && !message.pending && <Empty>{message.error ?? "Нет данных"}</Empty>}
-          {a && (
-            <>
-              <TabsContent value="support">
-                <SupportTab a={a} kb={kb} onOpen={onOpenChunk} />
-              </TabsContent>
-              <TabsContent value="search">
-                {r ? <SearchTab r={r} kb={kb} onOpen={onOpenChunk} /> : <Empty>Поиск не выполнялся</Empty>}
-              </TabsContent>
-              <TabsContent value="context">
-                <ContextTab a={a} r={r} kb={kb} onOpen={onOpenChunk} />
-              </TabsContent>
-              <TabsContent value="prompt">
-                <PromptTab a={a} />
-              </TabsContent>
-              <TabsContent value="guard">
-                <GuardTab a={a} />
-              </TabsContent>
-              <TabsContent value="json">
-                <pre className="p-5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap">
-                  {JSON.stringify(
-                    { ...a, prompt: `[${a.prompt.length} сообщ., ${a.prompt_chars} симв. — см. вкладку «Промпт»]` },
-                    null,
-                    2,
-                  )}
-                </pre>
-              </TabsContent>
-            </>
-          )}
-        </div>
-      </Tabs>
     </div>
   );
 }

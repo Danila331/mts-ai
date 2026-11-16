@@ -9,8 +9,8 @@ export function BrandMark({ className, round }: { className?: string; round?: bo
     <span
       aria-hidden
       className={cn(
-        "relative flex size-8 shrink-0 items-center justify-center bg-brand text-white shadow-[inset_0_-1px_0_rgb(0_0_0/0.12),0_1px_2px_rgb(217_71_77/0.18)]",
-        round ? "rounded-full" : "rounded-[9px]",
+        "relative flex size-8 shrink-0 items-center justify-center bg-brand text-white",
+        round ? "rounded-full" : "rounded-[7px]",
         className,
       )}
     >
@@ -31,10 +31,10 @@ export function BrandMark({ className, round }: { className?: string; round?: bo
 /** Знак + название. */
 export function BrandLockup({ className }: { className?: string }) {
   return (
-    <span className={cn("flex min-w-0 items-center gap-2.5", className)}>
-      <BrandMark className="size-7 rounded-[8px]" />
-      <span className="truncate text-[16px] leading-none font-semibold tracking-[-0.02em]">
-        EnergyTool<span className="ml-[3px] text-brand-text">AI</span>
+    <span className={cn("flex min-w-0 items-center gap-2", className)}>
+      <BrandMark className="size-[22px] rounded-[6px]" />
+      <span className="truncate text-[14px] leading-none font-semibold tracking-[-0.01em]">
+        EnergyTool<span className="ml-1 font-normal text-muted-foreground">AI</span>
       </span>
     </span>
   );

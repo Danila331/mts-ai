@@ -32,17 +32,17 @@ export function ChunkSheet({
         side="right"
         className="w-full gap-0 p-0 data-[side=right]:w-[min(720px,100vw)] data-[side=right]:sm:max-w-none"
       >
-        <SheetHeader className="h-14 shrink-0 flex-row items-center gap-3 border-b px-5 py-0 pr-14">
+        <SheetHeader className="h-12 shrink-0 flex-row items-center gap-3 border-b px-4 py-0 pr-12">
           <div className="min-w-0 flex-1">
-            <SheetTitle className="text-[15px] leading-tight">База знаний</SheetTitle>
-            <SheetDescription className="text-xs">Тот же раздел, что видела модель</SheetDescription>
+            <SheetTitle className="text-[14px] leading-tight font-medium">Раздел базы знаний</SheetTitle>
+            <SheetDescription className="text-[12px]">Тот же текст, что видела модель</SheetDescription>
           </div>
           {chunkId && (
             <a
               href={kbHref(chunkId, line)}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               В новой вкладке <ArrowUpRight className="size-3.5" />
             </a>

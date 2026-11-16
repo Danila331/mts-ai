@@ -1,7 +1,7 @@
 "use client";
 
-import { CheckCircle2, ChevronDown, ChevronRight, FileText, Headset } from "lucide-react";
-import type { OpenChunk } from "./answer-text";
+import { CheckCircle2, ChevronDown, ChevronRight, FileText, Headset, PanelRight } from "lucide-react";
+import { type OpenChunk, SourceNumber } from "./answer-text";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ChatController } from "@/hooks/use-chat";
@@ -25,6 +25,7 @@ import { StatusBanner } from "./status-banner";
 import { SummaryPanel } from "./consultation-summary";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
+import { Shortcut } from "@/components/shortcut";
 import { InlineLead } from "./inline-lead";
 import { PostLeadCard } from "./post-lead";
 import { QuickReplies } from "./quick-replies";
@@ -132,6 +133,25 @@ function SummaryButton({ onClick, compact }: { onClick: () => void; compact?: bo
     >
       <FileText className="size-3.5 text-muted-foreground" /> Итоги консультации
     </button>
+  );
+}
+
+/** Как читать стенд — одна тихая строка внизу пустого экрана: три вещи, которые жюри стоит знать. */
+function StandHints() {
+  return (
+    <ul className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[12px] text-muted-foreground">
+      <li className="flex items-center gap-1.5">
+        <SourceNumber n={1} />у каждого факта — раздел базы, откуда он
+      </li>
+      <li className="flex items-center gap-1.5">
+        <PanelRight className="size-3.5" />
+        разбор ответа: поиск, контекст, промпт, проверка
+      </li>
+      <li className="flex items-center gap-1.5">
+        <Shortcut keys={["mod", "K"]} className="-mx-0.5" />
+        поиск по диалогам и базе
+      </li>
+    </ul>
   );
 }
 
@@ -363,15 +383,15 @@ export function ChatView({
 
   if (!messages.length && !compact) {
     return (
-      <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-[680px] flex-col justify-center px-5 pt-6 pb-[14vh] sm:px-6">
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[680px] flex-1 flex-col justify-center px-5 pt-6 pb-[10vh] sm:px-6">
           <div className="msg-in flex flex-col items-center text-center">
             <AiTag className="mb-3" />
-            <h1 className="flex items-center gap-3 text-[26px] leading-tight font-medium tracking-[-0.02em] sm:text-[30px]">
-              <BrandGlyph className="size-8 sm:size-9" />
+            <h1 className="flex items-center gap-3 text-[24px] leading-tight font-medium tracking-[-0.022em]">
+              <BrandGlyph className="size-7 sm:size-8" />
               {heading}
             </h1>
-            <p className="mt-2.5 max-w-[36rem] text-[14px] leading-relaxed text-pretty text-muted-foreground">
+            <p className="mt-2 max-w-[34rem] text-[14px] leading-relaxed text-pretty text-muted-foreground">
               {intro ?? "Отвечаю только по базе знаний МТС EnergyTool и показываю источник каждого факта."}
             </p>
           </div>
@@ -389,6 +409,11 @@ export function ChatView({
             </div>
           )}
         </div>
+        {onSelect && (
+          <div className="shrink-0 px-5 pb-5">
+            <StandHints />
+          </div>
+        )}
       </div>
     );
   }

@@ -1,7 +1,7 @@
 # Линтер для всего Python-кода репозитория (решение, стенд, скрипты, тесты).
 line-length = 120
 target-version = "py39"
-extend-exclude = ["sample_submission"]  # учебный пример организаторов — не правим
+extend-exclude = ["sample_submission", "submissions/final/solution.py"]  # исходные версии без переформатирования
 
 [lint]
 select = ["E", "F", "W", "I", "B", "UP"]

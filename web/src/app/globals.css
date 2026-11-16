@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-onest), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-heading: var(--font-onest), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-heading: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -22,6 +22,7 @@
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
+  --color-chart-6: var(--chart-6);
   --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
   --color-input: var(--input);
@@ -68,142 +69,145 @@
 }
 
 /*
- * Светлая тема: белый лист, графит МТС для текста, холодные серые нейтрали.
- * Красный — только действие и опора: отправить, главная кнопка, номера источников, выбор.
+ * Один инструмент на всех экранах: нейтральная графитовая лестница поверхностей, волосяные линии,
+ * графитовые кнопки (как Vercel), красный МТС — только сигнал: знак, отправка, маркеры источников.
  */
 :root {
-  --radius: 0.625rem;
+  --radius: 0.5rem;
 
   --background: #ffffff;
-  --foreground: #1d2023;
-  --surface: #f7f8fa;
+  --foreground: #1b1c1e;
+  /* второй слой: сайдбар, панели, плашки кода */
+  --surface: #f8f8f9;
   --card: #ffffff;
-  --card-foreground: #1d2023;
+  --card-foreground: #1b1c1e;
   --popover: #ffffff;
-  --popover-foreground: #1d2023;
+  --popover-foreground: #1b1c1e;
 
-  /* Мягкий красный: приглушённый кирпично-коралловый вместо кислотного #ff0032 (решение владельца, ноябрь 2026). */
-  --brand: #d0424a;
-  --brand-foreground: #ffffff;
-  --brand-soft: #fbeeee;
-  --brand-text: #c23a41;
-  --primary: #cc3d44;
+  /* главное действие — графит, не красный */
+  --primary: #1b1c1e;
   --primary-foreground: #ffffff;
 
-  --secondary: #f2f3f7;
-  --secondary-foreground: #1d2023;
-  --muted: #f2f3f7;
-  --muted-foreground: #626c77;
-  --accent: #eceef2;
-  --accent-foreground: #1d2023;
-  --destructive: #c23a41;
+  /* красный МТС: только знак, отправка, источники. Мягкий кирпично-коралловый вместо кислотного #ff0032
+     (решение владельца, ноябрь 2026). */
+  --brand: #d0424a;
+  --brand-foreground: #ffffff;
+  --brand-text: #c23a41;
+  --brand-soft: #fbeeee;
 
-  --success: #0b7f45;
-  --warning: #a35400;
-  --info: #0063cc;
+  --secondary: #f2f2f4;
+  --secondary-foreground: #1b1c1e;
+  --muted: #f2f2f4;
+  --muted-foreground: #66696f;
+  --accent: #eeeef0;
+  --accent-foreground: #1b1c1e;
+  --destructive: #cf3a2f;
 
-  /* Сплошные мягкие подложки вместо полупрозрачных: метки, статусы, подсветки. */
-  --success-soft: #e9f5ee;
-  --warning-soft: #fbefdf;
-  --info-soft: #e4eefb;
-  --destructive-soft: #fdecef;
-  --mark: #f6d4d5;
+  --success: #15803d;
+  --warning: #b45309;
+  --info: #2563eb;
+  --success-soft: #ecf7ef;
+  --warning-soft: #fdf3e6;
+  --info-soft: #edf2fd;
+  --destructive-soft: #fdeeec;
+  --mark: #ffe08a;
   --field: #ffffff;
-  /* Приглушённые точки, дорожки индикаторов, неактивные сегменты. */
-  --dim: #c3c8d0;
-  /* Сплошные заливки меток и статусов под белый текст (контраст ≥4,5:1 в обеих темах). */
-  --tone-success: #0b7f45;
-  --tone-warning: #a35400;
-  --tone-info: #0063cc;
-  --tone-danger: #c4373f;
+  /* приглушённые точки, дорожки индикаторов, неактивные сегменты */
+  --dim: #d4d5d9;
+  --tone-success: #15803d;
+  --tone-warning: #b45309;
+  --tone-info: #2563eb;
+  --tone-danger: #cf3a2f;
 
-  --border: #e4e6eb;
-  --input: #d6dae0;
-  --ring: #9aa1ab;
+  --border: #e7e7ea;
+  --input: #dadbdf;
+  --ring: #a4a6ac;
 
-  --chart-1: #0063cc;
-  --chart-2: #d9474d;
-  --chart-3: #6b4fe0;
-  --chart-4: #c27000;
-  --chart-5: #626c77;
+  /* категории данных: документы в контексте, этапы времени ответа (без красного — он занят) */
+  --chart-1: #3b82f6;
+  --chart-2: #f59e0b;
+  --chart-3: #14b8a6;
+  --chart-4: #a855f7;
+  --chart-5: #ec4899;
+  --chart-6: #84cc16;
 
-  /* Сайдбар нейтральный, как в Claude: серый без синевы, плашка выбора чуть темнее. */
-  --sidebar: #f8f8f7;
-  --sidebar-foreground: #1d2023;
-  --sidebar-primary: #1d2023;
+  --sidebar: #f8f8f9;
+  --sidebar-foreground: #1b1c1e;
+  --sidebar-primary: #1b1c1e;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #ebebea;
-  --sidebar-accent-foreground: #1d2023;
-  --sidebar-border: #e8e8e6;
-  --sidebar-ring: #9aa1ab;
+  --sidebar-accent: #ececee;
+  --sidebar-accent-foreground: #1b1c1e;
+  --sidebar-border: #e7e7ea;
+  --sidebar-ring: #a4a6ac;
 
-  --shadow-float: 0 1px 2px rgb(29 32 35 / 0.04), 0 4px 16px rgb(29 32 35 / 0.06);
-  --shadow-pop: 0 2px 6px rgb(29 32 35 / 0.06), 0 16px 48px rgb(29 32 35 / 0.14);
+  --shadow-float: 0 1px 1px rgb(0 0 0 / 0.03), 0 6px 20px -6px rgb(0 0 0 / 0.08);
+  --shadow-pop: 0 0 0 1px rgb(0 0 0 / 0.06), 0 4px 8px -2px rgb(0 0 0 / 0.06), 0 16px 40px -8px rgb(0 0 0 / 0.14);
   color-scheme: light;
 }
 
-/* Тёмная тема: графит МТС как основа, сайдбар глубже, всплывающие слои светлее. */
+/* Тёмная: графит МТС ступенями, как у Linear — подъём слоя вместо теней. */
 .dark {
-  --background: #1d2023;
-  --foreground: #eceef1;
-  --surface: #232629;
-  --card: #25282c;
-  --card-foreground: #eceef1;
-  --popover: #26292d;
-  --popover-foreground: #eceef1;
+  --background: #151618;
+  --foreground: #ececee;
+  --surface: #1b1c1f;
+  --card: #1b1c1f;
+  --card-foreground: #ececee;
+  --popover: #1e1f22;
+  --popover-foreground: #ececee;
+
+  --primary: #ececee;
+  --primary-foreground: #151618;
 
   --brand: #e60030;
   --brand-foreground: #ffffff;
-  --brand-soft: #3a1a21;
-  --brand-text: #ff5c76;
-  --primary: #e0002c;
-  --primary-foreground: #ffffff;
+  --brand-text: #ff6680;
+  --brand-soft: #3b151d;
 
-  --secondary: #2b2e33;
-  --secondary-foreground: #eceef1;
-  --muted: #2a2d31;
-  --muted-foreground: #9ba3ad;
-  --accent: #2f3237;
-  --accent-foreground: #eceef1;
-  --destructive: #ff5c76;
+  --secondary: #232427;
+  --secondary-foreground: #ececee;
+  --muted: #212225;
+  --muted-foreground: #9b9da4;
+  --accent: #26272b;
+  --accent-foreground: #ececee;
+  --destructive: #ff6b5e;
 
-  --success: #3ccf86;
-  --warning: #f0b252;
-  --info: #6aa9ff;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --info: #7aa7ff;
+  --success-soft: #14271b;
+  --warning-soft: #2e2412;
+  --info-soft: #172338;
+  --destructive-soft: #34191a;
+  --mark: #6b5310;
+  --field: #1b1c1f;
+  --dim: #3d3e43;
+  --tone-success: #16803d;
+  --tone-warning: #a1580b;
+  --tone-info: #2f64d8;
+  --tone-danger: #c9372c;
 
-  --success-soft: #1a3328;
-  --warning-soft: #3a2f1c;
-  --info-soft: #1b2b42;
-  --destructive-soft: #3d1c24;
-  --mark: #6a2534;
-  --field: #24272b;
-  --dim: #4a4f56;
-  --tone-success: #17834e;
-  --tone-warning: #9a5a0c;
-  --tone-info: #2f68c8;
-  --tone-danger: #d11f3d;
+  --border: #2a2b2f;
+  --input: #34353a;
+  --ring: #6e7078;
 
-  --border: #33363b;
-  --input: #3d4147;
-  --ring: #6b727c;
+  --chart-1: #6ea8ff;
+  --chart-2: #fbbf24;
+  --chart-3: #2dd4bf;
+  --chart-4: #c084fc;
+  --chart-5: #f472b6;
+  --chart-6: #a3e635;
 
-  --chart-1: #6aa9ff;
-  --chart-2: #ff3355;
-  --chart-3: #a08bff;
-  --chart-4: #f0b252;
-  --chart-5: #9ba3ad;
+  --sidebar: #111214;
+  --sidebar-foreground: #ececee;
+  --sidebar-primary: #ececee;
+  --sidebar-primary-foreground: #111214;
+  --sidebar-accent: #222326;
+  --sidebar-accent-foreground: #ececee;
+  --sidebar-border: #232427;
+  --sidebar-ring: #6e7078;
 
-  --sidebar: #17191c;
-  --sidebar-foreground: #eceef1;
-  --sidebar-primary: #eceef1;
-  --sidebar-primary-foreground: #17191c;
-  --sidebar-accent: #26292d;
-  --sidebar-accent-foreground: #eceef1;
-  --sidebar-border: #2a2d31;
-  --sidebar-ring: #6b727c;
-
-  --shadow-float: 0 1px 2px rgb(0 0 0 / 0.3), 0 6px 20px rgb(0 0 0 / 0.25);
-  --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.35), 0 20px 56px rgb(0 0 0 / 0.5);
+  --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.02), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.06), 0 16px 40px -8px rgb(0 0 0 / 0.6);
   color-scheme: dark;
 }
 
@@ -218,22 +222,26 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-size: 0.9375rem;
-    line-height: 1.55;
-    caret-color: var(--brand);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    caret-color: var(--foreground);
   }
   h1,
   h2,
   h3 {
     text-wrap: balance;
-    letter-spacing: -0.012em;
+    letter-spacing: -0.018em;
   }
   ::selection {
-    background: var(--primary);
-    color: #ffffff;
+    background: color-mix(in oklch, var(--foreground) 16%, transparent);
+    color: inherit;
   }
   a {
     text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+  :focus-visible {
+    outline-color: var(--ring);
   }
   code,
   pre,

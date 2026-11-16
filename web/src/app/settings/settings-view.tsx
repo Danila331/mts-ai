@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AppShell, PageBar } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { type AdminSession, adminLogin, adminLogout, getAdminSession, getSettings, resetSettings, saveSettings } from "@/lib/api";
 import { type Sandbox, readSandbox, writeSandbox } from "@/lib/sandbox";
@@ -56,6 +57,9 @@ const GROUPS = [
 ] as const;
 
 type Draft = Record<string, SettingValue | string>;
+
+/** Шаг ползунка: крупные пределы двигаются круглыми числами, температура — сотыми. */
+const STEP: Record<string, number> = { context_chars: 1000, max_tokens: 64, temperature: 0.05 };
 
 const show = (f: SettingField, v: SettingValue | undefined) => {
   if (typeof v === "boolean") return v ? "вкл." : "выкл.";
@@ -112,7 +116,7 @@ function Control({
           id={id}
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
-          className="h-8 w-[15.5rem] max-w-full appearance-none truncate rounded-lg border border-input bg-background pr-8 pl-3 text-[13.5px] outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+          className="h-8 w-[15.5rem] max-w-full appearance-none truncate rounded-md border border-input bg-background pr-8 pl-2.5 text-[13px] outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
         >
           {field.options?.map((o) => (
             <option key={String(o)} value={String(o)}>
@@ -120,19 +124,39 @@ function Control({
             </option>
           ))}
         </select>
-        <ChevronDown className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+        <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
       </span>
     );
   }
+  // Число: ползунок для быстрой прикидки и поле для точного значения — оба правят одно и то же.
+  const min = field.min ?? 0;
+  const max = field.max ?? 100;
+  const step = STEP[field.key] ?? (field.kind === "float" ? 0.1 : 1);
+  const n = Number(String(value).replace(",", "."));
+  const current = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min;
   return (
-    <input
+    <span className="flex items-center gap-3">
+      <Slider
+        value={[current]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={(v) => {
+          const next = Array.isArray(v) ? v[0] : v;
+          onChange(String(field.kind === "float" ? Math.round(next * 100) / 100 : next));
+        }}
+        aria-label={copy?.label ?? field.key}
+        className="w-36 data-horizontal:w-36 max-sm:hidden"
+      />
+      <input
         id={id}
         inputMode={field.kind === "float" ? "decimal" : "numeric"}
         value={String(value)}
         onChange={(e) => onChange(e.target.value)}
         aria-invalid={invalid}
-        className="tnum h-8 w-24 rounded-lg border border-input bg-background px-3 text-right text-[13.5px] outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-destructive/20"
-    />
+        className="tnum h-8 w-24 rounded-md border border-input bg-background px-2.5 text-right font-mono text-[12px] outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-destructive/20"
+      />
+    </span>
   );
 }
 
@@ -158,16 +182,16 @@ function Row({
   const offEnv = value !== undefined && value !== envValue;
 
   return (
-    <li className="group/row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 py-3.5">
+    <li className="group/row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 py-3">
       <div className="min-w-0">
-        <label htmlFor={`s-${field.key}`} className="flex items-center gap-2 text-[14px] font-medium">
+        <label htmlFor={`s-${field.key}`} className="flex items-center gap-2 text-[13px] font-medium">
           {copy.label}
-          {dirty && <span className="size-1.5 shrink-0 rounded-full bg-brand" aria-label="не сохранено" />}
+          {dirty && <span className="size-1.5 shrink-0 rounded-full bg-info" aria-label="не сохранено" />}
         </label>
-        <p className="mt-0.5 text-[13px] leading-snug text-muted-foreground">
+        <p className="mt-0.5 text-[12px] leading-snug text-muted-foreground">
           {field.available ? copy.hint : (copy.off ?? copy.hint)}
         </p>
-        <p className="mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[11.5px] text-muted-foreground">
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-muted-foreground">
           <span>{field.env}</span>
           {offEnv && (
             <>
@@ -189,7 +213,7 @@ function Row({
       <div className="flex justify-end">
         <Control field={field} value={draft} invalid={!!error} onChange={onChange} />
       </div>
-      {error && <p className="col-span-2 text-right text-[12.5px] text-destructive">{error}</p>}
+      {error && <p className="col-span-2 text-right text-[12px] text-destructive">{error}</p>}
     </li>
   );
 }
@@ -387,7 +411,8 @@ export function SettingsView() {
         {/* На узком экране — только значок: подпись съедала место заголовка страницы. */}
         <Button
           variant="ghost"
-          className="text-muted-foreground max-sm:size-9 max-sm:px-0"
+          size="sm"
+          className="text-muted-foreground max-sm:size-8 max-sm:px-0"
           onClick={reset}
           disabled={!data || !!busy || !(admin ? offEnv : own)}
           aria-label={resetLabel}
@@ -396,14 +421,14 @@ export function SettingsView() {
           {busy === "reset" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
           <span className="max-sm:hidden">{resetLabel}</span>
         </Button>
-        <Button onClick={save} disabled={!dirty || !!parsed.invalid || !!busy}>
+        <Button size="sm" onClick={save} disabled={!dirty || !!parsed.invalid || !!busy}>
           {busy === "save" && <Loader2 className="animate-spin" />}
           Сохранить
         </Button>
       </PageBar>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[680px] px-5 pt-4 pb-32 sm:px-6">
+        <div className="mx-auto w-full max-w-[680px] px-5 pt-6 pb-32 sm:px-6">
           {error && (
             <div className="mt-10 flex flex-col items-center gap-3 text-center">
               <AlertCircle className="size-5 text-destructive" />
@@ -444,7 +469,7 @@ export function SettingsView() {
 
               {GROUPS.map((g) => (
                 <section key={g.key} className="mt-9" aria-labelledby={`g-${g.key}`}>
-                  <h2 id={`g-${g.key}`} className="text-[13px] font-medium text-muted-foreground">
+                  <h2 id={`g-${g.key}`} className="text-[14px] font-medium">
                     {g.title}
                   </h2>
                   <ul className="mt-2 divide-y border-y">
@@ -466,17 +491,17 @@ export function SettingsView() {
               ))}
 
               <section className="mt-9" aria-labelledby="g-model">
-                <h2 id="g-model" className="text-[13px] font-medium text-muted-foreground">
+                <h2 id="g-model" className="text-[14px] font-medium">
                   Модель
                 </h2>
                 <ul className="mt-2 divide-y border-y">
-                  <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 py-3.5">
+                  <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 py-3">
                     <div>
-                      <p className="text-[14px] font-medium">Генерация</p>
-                      <p className="mt-0.5 text-[13px] text-muted-foreground">Задаётся окружением ядра, здесь не меняется.</p>
-                      <p className="mt-1 font-mono text-[11.5px] text-muted-foreground">LLM_MODEL</p>
+                      <p className="text-[13px] font-medium">Генерация</p>
+                      <p className="mt-0.5 text-[12px] text-muted-foreground">Задаётся окружением ядра, здесь не меняется.</p>
+                      <p className="mt-1 font-mono text-[11px] text-muted-foreground">LLM_MODEL</p>
                     </div>
-                    <span className="font-mono text-[12.5px]">{data.model || "не настроена"}</span>
+                    <span className="font-mono text-[12px] text-muted-foreground">{data.model || "не настроена"}</span>
                   </li>
                 </ul>
               </section>
@@ -488,7 +513,7 @@ export function SettingsView() {
       {/* Плашка несохранённых правок — как в настройках Claude: появляется снизу, пока есть что сохранить. */}
       {data && dirty > 0 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-5 flex justify-center px-4">
-          <div className="think-in pointer-events-auto flex items-center gap-3 rounded-full border bg-background py-1.5 pr-1.5 pl-4 text-[13.5px] shadow-[var(--shadow-pop)]">
+          <div className="think-in pointer-events-auto flex items-center gap-2 rounded-xl border bg-popover py-1.5 pr-1.5 pl-3.5 text-[13px] shadow-[var(--shadow-pop)]">
             <span className="text-muted-foreground">
               {parsed.invalid ? "Исправьте значения с ошибкой" : `Не сохранено: ${dirty}`}
             </span>
