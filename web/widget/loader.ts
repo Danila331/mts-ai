@@ -14,8 +14,11 @@
  * iframe (?topic=), чтобы приветствие было верным с первого кадра; путь и метки в адрес iframe не попадают.
  *
  * Фасад (T32): до первого взаимодействия на сайт попадает только этот файл (несколько КБ, без зависимостей).
- * Наведение, фокус или касание кнопки (и показ подсказки) — preconnect к хосту чата; iframe с бандлом чата создаётся
- * по клику, при ask() и при восстановленном открытом состоянии. Сообщения до eb:ready встают в очередь.
+ * Показ подсказки — preconnect к хосту чата. Наведение, фокус или касание кнопки и подсказки — уже намерение: iframe
+ * с бандлом чата создаётся сразу, скрытым, чтобы к клику он успел загрузиться (холодная загрузка /embed — 1,4–2,6 с,
+ * на тяжёлой странице сайта дольше). Иначе — по клику, при ask() и при восстановленном открытом состоянии.
+ * Пока чат не прислал eb:ready (React отрисовал ленту), панель показывает индикатор загрузки, а не белый iframe.
+ * Сообщения до eb:ready встают в очередь.
  *
  * Потоковая выдача (T13): по умолчанию ответ печатается по мере генерации; data-stream="0" — ответ появляется
  * целиком, когда его проверили. Флаг — так же, как тема: в адресе iframe (?stream=0) и в сообщении eb:page.
@@ -187,8 +190,18 @@ const store = {
     transition: opacity .2s ease, transform .3s cubic-bezier(.16,1,.3,1), visibility 0s linear .3s;
   }
   .open .panel { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition-delay: 0s; }
-  iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
-  .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #66696f; font: 13px ${font}; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; opacity: 0; transition: opacity .2s ease; }
+  .ready iframe { opacity: 1; }
+  .loading {
+    position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; background: #fff; color: #66696f; font: 13px ${font};
+  }
+  .ready .loading { display: none; }
+  .spin {
+    width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgba(0,0,0,.08); border-top-color: var(--c);
+    animation: eb-spin .8s linear infinite;
+  }
+  @keyframes eb-spin { to { transform: rotate(360deg); } }
   @media (max-width: 640px) {
     /* T43: цели касания ≥ 44 px */
     .bubble .x { width: 44px; height: 44px; top: 0; right: 0; }
@@ -201,7 +214,7 @@ const store = {
 </style>
 <div class="wrap">
   <div class="panel" role="dialog" aria-label="${escapeHtml(cfg.title)}" aria-modal="false">
-    <div class="loading">Загружаю консультанта…</div>
+    <div class="loading" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>Загружаю консультанта…</div>
   </div>
   <div class="bubble" role="status">
     <div class="head">
@@ -256,7 +269,9 @@ const store = {
     iframe.src = embedUrl();
     // microphone — голосовой ввод в чате; без него браузер не покажет запрос доступа внутри iframe.
     iframe.allow = "clipboard-write; microphone";
-    iframe.addEventListener("load", () => root.querySelector(".loading")?.remove());
+    // Белый iframe до отрисовки ленты не показываем: индикатор снимает eb:ready. Если чат не прислал его (старый
+    // /embed, сбой скрипта) — страховка: показать iframe через 6 с после load, чтобы панель не зависла.
+    iframe.addEventListener("load", () => setTimeout(reveal, 6000));
     panel.appendChild(iframe);
     sendPage();
   }
@@ -271,6 +286,10 @@ const store = {
   }
 
   /** Соединение с хостом чата заранее: к клику TCP и TLS уже готовы, а сам бандл ещё не скачан. */
+  function reveal() {
+    panel.classList.add("ready");
+  }
+
   let preconnected = false;
   function preconnect() {
     if (preconnected || iframe) return;
@@ -320,6 +339,7 @@ const store = {
     const data = e.data as { type?: string };
     if (data?.type === "eb:ready") {
       ready = true;
+      reveal();
       while (queue.length) iframe.contentWindow!.postMessage(queue.shift(), target!);
     } else if (data?.type === "eb:close") close();
     else if (data?.type === "eb:unread" && !isOpen) wrap.classList.add("unread");
@@ -364,9 +384,12 @@ const store = {
         bubble.classList.add("show");
       }, cfg.greetingDelay * 1000);
     }
-    // Фасад: iframe не грузим, пока посетитель не проявил интерес (наведение, фокус, касание, клик).
-    for (const ev of ["pointerenter", "focus", "touchstart"]) launcher.addEventListener(ev, preconnect, { once: true, passive: true });
-    bubble.addEventListener("pointerenter", preconnect, { once: true });
+    // Фасад: iframe не грузим, пока посетитель не проявил интерес. Наведение, фокус или касание кнопки и подсказки —
+    // интерес: начинаем грузить чат скрытым, до клика (между наведением и кликом обычно 0,3–0,8 с).
+    for (const ev of ["pointerenter", "focus", "touchstart"]) {
+      launcher.addEventListener(ev, ensureFrame, { once: true, passive: true });
+      bubble.addEventListener(ev, ensureFrame, { once: true, passive: true });
+    }
   };
   if (document.body) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });
