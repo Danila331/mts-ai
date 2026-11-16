@@ -178,7 +178,8 @@ export function Playground() {
             <button
               type="button"
               className="flex h-8 items-center gap-1 rounded-md px-2 text-[13px] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-muted aria-expanded:text-foreground"
-              aria-label="Режим ответа"
+              // Видимый текст («Чат») — в начале имени (axe: label-content-name-mismatch, WCAG 2.5.3).
+              aria-label={`${MODES.find((m) => m.value === mode)?.short ?? ""}: режим ответа`}
             />
           }
         >

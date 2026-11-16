@@ -122,7 +122,7 @@ function StandStatus() {
           <button
             type="button"
             className="flex h-10 w-full items-center gap-2.5 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-sidebar-accent"
-            aria-label={`Состояние стенда: ${model}`}
+            // Без aria-label: имя кнопки — её видимый текст «Стенд EnergyTool» и модель (WCAG 2.5.3, axe).
           />
         }
       >

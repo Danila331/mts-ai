@@ -16,7 +16,7 @@ colors:
   brand: "#d0424a"
   brand-text: "#c23a41"
   brand-soft: "#fbeeee"
-  destructive: "#cf3a2f"
+  destructive: "#c4362b"
   success: "#15803d"
   warning: "#b45309"
   info: "#2563eb"

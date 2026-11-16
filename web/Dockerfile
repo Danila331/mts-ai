@@ -38,6 +38,10 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 
+# Серверу Next npm и corepack не нужны, а в них — все находки trivy образа (brace-expansion, pacote, sigstore…).
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
 USER node
 EXPOSE 3000
 

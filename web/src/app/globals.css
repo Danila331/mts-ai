@@ -101,7 +101,7 @@
   --muted-foreground: #66696f;
   --accent: #eeeef0;
   --accent-foreground: #1b1c1e;
-  --destructive: #cf3a2f;
+  --destructive: #c4362b; /* AA 4,5:1 и на --destructive-soft (axe, /kb) */
 
   --success: #15803d;
   --warning: #b45309;
@@ -117,7 +117,7 @@
   --tone-success: #15803d;
   --tone-warning: #b45309;
   --tone-info: #2563eb;
-  --tone-danger: #cf3a2f;
+  --tone-danger: #c4362b;
 
   --border: #e7e7ea;
   --input: #dadbdf;

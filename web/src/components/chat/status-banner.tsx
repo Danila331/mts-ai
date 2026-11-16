@@ -85,7 +85,7 @@ export function StatusBanner({
             <button
               type="button"
               onClick={onLead}
-              className="font-medium text-brand-text underline underline-offset-2 hover:no-underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+              className="font-medium text-foreground underline underline-offset-2 hover:no-underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
             >
               Оставить заявку
             </button>
