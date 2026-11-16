@@ -1,17 +1,18 @@
 "use client";
 
-import { BarChart3, Inbox, Sparkles, TriangleAlert } from "lucide-react";
+import { BarChart3, Inbox, MessagesSquare, Sparkles, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const TABS = [
   { href: "/manager", label: "Заявки", icon: Inbox, exact: true },
+  { href: "/manager/dialogs", label: "Диалоги", icon: MessagesSquare, exact: false },
   { href: "/manager/analytics", label: "Аналитика", icon: BarChart3, exact: false },
   { href: "/manager/copilot", label: "Копилот", icon: Sparkles, exact: false },
 ];
 
-/** Вкладки раздела менеджера: заявки, аналитика (T6), копилот (T11). */
+/** Вкладки раздела менеджера: заявки, диалоги, аналитика (T6), копилот (T11). */
 export function ManagerTabs() {
   const pathname = usePathname();
   return (

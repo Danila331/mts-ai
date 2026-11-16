@@ -159,6 +159,9 @@ func (c *Client) Chat(ctx context.Context, req chat.Request) (chat.Stream, error
 	if req.Mode == dialog.ModeChat && req.Level.Level.Known() {
 		body["level"] = req.Level.Level
 	}
+	if req.Mode == dialog.ModeChat && req.HasLead {
+		body["has_lead"] = true
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

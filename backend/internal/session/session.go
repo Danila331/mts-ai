@@ -164,10 +164,36 @@ type Turn struct {
 	At       time.Time `json:"at"`
 }
 
-// History — сессия и все её реплики.
+// History — сессия и все её реплики. LeadCode и LeadKind — заявка, которую
+// клиент оставил из этого разговора; пусто — разговор без заявки.
 type History struct {
-	Session Session `json:"session"`
-	Turns   []Turn  `json:"turns"`
+	Session  Session `json:"session"`
+	Turns    []Turn  `json:"turns"`
+	LeadCode string  `json:"lead_code,omitempty"`
+	LeadKind string  `json:"lead_kind,omitempty"`
+}
+
+// ListItem — строка списка диалогов менеджера. Product — продукт, который
+// обсуждали первым (по паспорту); пусто — пока не ясно.
+type ListItem struct {
+	ID           string         `json:"id"`
+	Channel      string         `json:"channel"`
+	Title        string         `json:"title"`
+	Role         string         `json:"role"`
+	Product      passport.Group `json:"product"`
+	ProductLabel string         `json:"product_label"`
+	Messages     int            `json:"messages"`
+	HasLead      bool           `json:"has_lead"`
+	LeadCode     string         `json:"lead_code,omitempty"`
+	LeadKind     string         `json:"lead_kind,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+}
+
+// ListPage — страница списка диалогов и их общее число.
+type ListPage struct {
+	Items []ListItem `json:"items"`
+	Total int        `json:"total"`
 }
 
 // ErrNotFound — сессии с таким id нет: не было или удалена по сроку.

@@ -165,10 +165,19 @@ export interface AnswerPayload {
   degraded?: Degraded;
   /** Кнопки быстрых ответов на вопрос бота (T31): 2–4 реплики, только режим chat; детерминированные правила ядра. */
   suggestions?: string[];
+  /** Бот сам предложил передать разговор менеджеру (предложение уже в text); только режим chat, иначе поля нет. */
+  handoff?: Handoff;
   /** T13: ответ печатался дельтами по мере генерации. */
   streamed?: boolean;
   /** T13: финальный текст отличается от напечатанного — проверка ответа переписала или вырезала часть. */
   revised?: boolean;
+}
+
+/** Причина предложения менеджера: commercial — спросили цену/договор, unknown — в материалах нет, task_clear/long_dialog — задача ясна. */
+export type HandoffReason = "commercial" | "unknown" | "task_clear" | "long_dialog";
+
+export interface Handoff {
+  reason: HandoffReason | string;
 }
 
 export interface LlmCall {

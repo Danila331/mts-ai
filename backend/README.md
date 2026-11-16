@@ -2,7 +2,7 @@
 
 Публичный API, в который ходит фронт (`web/`, через прокси `/api/*`). Ответ на вопрос строит Python-ядро
 (`scripts/core_api.py`, код `energybot/` не дублируется); здесь — всё остальное: приём запросов, поток ответа,
-заявки, оценки, журнал ответов в Postgres, пределы частоты и токен прокси.
+заявки, оценки, журнал ответов и переписка сессий в Postgres, пределы частоты и токен прокси.
 
 Контракт — тот же, что был у Python-API (`web/src/lib/types.ts`): фронт переезда не заметил.
 
@@ -15,6 +15,8 @@
 | `POST /api/chat` `{messages, mode}` | SSE ядра насквозь: `stage` → `stage` → `answer` → `done`; ответ ложится в `answers` |
 | `POST /api/lead` | заявка с резюме модели (без модели — список вопросов) и оценкой правилами (`leads.score`: hot/warm/cold, причины, что спросить) → `leads`; `callback: {time: morning\|day\|evening\|any, timezone}` — удобное время, пожелание, а не запись (`leads.callback_preference`); `kind: callback\|assessment\|demo\|pilot` — тип заявки, демо и пилот только если в разговоре была платформа учёта (`leads.kind`, первая строка резюме); ответ `{id, summary, kind}` — оценку клиент не видит |
 | `POST /api/feedback` | 👍/👎 → `feedback` |
+| `GET /api/sessions?limit=&offset=` | токен менеджера, предел как у заявок: все диалоги чата клиентов (с заявкой и без), новые сверху: `{items: [{id, channel, title, role, product, product_label, messages, has_lead, lead_code, lead_kind, created_at, updated_at}], total}` |
+| `GET /api/sessions/:id` | токен менеджера: диалог целиком — `session` (с паспортом), `turns` по порядку (с вопросами без ответа, репликами до сессии и репликами фронта), `lead_code`/`lead_kind` |
 | `GET /api/settings` | настройки RAG ядра: текущие, из окружения, пределы |
 | `POST /api/settings` | `{"values": {...}}` — глобально, до перезапуска ядра; проверяет ядро |
 | `POST /api/settings/reset` | вернуть значения из окружения |

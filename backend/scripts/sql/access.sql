@@ -34,7 +34,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM energytool_manager, energytool_an
 
 -- Менеджер: заявки и разговоры клиентов (сессии и их реплики), только чтение.
 GRANT USAGE ON SCHEMA public TO energytool_manager;
-GRANT SELECT ON leads, sessions, answers TO energytool_manager;
+GRANT SELECT ON leads, sessions, session_messages, answers TO energytool_manager;
 
 -- Аналитик: представления без контактов в отдельной схеме.
 CREATE SCHEMA IF NOT EXISTS analytics;

@@ -11,8 +11,11 @@ import {
   AI_DISCLAIMER,
   AI_INTRO,
   AI_LABEL,
+  HANDOFF_NO,
   followTarget,
+  handoffOffer,
   hasUsefulAnswer,
+  isHandoffYes,
   nextFollowing,
   suggestionsFor,
 } from "@/lib/answer-ux";
@@ -26,6 +29,7 @@ import { SummaryPanel } from "./consultation-summary";
 import { BotAvatar, MessageItem } from "./message-item";
 import { BrandGlyph } from "@/components/brand";
 import { Shortcut } from "@/components/shortcut";
+import { HandoffOffer } from "./handoff-offer";
 import { InlineLead } from "./inline-lead";
 import { PostLeadCard } from "./post-lead";
 import { QuickReplies } from "./quick-replies";
@@ -256,6 +260,9 @@ export function ChatView({
 }) {
   const [summaryFor, setSummaryFor] = useState<string | null>(null);
   const [freshLead, setFreshLead] = useState<string | null>(null);
+  // Форма заявки, открытая по предложению бота (карточка или «Да, передайте менеджеру»), и закрытые карточки.
+  const [formFor, setFormFor] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   const messages = chat.active?.messages ?? [];
   const last = messages[messages.length - 1];
 
@@ -342,13 +349,25 @@ export function ChatView({
   // Паспорт показываем, когда в нём что-то есть; карточку заявки — когда есть контакты или согласие
   // и заявка ещё не отправлена, и только после ответа (не посреди генерации).
   const hasPassport = !!passport?.fields.some((f) => f.value);
-  const showInlineLead = !!session && !!passport?.ready_for_lead && !session.lead && !chat.busy;
+  const formOpen = !!session && formFor === session.id && !session.lead;
+  const showInlineLead = (!!session && !!passport?.ready_for_lead && !session.lead && !chat.busy) || formOpen;
+  const offer = chat.busy || showInlineLead ? undefined : handoffOffer(messages, !!session?.lead, dismissed);
   const leadDone = (lead: { id: string; summary: string }) => {
     chat.setLead(lead);
     setFreshLead(lead.id);
   };
   // Кнопки быстрых ответов — под последним ответом бота; свой текст клиента или новый вопрос их убирает.
-  const suggestions = chat.busy ? [] : suggestionsFor(messages, passport, !!session?.lead);
+  // Карточка предложения уже даёт оба ответа — одинаковые кнопки быстрых ответов рядом с ней не нужны.
+  // Пока открыта карточка менеджера или сама форма заявки, кнопки «Да, передайте / Пока продолжим» лишние.
+  const suggestions = chat.busy || offer || showInlineLead ? [] : suggestionsFor(messages, passport, !!session?.lead);
+  const pick = (text: string) => {
+    if (isHandoffYes(text) && session && !session.lead) setFormFor(session.id); // форма сразу, ответ бота — следом
+    send(text);
+  };
+  const later = () => {
+    if (offer) setDismissed((s) => new Set(s).add(offer.id));
+    send(HANDOFF_NO);
+  };
   // «Связаться с менеджером» в ленте не предлагаем до первого полезного ответа; кнопка в шапке виджета есть всегда.
   const offerLead = hasUsefulAnswer(messages);
   const showSummary = !!summary && canSummarize(session);
@@ -525,7 +544,10 @@ export function ChatView({
             </div>
           ))}
           </div>
-          <QuickReplies items={suggestions} onPick={send} compact={compact} />
+          <QuickReplies items={suggestions} onPick={pick} compact={compact} />
+          {offer && session && (
+            <HandoffOffer onAccept={() => setFormFor(session.id)} onLater={later} compact={compact} />
+          )}
           {showInlineLead && session && <InlineLead key={session.id} session={session} onDone={leadDone} compact={compact} />}
         </div>
       </div>

@@ -16,3 +16,9 @@ export function KindBadge({ label }: { label: string }) {
 export function StatusBadge({ status, label }: { status: LeadStatus; label: string }) {
   return <span className={cn(BASE, STATUS_TONE[status])}>{label}</span>;
 }
+
+/** Диалог с заявкой или без: разговоры без заявки тоже хранятся (пункт 5 кейса). */
+export function DialogLeadBadge({ code }: { code?: string }) {
+  if (!code) return <span className={cn(BASE, "border text-muted-foreground")}>Без заявки</span>;
+  return <span className={cn(BASE, "bg-tone-success text-white")}>С заявкой №{code}</span>;
+}

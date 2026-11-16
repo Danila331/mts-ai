@@ -178,3 +178,41 @@ func clip(s string, max int) string {
 	}
 	return string([]rune(s)[:max])
 }
+
+// Unseen — реплики запроса, которых ещё нет в сохранённой переписке.
+//
+// Фронт присылает с каждым вопросом всю историю (до MaxTurns реплик), а
+// шлюз хранит переписку сам. Хвост хранимой переписки (last) ищется среди
+// реплик запроса с конца: всё после него — новое. Так в переписку попадают
+// реплики до появления сессии, реплики, которые фронт добавил сам, и
+// вопросы без ответа, а повтор запроса после сбоя ничего не дублирует.
+// Тексты сравниваются без разницы в пробелах и обрезанными до MaxContent:
+// Clean нормализует то, что прислал браузер, а ответ модели хранится как есть.
+//
+// Переписки ещё нет (last == nil) — новое всё. Хвоста нет среди реплик
+// (фронт переписал историю) — новая только последняя реплика, чтобы не
+// плодить повторов.
+func Unseen(last *Turn, turns []Turn) []Turn {
+	if len(turns) == 0 {
+		return nil
+	}
+	if last == nil {
+		return turns
+	}
+	want := sameText(last.Content)
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i].Role == last.Role && sameText(turns[i].Content) == want {
+			return turns[i+1:]
+		}
+	}
+	return turns[len(turns)-1:]
+}
+
+// sameText — реплика для сравнения: пробелы схлопнуты, длина как у Clean.
+func sameText(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > MaxContent {
+		s = string(r[:MaxContent])
+	}
+	return s
+}

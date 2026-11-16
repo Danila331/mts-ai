@@ -6,11 +6,11 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { GradeBadge, KindBadge, StatusBadge } from "@/components/manager/badges";
 import { ManagerProblem } from "@/components/manager/manager-chrome";
+import { Block, Row, TurnList } from "@/components/manager/dialog-parts";
 import { MeetingBrief } from "@/components/manager/meeting-brief";
 import { Button } from "@/components/ui/button";
-import { KbIndex, kbHref, useKb } from "@/hooks/use-kb";
+import { useKb } from "@/hooks/use-kb";
 import {
-  type HistoryTurn,
   callbackWish,
   type LeadCard,
   type LeadStatus,
@@ -18,23 +18,15 @@ import {
   STATUS_LABEL,
   formatPhone,
   getLead,
+  filledFields,
   leadTitle,
+  pickTranscript,
   setLeadStatus,
   waiting,
 } from "@/lib/manager";
 import { humanizeCallbackLabel } from "@/lib/callback";
-import { cn } from "@/lib/utils";
 
 const STATUSES: LeadStatus[] = ["new", "in_progress", "done", "rejected"];
-
-function Block({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
-  return (
-    <section className={cn("border-t px-5 py-4", className)}>
-      <h3 className="mb-2 text-[12px] font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
-      {children}
-    </section>
-  );
-}
 
 /** Карточка заявки (T5): контакты, тип и удобное время, резюме, паспорт, оценка, переписка с источниками, статус. */
 export function LeadCardView({
@@ -84,14 +76,9 @@ export function LeadCardView({
     );
   }
 
-  const passportFields = (card.passport.fields ?? []).filter((f) => f.value && f.group !== "contacts");
-  const turns: HistoryTurn[] = card.history
-    ? card.history.turns
-    : (card.messages ?? []).map((m) => ({
-        role: m.role === "user" ? "user" : "assistant",
-        content: m.content,
-        at: card.created_at,
-      }));
+  // Всё, что клиент рассказал в чате, включая контакты и удобное время; переписка — полная, с сервера.
+  const passportFields = filledFields(card.passport);
+  const turns = pickTranscript(card.history, card.messages, card.created_at);
 
   return (
     <article className="pb-10">
@@ -214,73 +201,22 @@ export function LeadCardView({
       </Block>
 
       <Block title={card.history ? `Переписка (${card.history.session.channel === "embed" ? "виджет" : "стенд"})` : "Переписка на момент отправки"}>
+        {card.session_id && card.history && (
+          <p className="mb-2 text-[12px]">
+            <Link href={`/manager/dialogs?id=${card.session_id}`} className="text-primary underline underline-offset-2">
+              Открыть диалог целиком
+            </Link>
+          </p>
+        )}
         {!card.history && card.session_id && (
           <p className="mb-2 text-[12px] text-muted-foreground">Сессия удалена по сроку хранения — осталась переписка из заявки.</p>
         )}
         {turns.length === 0 ? (
           <p className="text-[14px] text-muted-foreground">Переписки нет.</p>
         ) : (
-          <ol className="space-y-3">
-            {turns.map((t, i) => (
-              <Turn key={i} turn={t} kb={kb} />
-            ))}
-          </ol>
+          <TurnList turns={turns} kb={kb} />
         )}
       </Block>
     </article>
-  );
-}
-
-function Row({
-  label,
-  value,
-  empty = "—",
-  children,
-}: {
-  label: string;
-  value: string;
-  empty?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className={cn("min-w-0 break-words", !value && "text-muted-foreground")}>{value || empty}
-        {children}
-      </dd>
-    </>
-  );
-}
-
-function Turn({ turn, kb }: { turn: HistoryTurn; kb: KbIndex | null }) {
-  const user = turn.role === "user";
-  return (
-    <li className={cn("flex", user && "justify-end")}>
-      <div className={cn("max-w-[92%] rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed", user ? "bg-muted" : "border")}>
-        <p className="whitespace-pre-wrap">{turn.content}</p>
-        {turn.fallback && (
-          <p className="mt-1.5 text-[12px] font-medium text-tone-warning">Запасной ответ — бот не нашёл ответа в базе</p>
-        )}
-        {turn.sources && turn.sources.length > 0 && (
-          <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
-            <span className="text-muted-foreground">Источники:</span>
-            {turn.sources.map((id, n) => {
-              const hit = kb?.byId.get(id);
-              return (
-                <Link
-                  key={id}
-                  href={kbHref(id)}
-                  target="_blank"
-                  title={hit ? `${hit.doc.title} — ${hit.chunk.path}` : "Раздел базы знаний"}
-                  className="inline-flex h-[17px] items-center rounded-md bg-primary px-1.5 text-[10.5px] font-semibold text-white"
-                >
-                  {n + 1}
-                </Link>
-              );
-            })}
-          </p>
-        )}
-      </div>
-    </li>
   );
 }
