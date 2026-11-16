@@ -49,7 +49,7 @@
 | Что | Чем | Критерий |
 |---|---|---|
 | Выборка корректна | `eval/validate_dataset.py eval/dataset/parts/*.jsonl`, затем `eval/build_dataset.py` | 0 ошибок. ~500 кейсов, деление dev/holdout 70/30 ([`README.md`](../README.md)) |
-| Поиск | `eval/retrieval_eval.py --split dev` (работает без ключей) | Не хуже последнего замера в README (BM25: все разделы эталона в контексте — 0.63, доля найденных — 0.77) |
+| Поиск | `eval/retrieval_eval.py --split dev` (работает без ключей) | Не хуже последнего замера в docs/development.md (BM25: все разделы эталона в контексте — 0.63, доля найденных — 0.77) |
 | Ответы | `eval/run_eval.py --with-demo --baseline`; слепой судья — `eval/blind_judge.py`, `eval/codex_judge.py` | Score не ниже последнего прогона на той же модели. В README от 09.11.2026: 0.896 на всём наборе, 0.806 на демо |
 | Ловушки и вне базы | `must` / `must_not` в отчёте `run_eval`, категории `trap`, `out-of-kb`, `adversarial` | Не хуже прошлого прогона. Вопросы вне базы — известное слабое место (0.67 в README) |
 | Сабмит не сломан | `scripts/check_submission.py` | 0 непройденных проверок |
