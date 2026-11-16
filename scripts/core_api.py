@@ -1147,6 +1147,10 @@ class App:
             if offer:
                 payload["text"] = handoff.append(answer.text, offer)
                 payload["handoff"] = {"reason": offer["reason"]}
+                # Интерфейс рисует ответ по предложениям citations — фраза-предложение тоже должна быть среди них
+                # (вопрос клиенту, опора не нужна), иначе на экране её нет, хотя text её содержит.
+                payload["citations"].append({"sentence": offer["text"], "question": True, "support": [],
+                                             "unsupported_numbers": []})
         payload["suggestions"] = quick_replies.suggest(payload["text"], passport, client=client_text(turns)) \
             if mode == "chat" and not payload["fallback"] else []
         return payload

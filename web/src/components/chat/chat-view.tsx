@@ -358,7 +358,8 @@ export function ChatView({
   };
   // Кнопки быстрых ответов — под последним ответом бота; свой текст клиента или новый вопрос их убирает.
   // Карточка предложения уже даёт оба ответа — одинаковые кнопки быстрых ответов рядом с ней не нужны.
-  const suggestions = chat.busy || offer ? [] : suggestionsFor(messages, passport, !!session?.lead);
+  // Пока открыта карточка менеджера или сама форма заявки, кнопки «Да, передайте / Пока продолжим» лишние.
+  const suggestions = chat.busy || offer || showInlineLead ? [] : suggestionsFor(messages, passport, !!session?.lead);
   const pick = (text: string) => {
     if (isHandoffYes(text) && session && !session.lead) setFormFor(session.id); // форма сразу, ответ бота — следом
     send(text);

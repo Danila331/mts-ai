@@ -162,6 +162,9 @@ class CoreAnswer(unittest.TestCase):
         self.assertEqual(payload["handoff"], {"reason": "commercial"})
         self.assertEqual(payload["text"], PLAIN + "\n\n" + handoff.OFFER)
         self.assertEqual(payload["suggestions"], ["Да, передайте менеджеру", "Пока продолжим здесь"])
+        # Интерфейс рисует ответ по citations: без этой строки фразы на экране нет (живой прогон стенда).
+        self.assertEqual(payload["citations"][-1]["sentence"], handoff.OFFER)
+        self.assertTrue(payload["citations"][-1]["question"])
 
     def test_eval_and_copilot_are_untouched(self):
         app = self.app(PLAIN)
