@@ -241,7 +241,7 @@ function LeadForm({
               value={form.name}
               onChange={set("name")}
               onBlur={blur("name")}
-              placeholder="Иван Петров"
+              placeholder="Тестов Тест Тестович"
               autoComplete="off"
               aria-invalid={!!nameError}
               aria-describedby={nameError ? "lead-name-error" : undefined}
@@ -265,7 +265,7 @@ function LeadForm({
               id="lead-company"
               value={form.company}
               onChange={set("company")}
-              placeholder="ООО «Ромашка»"
+              placeholder="ООО Учебный склад"
               autoComplete="off"
             />
           </Field>

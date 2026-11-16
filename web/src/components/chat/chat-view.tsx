@@ -431,7 +431,12 @@ export function ChatView({
             compact ? "gap-5 px-4 pt-4 pb-6" : "max-w-[720px] gap-7 px-5 pt-4 pb-10 sm:px-6",
           )}
         >
-          <StatusBanner answerDegraded={!!last?.answer?.degraded} compact={compact} />
+          <StatusBanner
+            answerDegraded={!!last?.answer?.degraded}
+            compact={compact}
+            onLead={onLead && !session?.lead ? onLead : undefined}
+            pollKey={last?.pending ? undefined : last?.id}
+          />
           {!messages.length && compact && openFlow && (
             <WizardRunner
               key={`${chat.activeId}-${openFlow.id}`}
