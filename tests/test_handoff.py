@@ -72,18 +72,24 @@ class Triggers(unittest.TestCase):
         p = passport("platform", task="поиск потерь", callback_preference="после обеда")
         self.assertIsNone(handoff.decide([u("Нужен учёт")], p, PLAIN))
 
-    def test_three_client_messages_with_product(self):
-        turns = [u("Привет"), a("Здравствуйте."), u("Нужен учёт"), a(PLAIN), u("А ещё?")]
-        r = handoff.decide(turns, passport("platform"), PLAIN)
-        self.assertEqual(r and r["reason"], "long_dialog")
-        self.assertIsNone(handoff.decide(turns, passport("general"), PLAIN))
-        self.assertIsNone(handoff.decide(turns[:3], passport("platform"), PLAIN))
+    def test_from_the_second_client_message_the_card_is_always_there(self):
+        # Хотфикс владельца: «бот не всегда предлагает менеджера». Со второй реплики клиента карточка есть всегда —
+        # и без определённого продукта.
+        turns = [u("Нужен учёт"), a(PLAIN), u("А ещё?")]
+        for p in (passport("platform"), passport("general"), None):
+            r = handoff.decide(turns, p, PLAIN)
+            self.assertEqual(r and r["reason"], "long_dialog")
+            self.assertEqual(r["text"], handoff.OFFER)
+        self.assertIsNone(handoff.decide(turns[:1], passport("platform"), PLAIN), "первый вопрос — без навязывания")
 
-    def test_weak_reasons_do_not_stack_a_second_question(self):
+    def test_answer_with_its_own_question_gets_the_card_without_a_second_question(self):
         p = passport("platform", task="поиск потерь", region="Тверь")
-        self.assertIsNone(handoff.decide([u("Нужен учёт")], p, "Подойдёт платформа. Сколько у вас объектов?"))
-        r = handoff.decide([u("Сколько стоит?")], p, "Подойдёт платформа. Сколько у вас объектов?")
-        self.assertEqual(r["reason"], "commercial")
+        asked = "Подойдёт платформа. Сколько у вас объектов?"
+        r = handoff.decide([u("Нужен учёт")], p, asked)
+        self.assertEqual((r["reason"], r["text"]), ("task_clear", ""), "карточка есть, второго вопроса нет")
+        self.assertEqual(handoff.append(asked, r), asked)
+        r = handoff.decide([u("Сколько стоит?")], p, asked)
+        self.assertEqual((r["reason"], r["text"]), ("commercial", ""))
 
     def test_nothing_to_say_when_nothing_happens(self):
         self.assertIsNone(handoff.decide([u("Что такое АСКУЭ?")], None, PLAIN))
@@ -111,16 +117,20 @@ class Suppression(unittest.TestCase):
         turns = [u("Пока не готов"), a(PLAIN), u("раз"), a(PLAIN), u("два"), a(PLAIN)] + self.ASK
         self.assertIsNotNone(handoff.decide(turns, None, PLAIN))
 
-    def test_offered_in_last_two_assistant_turns(self):
+    def test_recent_offer_keeps_the_card_but_not_the_sentence(self):
         offered = a("Ответ. " + handoff.OFFER)
-        self.assertIsNone(handoff.decide([u("x"), offered, u("y"), a(PLAIN)] + self.ASK, None, PLAIN))
-        self.assertIsNone(handoff.decide([u("x"), offered] + self.ASK, None, PLAIN))
+        for turns in ([u("x"), offered, u("y"), a(PLAIN)] + self.ASK, [u("x"), offered] + self.ASK):
+            r = handoff.decide(turns, None, PLAIN)
+            self.assertEqual((r["reason"], r["text"]), ("commercial", ""), "фраза не повторяется, карточка остаётся")
         far = [u("x"), offered, u("y"), a(PLAIN), u("z"), a(PLAIN)] + self.ASK
-        self.assertIsNotNone(handoff.decide(far, None, PLAIN))
+        self.assertEqual(handoff.decide(far, None, PLAIN)["text"], handoff.OFFER)
 
-    def test_model_already_asked_about_manager(self):
-        self.assertIsNone(handoff.decide(self.ASK, None, "Цену уточнит специалист. Передать ваш запрос менеджеру?"))
-        self.assertIsNone(handoff.decide(self.ASK, None, "Могу связаться с менеджером и оформить заявку."))
+    def test_model_already_asked_about_manager_gets_the_card(self):
+        for text in ("Цену уточнит специалист. Передать ваш запрос менеджеру?",
+                     "Могу связаться с менеджером и оформить заявку."):
+            r = handoff.decide(self.ASK, None, text)
+            self.assertEqual((r["reason"], r["text"]), ("model_offer", ""), text)
+            self.assertEqual(handoff.append(text, r), text)
 
 
 class Sentence(unittest.TestCase):

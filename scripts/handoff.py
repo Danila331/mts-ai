@@ -39,7 +39,7 @@ DECLINE = re.compile(
 RECENT_ASSISTANT = 2  # предложение было в одном из последних двух ответов бота — второй раз подряд не повторяем
 RECENT_CLIENT = 3  # отказ среди последних трёх реплик клиента считается «недавним»
 MIN_TASK_FIELDS = 2
-MIN_CLIENT_MESSAGES = 3
+MIN_CLIENT_MESSAGES = 2  # со второй реплики клиента разговор уже о его задаче — карточка менеджера видна всегда
 GENERAL = "general"
 # Контакты — не сведения о задаче (backend/internal/passport: группа Contacts).
 CONTACT_KEYS = ("name", "phone", "company", "callback_preference")
@@ -66,40 +66,46 @@ def _product(passport) -> str:
 
 
 def suppressed(turns: list, passport, answer_text: str, has_lead: bool = False) -> bool:
-    """Предлагать нельзя: заявка уже есть или идёт, клиент отказался, предложение только что было."""
+    """Предлагать нельзя совсем: заявка уже есть или идёт, клиент недавно отказался."""
     if has_lead:
         return True
     if isinstance(passport, dict) and passport.get("handoff_agreed"):
         return True  # клиент уже согласился — форма заявки и так открыта
     if any(field_value(passport, k) for k in ("phone", "name")):
         return True  # контакты уже в паспорте — заявка в работе
-    if any(DECLINE.search(c) for c in _contents(turns, "user")[-RECENT_CLIENT:]):
-        return True
-    if any(HANDOFF.search(c) for c in _contents(turns, "assistant")[-RECENT_ASSISTANT:]):
-        return True
-    return bool(HANDOFF.search(str(answer_text or "")))
+    return any(DECLINE.search(c) for c in _contents(turns, "user")[-RECENT_CLIENT:])
 
 
 def decide(turns: list, passport, answer_text: str, has_lead: bool = False):
-    """{"reason", "text"}, если пора предложить менеджера, иначе None."""
+    """{"reason", "text"}, если пора предложить менеджера, иначе None.
+
+    Карточка «Передать менеджеру» (payload.handoff) показывается при любой причине. Фраза-вопрос text дописывается
+    к ответу, только если в нём нет своего вопроса и предложения не было в последних ответах — иначе text пустой:
+    одна карточка, без второго вопроса подряд и без повтора одной и той же фразы.
+    """
     client = _contents(turns, "user")
     if not client or suppressed(turns, passport, answer_text, has_lead):
         return None
     text = str(answer_text or "")
-    if COMMERCIAL.search(client[-1]):
-        return {"reason": "commercial", "text": OFFER}
-    if UNKNOWN.search(text):
-        return {"reason": "unknown", "text": OFFER}
-    # Слабые причины: не наслаиваем второй вопрос на уточняющий вопрос бота.
-    if "?" in text:
+    reason = ""
+    if HANDOFF.search(text):
+        reason = "model_offer"  # модель сама предложила менеджера — под ответом нужна и карточка
+    elif COMMERCIAL.search(client[-1]):
+        reason = "commercial"
+    elif UNKNOWN.search(text):
+        reason = "unknown"
+    elif _product(passport) and _filled_task_fields(passport) >= MIN_TASK_FIELDS:
+        reason = "task_clear"
+    elif len(client) >= MIN_CLIENT_MESSAGES:
+        reason = "long_dialog"
+    if not reason:
         return None
-    product = _product(passport)
-    if product and _filled_task_fields(passport) >= MIN_TASK_FIELDS:
-        return {"reason": "task_clear", "text": OFFER}
-    if product and len(client) >= MIN_CLIENT_MESSAGES:
-        return {"reason": "long_dialog", "text": OFFER}
-    return None
+    recent = any(HANDOFF.search(c) for c in _contents(turns, "assistant")[-RECENT_ASSISTANT:])
+    sentence = "" if reason == "model_offer" or recent or "?" in text else OFFER
+    return {"reason": reason, "text": sentence}
 
 
 def append(answer_text: str, offer: dict) -> str:
+    if not offer.get("text"):
+        return str(answer_text or "")
     return (str(answer_text or "").rstrip() + "\n\n" + offer["text"]).strip()
