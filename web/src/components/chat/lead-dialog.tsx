@@ -117,7 +117,7 @@ function LeadForm({
     if (!valid || sending) return;
     setSending(true);
     try {
-      const res = await sendLead({ ...form, messages: toTurns(session.messages) });
+      const res = await sendLead({ ...form, messages: toTurns(session.messages), session_id: session.id });
       onDone(res);
       toast.success("Заявка передана менеджеру");
     } catch (err) {

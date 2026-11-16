@@ -133,6 +133,7 @@ func run() error {
 		Health:    health.New(coreClient, store),
 		KB:        coreClient,
 		Settings:  coreClient,
+		Stats:     store,
 		Metrics:   m,
 		RateStore: rateStore,
 	}, log)

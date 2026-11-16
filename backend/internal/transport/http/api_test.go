@@ -84,6 +84,38 @@ func (m *memStore) Ping(context.Context) error {
 	return nil
 }
 
+func (m *memStore) Stats(context.Context) (chat.ConversationStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := chat.ConversationStats{Answers: len(m.answers), Leads: len(m.leads)}
+	sessions, leadSessions := map[string]bool{}, map[string]bool{}
+	for _, a := range m.answers {
+		if !a.Fallback && a.Error == "" {
+			out.Answered++
+		}
+		if a.Error == "" {
+			out.NoBoundary++
+		}
+		if a.SessionID != "" {
+			sessions[a.SessionID] = true
+		}
+	}
+	for _, l := range m.leads {
+		if l.SessionID != "" {
+			leadSessions[l.SessionID] = true
+		}
+	}
+	out.Sessions, out.LeadSessions = len(sessions), len(leadSessions)
+	if out.Answers > 0 {
+		out.AnsweredRate = float64(out.Answered) / float64(out.Answers)
+		out.NoBoundaryRate = float64(out.NoBoundary) / float64(out.Answers)
+	}
+	if out.Sessions > 0 {
+		out.LeadConversion = float64(out.LeadSessions) / float64(out.Sessions)
+	}
+	return out, nil
+}
+
 func (m *memStore) answerCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -156,6 +188,7 @@ func newServerWithMetrics(t *testing.T, coreURL string, mutate func(*config.Conf
 		Health:   health.New(cc, store),
 		KB:       cc,
 		Settings: cc,
+		Stats:    store,
 		Metrics:  m,
 	}, zerolog.Nop()), store, m
 }
@@ -205,7 +238,7 @@ func names(evs []sse) []string {
 func TestChatRelaysStreamAndJournals(t *testing.T) {
 	s, store := newServer(t, fakeCore(t, goodStream).URL, nil)
 	rec := do(s, http.MethodPost, "/api/chat",
-		`{"messages": [{"role": "user", "content": "Что такое АСКУЭ?"}], "mode": "chat"}`)
+		`{"messages": [{"role": "user", "content": "Что такое АСКУЭ?"}], "mode": "chat", "session_id": "session-1"}`)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "text/event-stream; charset=utf-8", rec.Header().Get("Content-Type"))
@@ -217,6 +250,7 @@ func TestChatRelaysStreamAndJournals(t *testing.T) {
 	require.Equal(t, 1, store.answerCount())
 	assert.Equal(t, "Что такое АСКУЭ?", store.answers[0].Question)
 	assert.Equal(t, "a1", store.answers[0].ID)
+	assert.Equal(t, "session-1", store.answers[0].SessionID)
 }
 
 func TestChatCutStreamEndsWithError(t *testing.T) {
@@ -300,7 +334,7 @@ func TestLeadAndFeedback(t *testing.T) {
 	s, store := newServer(t, fakeCore(t, goodStream).URL, nil)
 
 	rec := do(s, http.MethodPost, "/api/lead",
-		`{"name": "Иван", "phone": "+7 900", "company": "", "comment": "", "messages": [{"role": "user", "content": "Нужен АСКУЭ"}]}`)
+		`{"name": "Иван", "phone": "+7 900", "company": "", "comment": "", "messages": [{"role": "user", "content": "Нужен АСКУЭ"}], "session_id": "session-1"}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var l struct{ ID, Summary string }
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &l))
@@ -308,6 +342,7 @@ func TestLeadAndFeedback(t *testing.T) {
 	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", l.Summary, "без модели — список вопросов")
 	require.Len(t, store.leads, 1)
 	assert.Equal(t, "Иван", store.leads[0].Name)
+	assert.Equal(t, "session-1", store.leads[0].SessionID)
 
 	rec = do(s, http.MethodPost, "/api/feedback", `{"session_id": "s", "message_id": "m", "rating": -1, "comment": "мимо"}`)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -317,6 +352,24 @@ func TestLeadAndFeedback(t *testing.T) {
 
 	rec = do(s, http.MethodPost, "/api/feedback", `{"message_id": "m", "rating": 5}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestStatsUsesObservableOutcomesWithoutResolutionGuess(t *testing.T) {
+	s, store := newServer(t, fakeCore(t, goodStream).URL, nil)
+	store.answers = []chat.Record{
+		{Answer: chat.Answer{ID: "a1", Text: "Ответ"}, SessionID: "s1"},
+		{Answer: chat.Answer{ID: "a2", Text: "Не знаю", Fallback: true}, SessionID: "s2"},
+	}
+	store.leads = []lead.Lead{{SessionID: "s1"}}
+
+	rec := do(s, http.MethodGet, "/api/stats", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{
+		"answers": 2, "answered": 1, "no_boundary": 2,
+		"sessions": 2, "leads": 1, "lead_sessions": 1,
+		"answered_rate": 0.5, "no_boundary_rate": 1, "lead_conversion": 0.5
+	}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "resolution_rate")
 }
 
 func TestTokenAndClientLimit(t *testing.T) {

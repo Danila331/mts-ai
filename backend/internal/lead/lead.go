@@ -76,6 +76,8 @@ func (c Contacts) Normalize() Contacts {
 // Lead — заявка целиком.
 type Lead struct {
 	ID uuid.UUID
+	// SessionID связывает заявку с диалогом для lead_conversion.
+	SessionID string
 	// Code — номер, который видит клиент: «№3f9a1c07b2». Короче uuid и
 	// читается по телефону.
 	Code string

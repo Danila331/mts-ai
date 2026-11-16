@@ -92,6 +92,7 @@ export function useChat(storageKey: string, mode: ChatMode = "chat") {
               }),
           },
           controller.signal,
+          sessionId,
         );
       } catch (err) {
         const aborted = controller.signal.aborted;

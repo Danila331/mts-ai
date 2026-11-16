@@ -25,8 +25,9 @@ const (
 
 // Request — вопрос с историей диалога.
 type Request struct {
-	Turns []dialog.Turn
-	Mode  dialog.Mode
+	Turns     []dialog.Turn
+	Mode      dialog.Mode
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // Event — одно событие потока. Data — JSON как его прислало ядро.
@@ -103,4 +104,18 @@ type Record struct {
 	// RequestID — обращение, в котором дан ответ: по нему ответ из
 	// журнала находится в журнале службы и ядра.
 	RequestID string
+	SessionID string
+}
+
+// ConversationStats — измеримые исходы без выдуманного «решения проблемы».
+type ConversationStats struct {
+	Answers        int     `json:"answers"`
+	Answered       int     `json:"answered"`
+	NoBoundary     int     `json:"no_boundary"`
+	Sessions       int     `json:"sessions"`
+	Leads          int     `json:"leads"`
+	LeadSessions   int     `json:"lead_sessions"`
+	AnsweredRate   float64 `json:"answered_rate"`
+	NoBoundaryRate float64 `json:"no_boundary_rate"`
+	LeadConversion float64 `json:"lead_conversion"`
 }

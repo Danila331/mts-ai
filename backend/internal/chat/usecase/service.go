@@ -164,6 +164,7 @@ func (s *Service) record(ctx context.Context, req chat.Request, data json.RawMes
 		Question:  dialog.LastQuestion(req.Turns),
 		Turns:     len(req.Turns),
 		RequestID: requestid.From(ctx),
+		SessionID: req.SessionID,
 	}
 
 	// Свой потолок поверх контекста ответа: ответ, пришедший на последней

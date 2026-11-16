@@ -51,6 +51,15 @@ func (s *Server) kb(c echo.Context) error {
 	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
 }
 
+// stats — наблюдаемые исходы, а не выдуманное «решение проблемы».
+func (s *Server) stats(c echo.Context) error {
+	stats, err := s.deps.Stats.Stats(c.Request().Context())
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, stats)
+}
+
 // settings — настройки RAG ядра как есть.
 func (s *Server) settings(c echo.Context) error {
 	raw, err := s.deps.Settings.Settings(c.Request().Context())
@@ -97,8 +106,9 @@ func (s *Server) resetSettings(c echo.Context) error {
 }
 
 type chatRequest struct {
-	Messages json.RawMessage `json:"messages"`
-	Mode     string          `json:"mode"`
+	Messages  json.RawMessage `json:"messages"`
+	Mode      string          `json:"mode"`
+	SessionID string          `json:"session_id"`
 }
 
 // chat отвечает на вопрос потоком server-sent events.
@@ -117,7 +127,9 @@ func (s *Server) chat(c echo.Context) error {
 	}
 
 	mode := dialog.ParseMode(body.Mode)
-	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{Turns: turns, Mode: mode})
+	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{
+		Turns: turns, Mode: mode, SessionID: dialog.Clip(body.SessionID, 100),
+	})
 	if err != nil {
 		return s.coreFail(c, err)
 	}
@@ -211,11 +223,12 @@ func (s *sseWriter) heartbeat(every time.Duration) (stop func()) {
 }
 
 type leadRequest struct {
-	Name     string          `json:"name"`
-	Phone    string          `json:"phone"`
-	Company  string          `json:"company"`
-	Comment  string          `json:"comment"`
-	Messages json.RawMessage `json:"messages"`
+	Name      string          `json:"name"`
+	Phone     string          `json:"phone"`
+	Company   string          `json:"company"`
+	Comment   string          `json:"comment"`
+	Messages  json.RawMessage `json:"messages"`
+	SessionID string          `json:"session_id"`
 }
 
 type leadResponse struct {
@@ -231,7 +244,7 @@ func (s *Server) lead(c echo.Context) error {
 	}
 	l, err := s.deps.Leads.Create(c.Request().Context(), lead.Contacts{
 		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment,
-	}, body.Messages)
+	}, body.Messages, dialog.Clip(body.SessionID, 100))
 	if err != nil {
 		return s.mapErr(c, err)
 	}

@@ -349,7 +349,6 @@ class Field:
 
 class Settings:
     def __init__(self, bot: Consultant, api: Api):
-        reference = bot.reference_text  # справочник выключается пустой строкой, а включается обратно им же
         # Векторы могут появиться и после старта (App.retry_dense), поэтому — проверка в момент обращения,
         # а не снимок на старте.
         def has_vectors() -> bool:
@@ -362,28 +361,19 @@ class Settings:
             get, set_ = attr(obj, name)
             return Field(key, group, kind, env_name, get, set_, **kw)
 
+        # Только реальные ручки v28-port. Настройки других экспериментальных ядер сюда не переносим:
+        # неизменяемые флаги внутри answer() остаются кодом конфигурации, а не мнимыми переключателями UI.
         self.fields = [
-            field("top_k", "search", "int", "EB_TOP_K", bot, "top_k", lo=0, hi=30),
+            field("top_k", "search", "int", "EB_TOP_K", bot, "top_k", lo=1, hi=30),
             field("n_candidates", "search", "int", "EB_N_CANDIDATES", bot, "n_candidates", lo=5, hi=80),
-            field("full_docs", "search", "int", "EB_FULL_DOCS", bot, "full_docs", lo=0, hi=6),
-            field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=200000),
+            field("expand_docs", "search", "int", "EB_EXPAND_DOCS", bot, "expand_docs", lo=0, hi=3),
+            field("context_chars", "search", "int", "EB_CONTEXT_CHARS", bot, "context_chars", lo=2000, hi=60000),
             Field("use_dense", "search", "bool", "EB_USE_EMBEDDINGS", lambda: bot.dense,
                   lambda v: setattr(bot, "dense", bool(v) and has_vectors()), available=has_vectors),
             field("use_reranker", "search", "bool", "EB_USE_RERANKER", api, "can_rerank",
                   available=lambda: api.configured),
-            Field("use_reference", "search", "bool", "EB_REFERENCE", lambda: bool(bot.reference_text),
-                  lambda v: setattr(bot, "reference_text", reference if v else ""), available=lambda: bool(reference)),
-            field("search", "search", "enum", "EB_SEARCH", bot, "search", options=list(dict.fromkeys(["v3", "ve", bot.search]))),
-            # Стили правил из energybot/prompts.py; значение из окружения добавляется, даже если оно своё.
-            field("style", "generation", "enum", "EB_STYLE", bot, "style",
-                  options=list(dict.fromkeys(["tight", "full", "recipe", "jury", "jury2", bot.style]))),
-            field("use_examples", "generation", "bool", "EB_EXAMPLES", bot, "use_examples"),
-            field("near", "generation", "int", "EB_NEAR", bot, "near", lo=0, hi=8),
             field("temperature", "generation", "float", "EB_TEMPERATURE", api, "temperature", lo=0.0, hi=2.0),
             field("max_tokens", "generation", "int", "EB_MAX_TOKENS", api, "max_tokens", lo=128, hi=8192),
-            field("think", "generation", "bool", "EB_THINK", bot, "think"),
-            field("refine", "generation", "bool", "EB_REFINE", bot, "refine"),
-            field("check_kb", "generation", "enum", "EB_CHECK", bot, "check_kb", options=[0, 1, 2]),
         ]
         self.by_key = {f.key: f for f in self.fields}
         self.defaults = self.values()

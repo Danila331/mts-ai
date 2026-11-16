@@ -10,6 +10,7 @@
 |---|---|
 | `GET /healthz` | проба хостинга: процесс жив, база отвечает (без токена) |
 | `GET /api/health` | состояние ядра как есть + `db` |
+| `GET /api/stats` | наблюдаемые `answered_rate`, `no_boundary_rate`, `lead_conversion`; фиктивного `resolution_rate` нет |
 | `GET /api/kb` | база знаний разделами — байт в байт как у ядра |
 | `POST /api/chat` `{messages, mode}` | SSE ядра насквозь: `stage` → `stage` → `answer` → `done`; ответ ложится в `answers` |
 | `POST /api/lead` | заявка с резюме модели (без модели — список вопросов) → `leads`; ответ `{id, summary}` |

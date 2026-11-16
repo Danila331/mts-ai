@@ -33,11 +33,12 @@ export async function streamChat(
   mode: ChatMode,
   handlers: StreamHandlers,
   signal?: AbortSignal,
+  sessionId?: string,
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, mode }),
+    body: JSON.stringify({ messages, mode, session_id: sessionId }),
     signal,
   });
   if (!res.ok || !res.body) {
@@ -80,6 +81,7 @@ export async function sendLead(body: {
   company: string;
   comment: string;
   messages: Turn[];
+  session_id?: string;
 }): Promise<{ id: string; summary: string }> {
   const res = await fetch(`${BASE}/lead`, {
     method: "POST",

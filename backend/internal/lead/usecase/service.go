@@ -60,7 +60,7 @@ func New(repo Repository, model Summarizer) *Service {
 // резюме — удобство к нему: если база недоступна, тратить на модель
 // время клиента и деньги незачем, а если недоступна модель, заявка уже
 // лежит в базе со списком вопросов.
-func (s *Service) Create(ctx context.Context, c lead.Contacts, messages json.RawMessage) (lead.Lead, error) {
+func (s *Service) Create(ctx context.Context, c lead.Contacts, messages json.RawMessage, sessionID string) (lead.Lead, error) {
 	turns, err := dialog.Clean(messages, false)
 	if err != nil {
 		return lead.Lead{}, err
@@ -79,6 +79,7 @@ func (s *Service) Create(ctx context.Context, c lead.Contacts, messages json.Raw
 		SummarySource: lead.SummaryDigest,
 		Messages:      turns,
 		RequestID:     requestid.From(ctx),
+		SessionID:     sessionID,
 	}
 	for attempt := 0; attempt < codeAttempts; attempt++ {
 		l.Code = lead.NewCode()

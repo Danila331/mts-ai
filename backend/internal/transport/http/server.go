@@ -40,7 +40,7 @@ type (
 		Ask(ctx context.Context, req chat.Request) (*chatuc.Relay, error)
 	}
 	Leads interface {
-		Create(ctx context.Context, c lead.Contacts, messages json.RawMessage) (lead.Lead, error)
+		Create(ctx context.Context, c lead.Contacts, messages json.RawMessage, sessionID string) (lead.Lead, error)
 	}
 	Feedback interface {
 		Rate(ctx context.Context, f feedback.Feedback, rating int) error
@@ -57,6 +57,9 @@ type (
 		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
 		ResetSettings(ctx context.Context) (json.RawMessage, error)
 	}
+	Stats interface {
+		Stats(ctx context.Context) (chat.ConversationStats, error)
+	}
 )
 
 // Deps — всё, из чего собирается сервер.
@@ -67,6 +70,7 @@ type Deps struct {
 	Health   Health
 	KB       KB
 	Settings Settings
+	Stats    Stats
 	// Metrics — nil выключает метрики.
 	Metrics *metrics.Metrics
 	// RateStore — хранилище пределов; nil — память процесса.
@@ -173,6 +177,7 @@ func (s *Server) routes() {
 
 	api := s.echo.Group("/api", s.requireToken)
 	api.GET("/health", s.health)
+	api.GET("/stats", s.stats)
 	api.GET("/kb", s.kb)
 	api.POST("/chat", s.chat, chatLimit)
 	api.POST("/lead", s.lead, leadLimit)

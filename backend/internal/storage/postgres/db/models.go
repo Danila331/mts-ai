@@ -22,6 +22,7 @@ type Answer struct {
 	Timings   []byte
 	Guard     []byte
 	CreatedAt time.Time
+	SessionID string
 	RequestID string
 }
 
@@ -46,6 +47,7 @@ type Lead struct {
 	Summary       string
 	Messages      []byte
 	CreatedAt     time.Time
+	SessionID     string
 	RequestID     string
 	SummarySource string
 }

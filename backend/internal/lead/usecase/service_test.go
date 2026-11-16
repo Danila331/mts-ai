@@ -64,7 +64,7 @@ const dialogJSON = `[{"role":"user","content":"Нужен АСКУЭ"},{"role":"
 func TestCreateWithModelSummary(t *testing.T) {
 	r, m := &repo{taken: 1}, &model{text: "Задача клиента: АСКУЭ"}
 	l, err := New(r, m).Create(context.Background(),
-		lead.Contacts{Name: "  Иван  ", Phone: strings.Repeat("1", 80)}, json.RawMessage(dialogJSON))
+		lead.Contacts{Name: "  Иван  ", Phone: strings.Repeat("1", 80)}, json.RawMessage(dialogJSON), "session-1")
 	require.NoError(t, err)
 
 	assert.Equal(t, "Задача клиента: АСКУЭ", l.Summary)
@@ -82,7 +82,7 @@ func TestCreateWithModelSummary(t *testing.T) {
 func TestCreateSavesBeforeModel(t *testing.T) {
 	m := &model{text: "резюме"}
 	_, err := New(&repo{createErr: errors.New("база лежит")}, m).Create(context.Background(),
-		lead.Contacts{}, json.RawMessage(dialogJSON))
+		lead.Contacts{}, json.RawMessage(dialogJSON), "session-1")
 	require.Error(t, err)
 	assert.Zero(t, m.calls, "база недоступна — модель не зовётся: заявки нет, платить не за что")
 }
@@ -90,7 +90,7 @@ func TestCreateSavesBeforeModel(t *testing.T) {
 func TestCreateKeepsDigestWhenUpdateFails(t *testing.T) {
 	r := &repo{updateErr: errors.New("обрыв")}
 	l, err := New(r, &model{text: "резюме моделью"}).Create(context.Background(),
-		lead.Contacts{}, json.RawMessage(dialogJSON))
+		lead.Contacts{}, json.RawMessage(dialogJSON), "session-1")
 	require.NoError(t, err, "заявка уже в базе — клиенту успех")
 	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", l.Summary, "клиент видит то же, что менеджер")
 	assert.Equal(t, lead.SummaryDigest, l.SummarySource)
@@ -100,18 +100,18 @@ func TestCreateKeepsDigestWhenUpdateFails(t *testing.T) {
 func TestCreateFallsBackWithoutModel(t *testing.T) {
 	r := &repo{}
 	l, err := New(r, &model{err: errors.New("down")}).Create(context.Background(),
-		lead.Contacts{}, json.RawMessage(dialogJSON))
+		lead.Contacts{}, json.RawMessage(dialogJSON), "session-1")
 	require.NoError(t, err)
 	assert.Equal(t, "Вопросы клиента: Нужен АСКУЭ", l.Summary)
 	assert.Equal(t, lead.SummaryDigest, l.SummarySource)
 	assert.Equal(t, lead.SummaryDigest, r.saved[0].SummarySource, "заявка записана со списком вопросов")
 
-	l, err = New(r, nil).Create(context.Background(), lead.Contacts{}, json.RawMessage(`[]`))
+	l, err = New(r, nil).Create(context.Background(), lead.Contacts{}, json.RawMessage(`[]`), "session-1")
 	require.NoError(t, err)
 	assert.Equal(t, "Диалога не было.", l.Summary)
 }
 
 func TestCreateRejectsBadMessages(t *testing.T) {
-	_, err := New(&repo{}, nil).Create(context.Background(), lead.Contacts{}, nil)
+	_, err := New(&repo{}, nil).Create(context.Background(), lead.Contacts{}, nil, "session-1")
 	require.Error(t, err)
 }

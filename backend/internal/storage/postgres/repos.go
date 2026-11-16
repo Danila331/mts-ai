@@ -28,6 +28,7 @@ func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
 		Timings:   object(rec.Timings),
 		Guard:     object(rec.Guard),
 		RequestID: rec.RequestID,
+		SessionID: rec.SessionID,
 	})
 }
 
@@ -51,6 +52,7 @@ func (s *Store) CreateLead(ctx context.Context, l *lead.Lead) error {
 		SummarySource: summarySource(l.SummarySource),
 		Messages:      messages,
 		RequestID:     l.RequestID,
+		SessionID:     l.SessionID,
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == "leads_code_uq" {
@@ -111,4 +113,30 @@ func object(raw json.RawMessage) []byte {
 		return []byte("{}")
 	}
 	return raw
+}
+
+// Stats возвращает только наблюдаемые исходы: содержательный ответ, отсутствие
+// технической ошибки и переход диалога в заявку. «Проблема решена» здесь не выдумывается.
+func (s *Store) Stats(ctx context.Context) (chat.ConversationStats, error) {
+	var out chat.ConversationStats
+	err := s.Pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM answers),
+			(SELECT count(*) FROM answers WHERE NOT fallback AND error = ''),
+			(SELECT count(*) FROM answers WHERE error = ''),
+			(SELECT count(DISTINCT session_id) FROM answers WHERE session_id <> ''),
+			(SELECT count(*) FROM leads),
+			(SELECT count(DISTINCT session_id) FROM leads WHERE session_id <> '')
+	`).Scan(&out.Answers, &out.Answered, &out.NoBoundary, &out.Sessions, &out.Leads, &out.LeadSessions)
+	if err != nil {
+		return out, err
+	}
+	if out.Answers > 0 {
+		out.AnsweredRate = float64(out.Answered) / float64(out.Answers)
+		out.NoBoundaryRate = float64(out.NoBoundary) / float64(out.Answers)
+	}
+	if out.Sessions > 0 {
+		out.LeadConversion = float64(out.LeadSessions) / float64(out.Sessions)
+	}
+	return out, nil
 }
