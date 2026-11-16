@@ -179,6 +179,17 @@ class PostprocessTest(unittest.TestCase):
         self.assertIn("ниже откроется форма", CHAT_MODE)
         self.assertIn("Никогда не утверждай, что заявка создана, отправлена или передана", CHAT_MODE)
 
+    def test_specific_models_rule_only_in_chat(self):
+        """Конкретные модели (стенд v28): блок только в чате, и он опирается на слова базы."""
+        from energybot.prompts import CHAT_SPECIFIC_MODELS, system_prompt
+        block = CHAT_SPECIFIC_MODELS.strip()
+        for mode in ("eval", "copilot"):
+            self.assertNotIn(block, system_prompt("МАТ", mode))
+        self.assertIn(block, system_prompt("МАТ", "chat"))
+        metering = " ".join((KB_DIR / "10-energy/13-metering.md").read_text(encoding="utf-8").split())
+        self.assertIn("Конкретные модели, подробные профили и каналы связи в предоставленных материалах не подтверждены",
+                      metering)
+
     def test_chat_lead_kinds_only_in_chat(self):
         """Типы заявки (T17): блок только в режиме chat, автопроверка и копилот его не видят; факты — из базы."""
         from energybot.prompts import CHAT_LEAD_KINDS, build_write_messages, system_prompt
