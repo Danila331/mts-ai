@@ -1,5 +1,6 @@
 // node --experimental-strip-types --test src/lib/*.test.ts (npm test): блок «вот что есть в материалах» и баннер статуса.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DEGRADED_MAX, degradedHref, degradedSections, statusBanner } from "./degraded.ts";
 import type { DegradedSection, Health } from "./types.ts";
@@ -54,4 +55,12 @@ test("баннер: нет модели или последний ответ п�
     assert.equal(b?.tone, "warning");
     assert.doesNotMatch(`${b!.title} ${b!.text}`, /HTTP|502|503|API|LLM|модел/i);
   }
+});
+
+test("баннер обещает заявку — в нём есть и кнопка заявки (ручной прогон: кнопки не было до первого ответа)", () => {
+  const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
+  const banner = statusBanner({ health: null, unreachable: true })!;
+  assert.match(banner.text, /Заявку можно оставить/);
+  assert.match(read("../components/chat/status-banner.tsx"), /Оставить заявку/);
+  assert.match(read("../components/chat/chat-view.tsx"), /<StatusBanner[\s\S]*?onLead=/);
 });

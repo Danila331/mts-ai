@@ -14,7 +14,19 @@ const POLL_MS = 30_000;
  * Баннер статуса (T30) над перепиской — на стенде и в виджете. Состояние — `/api/health` (тот же источник, что
  * у шапки стенда), показывается только при деградации и без технических деталей.
  */
-export function StatusBanner({ answerDegraded, compact }: { answerDegraded?: boolean; compact?: boolean }) {
+export function StatusBanner({
+  answerDegraded,
+  compact,
+  onLead,
+  pollKey,
+}: {
+  answerDegraded?: boolean;
+  /** Меняется с каждым новым ответом: пришёл ответ — ядро живо, состояние перепроверяем сразу, а не через 30 с. */
+  pollKey?: string;
+  compact?: boolean;
+  /** Баннер обещает «заявку можно оставить уже сейчас» — значит, и кнопка заявки должна быть здесь же. */
+  onLead?: () => void;
+}) {
   const [health, setHealth] = useState<Health | null>(null);
   const [unreachable, setUnreachable] = useState(false);
 
@@ -42,7 +54,7 @@ export function StatusBanner({ answerDegraded, compact }: { answerDegraded?: boo
       ctrl?.abort();
       clearInterval(timer);
     };
-  }, []);
+  }, [pollKey]);
 
   // Если опрос уже показал, что всё работает, а последний ответ пришёл без модели, — верим ответу: он свежее.
   const banner = statusBanner({ health, unreachable, answerDegraded });
@@ -54,7 +66,10 @@ export function StatusBanner({ answerDegraded, compact }: { answerDegraded?: boo
       className={cn(
         "sticky top-0 z-20 flex items-start gap-2.5 rounded-xl ring-1",
         compact ? "px-3 py-2 text-[12.5px]" : "px-3.5 py-2.5 text-[13.5px]",
-        banner.tone === "danger" ? "bg-destructive/10 ring-destructive/25" : "bg-warning-soft ring-tone-warning/25",
+        // Баннер прилипает к верху ленты — фон непрозрачный, иначе текст ответа просвечивает сквозь него.
+        banner.tone === "danger"
+          ? "bg-[color-mix(in_oklab,var(--destructive)_10%,var(--background))] ring-destructive/25"
+          : "bg-warning-soft ring-tone-warning/25",
       )}
     >
       <Icon
@@ -64,6 +79,18 @@ export function StatusBanner({ answerDegraded, compact }: { answerDegraded?: boo
       <p className="leading-snug">
         <span className="font-medium">{banner.title}.</span>{" "}
         <span className="text-muted-foreground">{banner.text}</span>
+        {onLead && (
+          <>
+            {" "}
+            <button
+              type="button"
+              onClick={onLead}
+              className="font-medium text-brand-text underline underline-offset-2 hover:no-underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              Оставить заявку
+            </button>
+          </>
+        )}
       </p>
     </div>
   );
