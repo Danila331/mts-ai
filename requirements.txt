@@ -22,5 +22,5 @@ python-docx==1.2.0
 beautifulsoup4==4.14.2
 lxml==6.1.0
 PyYAML==6.0.3
-SQLAlchemy==2.0.44
+SQLAlchemy==2.1.8
 tiktoken==0.12.0
