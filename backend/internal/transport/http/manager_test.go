@@ -226,3 +226,97 @@ func TestAnalyticsNeedsManagerAndPeriod(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, do(s, http.MethodGet, "/api/analytics?days="+bad, "", manager...).Code, bad)
 	}
 }
+
+func TestSessionTranscriptIsComplete(t *testing.T) {
+	// Ядро отвечает «Ответ» (goodStream), на втором вопросе падает.
+	failing := "event: error\ndata: {\"message\": \"сбой\"}\n\n"
+	good, bad := fakeCore(t, goodStream), fakeCore(t, failing)
+	s, store := newServer(t, good.URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	manager := []string{ManagerHeader, "manager-token"}
+	post := func(body string) {
+		t.Helper()
+		require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", body).Code)
+	}
+
+	// Сессия началась посреди разговора: приветствие и первый вопрос были до неё.
+	post(`{"messages": [{"role": "assistant", "content": "Здравствуйте!"}, {"role": "user", "content": "Привет"}],
+	  "session_id": "dialog-sess-1", "channel": "embed", "mode": "chat"}`)
+	post(`{"messages": [{"role": "assistant", "content": "Здравствуйте!"}, {"role": "user", "content": "Привет"},
+	  {"role": "assistant", "content": "Ответ"}, {"role": "user", "content": "Сколько стоит?"}],
+	  "session_id": "dialog-sess-1", "channel": "embed", "mode": "chat"}`)
+
+	// Вопрос, на который ядро не ответило, остаётся в переписке; повтор его не дублирует.
+	sBad, storeBad := rebuild(t, store, bad.URL)
+	_ = storeBad
+	retry := `{"messages": [{"role": "user", "content": "Привет"}, {"role": "assistant", "content": "Ответ"},
+	  {"role": "user", "content": "Сколько стоит?"}, {"role": "assistant", "content": "Ответ"},
+	  {"role": "user", "content": "Можно скидку?"}], "session_id": "dialog-sess-1", "channel": "embed", "mode": "chat"}`
+	do(sBad, http.MethodPost, "/api/chat", retry)
+	do(sBad, http.MethodPost, "/api/chat", retry)
+
+	// Копилот менеджера в ту же сессию ничего не пишет.
+	post(`{"messages": [{"role": "user", "content": "Вопрос копилота"}], "session_id": "dialog-sess-1", "mode": "copilot"}`)
+
+	rec := do(s, http.MethodGet, "/api/sessions/dialog-sess-1", "", manager...)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var h session.History
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &h))
+	var got []string
+	for _, turn := range h.Turns {
+		got = append(got, turn.Role+": "+turn.Content)
+	}
+	assert.Equal(t, []string{
+		"assistant: Здравствуйте!", "user: Привет", "assistant: Ответ",
+		"user: Сколько стоит?", "assistant: Ответ", "user: Можно скидку?",
+	}, got)
+	assert.Empty(t, h.LeadCode, "разговор без заявки")
+}
+
+func TestSessionListAndLeadLink(t *testing.T) {
+	s, store := newServer(t, fakeCore(t, goodStream).URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	manager := []string{ManagerHeader, "manager-token"}
+
+	for _, id := range []string{"list-sess-001", "list-sess-002", "list-sess-003"} {
+		body := `{"messages": [{"role": "user", "content": "Вопрос ` + id + `"}], "session_id": "` + id + `", "channel": "embed", "mode": "chat"}`
+		require.Equal(t, http.StatusOK, do(s, http.MethodPost, "/api/chat", body).Code)
+		time.Sleep(2 * time.Millisecond)
+	}
+	store.leads = append(store.leads, lead.Lead{Code: "cccccccccc", SessionID: "list-sess-002",
+		Contacts: lead.Contacts{Kind: lead.KindCallback}})
+
+	rec := do(s, http.MethodGet, "/api/sessions", "", manager...)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var page session.ListPage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Len(t, page.Items, 3)
+	assert.Equal(t, 3, page.Total)
+	assert.Equal(t, "list-sess-003", page.Items[0].ID, "новые сверху")
+	assert.Equal(t, 2, page.Items[0].Messages, "вопрос и ответ")
+	assert.False(t, page.Items[0].HasLead)
+	assert.True(t, page.Items[1].HasLead)
+	assert.Equal(t, "cccccccccc", page.Items[1].LeadCode)
+
+	rec = do(s, http.MethodGet, "/api/sessions?limit=1&offset=2", "", manager...)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, "list-sess-001", page.Items[0].ID)
+	assert.Equal(t, 3, page.Total)
+
+	rec = do(s, http.MethodGet, "/api/sessions/list-sess-002", "", manager...)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"lead_code":"cccccccccc"`)
+
+	assert.Equal(t, http.StatusBadRequest, do(s, http.MethodGet, "/api/sessions?limit=0", "", manager...).Code)
+	assert.Equal(t, http.StatusBadRequest, do(s, http.MethodGet, "/api/sessions?limit=999", "", manager...).Code)
+	assert.Equal(t, http.StatusBadRequest, do(s, http.MethodGet, "/api/sessions?offset=-1", "", manager...).Code)
+}
+
+func TestSessionListNeedsManager(t *testing.T) {
+	s, _ := newServer(t, fakeCore(t, goodStream).URL, func(c *config.Config) { c.HTTP.ManagerToken = "manager-token" })
+	assert.Equal(t, http.StatusUnauthorized, do(s, http.MethodGet, "/api/sessions", "").Code)
+	assert.Equal(t, http.StatusUnauthorized, do(s, http.MethodGet, "/api/sessions", "", ManagerHeader, "wrong").Code)
+
+	closed, _ := newServer(t, fakeCore(t, goodStream).URL, nil)
+	assert.Equal(t, http.StatusUnauthorized, do(closed, http.MethodGet, "/api/sessions", "", ManagerHeader, "").Code,
+		"EB_MANAGER_TOKEN не задан — диалоги закрыты для всех")
+}

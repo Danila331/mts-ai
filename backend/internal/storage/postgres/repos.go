@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Danila331/mts-ai/backend/internal/chat"
+	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	"github.com/Danila331/mts-ai/backend/internal/passport"
@@ -17,22 +18,68 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/storage/postgres/db"
 )
 
-// SaveAnswer кладёт ответ в журнал.
+// SaveAnswer кладёт ответ в журнал. Ответ чата с сессией ложится и в
+// переписку сессии — в той же транзакции, чтобы журнал и переписка не
+// разошлись.
 func (s *Store) SaveAnswer(ctx context.Context, rec chat.Record) error {
-	return s.Queries.SaveAnswer(ctx, db.SaveAnswerParams{
-		ID:        rec.ID,
-		Mode:      rec.Mode,
-		Question:  rec.Question,
-		Answer:    rec.Text,
-		Fallback:  rec.Fallback,
-		Error:     rec.Error,
-		Model:     rec.Model,
-		Turns:     int32(rec.Turns),
-		Timings:   object(rec.Timings),
-		Guard:     object(rec.Guard),
-		RequestID: rec.RequestID,
-		SessionID: optional(rec.SessionID),
-		Sources:   jsonArray(rec.Sources()),
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.SaveAnswer(ctx, db.SaveAnswerParams{
+			ID:        rec.ID,
+			Mode:      rec.Mode,
+			Question:  rec.Question,
+			Answer:    rec.Text,
+			Fallback:  rec.Fallback,
+			Error:     rec.Error,
+			Model:     rec.Model,
+			Turns:     int32(rec.Turns),
+			Timings:   object(rec.Timings),
+			Guard:     object(rec.Guard),
+			RequestID: rec.RequestID,
+			SessionID: optional(rec.SessionID),
+			Sources:   jsonArray(rec.Sources()),
+		}); err != nil {
+			return err
+		}
+		if rec.SessionID == "" {
+			return nil
+		}
+		if err := q.LockSessionMessages(ctx, rec.SessionID); err != nil {
+			return err
+		}
+		// Повтор доставки (тот же id ответа) вторую реплику не добавляет.
+		if last, err := q.LastSessionMessage(ctx, rec.SessionID); err == nil &&
+			last.Role == string(dialog.RoleAssistant) && last.Content == rec.Text {
+			return nil
+		}
+		return q.AddSessionMessage(ctx, db.AddSessionMessageParams{
+			SessionID: rec.SessionID, Role: string(dialog.RoleAssistant), Content: rec.Text, AnswerID: optional(rec.ID),
+		})
+	})
+}
+
+// SyncTurns дописывает в переписку сессии реплики запроса, которых в ней
+// ещё нет (dialog.Unseen). Сессия должна уже существовать (TouchSession).
+func (s *Store) SyncTurns(ctx context.Context, sessionID string, turns []dialog.Turn) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockSessionMessages(ctx, sessionID); err != nil {
+			return err
+		}
+		var last *dialog.Turn
+		row, err := q.LastSessionMessage(ctx, sessionID)
+		switch {
+		case err == nil:
+			last = &dialog.Turn{Role: dialog.Role(row.Role), Content: row.Content}
+		case !errors.Is(err, pgx.ErrNoRows):
+			return err
+		}
+		for _, t := range dialog.Unseen(last, turns) {
+			if err := q.AddSessionMessage(ctx, db.AddSessionMessageParams{
+				SessionID: sessionID, Role: string(t.Role), Content: t.Content,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -53,16 +100,14 @@ func (s *Store) TouchSession(ctx context.Context, ref session.Ref, mode, title s
 	})
 }
 
-// History — сессия и её реплики по порядку: вопрос клиента, затем ответ.
+// History — сессия, её переписка по порядку и заявка, если она есть. У
+// сессий старше 000009 переписки нет — реплики собираются из журнала
+// ответов: вопрос клиента, затем ответ.
 func (s *Store) History(ctx context.Context, id string) (session.History, error) {
 	row, err := s.Queries.GetSession(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return session.History{}, session.ErrNotFound
 	}
-	if err != nil {
-		return session.History{}, err
-	}
-	answers, err := s.Queries.SessionAnswers(ctx, &id)
 	if err != nil {
 		return session.History{}, err
 	}
@@ -73,18 +118,67 @@ func (s *Store) History(ctx context.Context, id string) (session.History, error)
 			Page: json.RawMessage(row.Page), Passport: &view, Role: row.Role, RoleSource: row.RoleSource, Level: row.Level,
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		},
-		Turns: make([]session.Turn, 0, 2*len(answers)),
+		Turns: []session.Turn{},
 	}
-	for _, a := range answers {
-		var sources []string
-		_ = json.Unmarshal(a.Sources, &sources)
-		h.Turns = append(h.Turns,
-			session.Turn{Role: "user", Content: a.Question, At: a.CreatedAt},
-			session.Turn{Role: "assistant", Content: a.Answer, AnswerID: a.ID, Sources: sources,
-				Fallback: a.Fallback, At: a.CreatedAt},
-		)
+	msgs, err := s.Queries.SessionMessages(ctx, id)
+	if err != nil {
+		return session.History{}, err
+	}
+	for _, m := range msgs {
+		t := session.Turn{Role: m.Role, Content: m.Content, Fallback: m.Fallback, At: m.CreatedAt}
+		if m.AnswerID != nil {
+			t.AnswerID = *m.AnswerID
+			_ = json.Unmarshal(m.Sources, &t.Sources)
+		}
+		h.Turns = append(h.Turns, t)
+	}
+	if len(msgs) == 0 {
+		answers, err := s.Queries.SessionAnswers(ctx, &id)
+		if err != nil {
+			return session.History{}, err
+		}
+		for _, a := range answers {
+			var sources []string
+			_ = json.Unmarshal(a.Sources, &sources)
+			h.Turns = append(h.Turns,
+				session.Turn{Role: "user", Content: a.Question, At: a.CreatedAt},
+				session.Turn{Role: "assistant", Content: a.Answer, AnswerID: a.ID, Sources: sources,
+					Fallback: a.Fallback, At: a.CreatedAt},
+			)
+		}
+	}
+	l, err := s.Queries.SessionLead(ctx, &id)
+	switch {
+	case err == nil:
+		h.LeadCode, h.LeadKind = l.Code, l.Kind
+	case !errors.Is(err, pgx.ErrNoRows):
+		return session.History{}, err
 	}
 	return h, nil
+}
+
+// SessionList — диалоги менеджера, новые сверху: чат клиентов, с заявкой и
+// без.
+func (s *Store) SessionList(ctx context.Context, limit, offset int) (session.ListPage, error) {
+	rows, err := s.Queries.ListSessions(ctx, db.ListSessionsParams{RowLimit: int32(limit), RowOffset: int32(offset)})
+	if err != nil {
+		return session.ListPage{}, err
+	}
+	total, err := s.Queries.CountSessions(ctx)
+	if err != nil {
+		return session.ListPage{}, err
+	}
+	page := session.ListPage{Items: make([]session.ListItem, 0, len(rows)), Total: int(total)}
+	for _, r := range rows {
+		view := passport.Parse(r.Passport).Render()
+		page.Items = append(page.Items, session.ListItem{
+			ID: r.ID, Channel: r.Channel, Title: r.Title, Role: r.Role,
+			Product: view.Product, ProductLabel: view.ProductLabel,
+			Messages: int(r.MessageCount), HasLead: r.LeadCode != "", LeadCode: r.LeadCode, LeadKind: r.LeadKind,
+			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		})
+	}
+	return page, nil
 }
 
 // CreateLead сохраняет заявку. Занятый номер отдаётся как

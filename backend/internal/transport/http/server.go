@@ -59,6 +59,7 @@ type (
 	}
 	Sessions interface {
 		History(ctx context.Context, id string) (session.History, error)
+		SessionList(ctx context.Context, limit, offset int) (session.ListPage, error)
 	}
 	Passports interface {
 		LoadPassport(ctx context.Context, id string) (passport.Passport, error)
@@ -261,7 +262,8 @@ func (s *Server) routes() {
 	api.POST("/settings/login", s.adminLogin, settingsLimit, s.requireAdmin)
 	// Разговоры клиентов — только менеджеру (EB_MANAGER_TOKEN): там их
 	// реплики, то есть персональные данные.
-	api.GET("/sessions/:id", s.sessionHistory, settingsLimit, s.requireManager)
+	api.GET("/sessions", s.sessionList, managerLimit, s.requireManager)
+	api.GET("/sessions/:id", s.sessionHistory, managerLimit, s.requireManager)
 	// Заявки на экране менеджера (T5): список, карточка с историей
 	// разговора и смена статуса. Тот же токен, что у разговоров.
 	api.GET("/leads", s.leadList, managerLimit, s.requireManager)

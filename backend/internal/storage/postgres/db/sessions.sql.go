@@ -10,6 +10,45 @@ import (
 	"time"
 )
 
+const addSessionMessage = `-- name: AddSessionMessage :exec
+INSERT INTO session_messages (session_id, seq, role, content, answer_id)
+SELECT s.id,
+       (SELECT COALESCE(max(m.seq), 0) + 1 FROM session_messages m WHERE m.session_id = s.id),
+       $1::text, $2::text, $3::text
+FROM sessions s WHERE s.id = $4::text AND s.mode = 'chat'
+`
+
+type AddSessionMessageParams struct {
+	Role      string
+	Content   string
+	AnswerID  *string
+	SessionID string
+}
+
+// Нет сессии — нет и строки: реплика не должна ронять запись ответа.
+// Переписку ведёт только чат клиента: режим сессии — режим последнего
+// вопроса, копилот менеджера в неё не пишет.
+func (q *Queries) AddSessionMessage(ctx context.Context, arg AddSessionMessageParams) error {
+	_, err := q.db.Exec(ctx, addSessionMessage,
+		arg.Role,
+		arg.Content,
+		arg.AnswerID,
+		arg.SessionID,
+	)
+	return err
+}
+
+const countSessions = `-- name: CountSessions :one
+SELECT count(*) FROM sessions WHERE mode = 'chat'
+`
+
+func (q *Queries) CountSessions(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countSessions)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getPassport = `-- name: GetPassport :one
 SELECT passport FROM sessions WHERE id = $1
 `
@@ -59,6 +98,100 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const lastSessionMessage = `-- name: LastSessionMessage :one
+SELECT role, content FROM session_messages WHERE session_id = $1 ORDER BY seq DESC LIMIT 1
+`
+
+type LastSessionMessageRow struct {
+	Role    string
+	Content string
+}
+
+func (q *Queries) LastSessionMessage(ctx context.Context, sessionID string) (LastSessionMessageRow, error) {
+	row := q.db.QueryRow(ctx, lastSessionMessage, sessionID)
+	var i LastSessionMessageRow
+	err := row.Scan(&i.Role, &i.Content)
+	return i, err
+}
+
+const listSessions = `-- name: ListSessions :many
+SELECT s.id, s.channel, s.title, s.role, s.passport, s.created_at, s.updated_at,
+       CASE WHEN mc.n > 0 THEN mc.n ELSE 2 * ac.n END::int AS message_count,
+       COALESCE(l.code, '')::text AS lead_code,
+       COALESCE(l.kind, '')::text AS lead_kind
+FROM sessions s
+CROSS JOIN LATERAL (SELECT count(*) AS n FROM session_messages m WHERE m.session_id = s.id) mc
+CROSS JOIN LATERAL (SELECT count(*) AS n FROM answers a WHERE a.session_id = s.id) ac
+LEFT JOIN LATERAL (
+    SELECT code, kind FROM leads WHERE session_id = s.id ORDER BY created_at DESC, id LIMIT 1
+) l ON true
+WHERE s.mode = 'chat'
+ORDER BY s.updated_at DESC, s.id
+LIMIT $2 OFFSET $1
+`
+
+type ListSessionsParams struct {
+	RowOffset int32
+	RowLimit  int32
+}
+
+type ListSessionsRow struct {
+	ID           string
+	Channel      string
+	Title        string
+	Role         string
+	Passport     []byte
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	MessageCount int32
+	LeadCode     string
+	LeadKind     string
+}
+
+// Список диалогов менеджера: чат клиентов, новые сверху. Число реплик —
+// из переписки, а у сессий старше 000009 — две на каждый ответ журнала.
+func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]ListSessionsRow, error) {
+	rows, err := q.db.Query(ctx, listSessions, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionsRow{}
+	for rows.Next() {
+		var i ListSessionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Channel,
+			&i.Title,
+			&i.Role,
+			&i.Passport,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MessageCount,
+			&i.LeadCode,
+			&i.LeadKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockSessionMessages = `-- name: LockSessionMessages :exec
+SELECT pg_advisory_xact_lock(hashtext('energytool:messages:' || $1::text))
+`
+
+// Переписка сессии (000009). Запись реплик идёт под блокировкой сессии:
+// два вопроса одного разговора подряд не должны получить один seq.
+func (q *Queries) LockSessionMessages(ctx context.Context, sessionID string) error {
+	_, err := q.db.Exec(ctx, lockSessionMessages, sessionID)
+	return err
 }
 
 const savePassport = `-- name: SavePassport :execrows
@@ -113,6 +246,68 @@ func (q *Queries) SessionAnswers(ctx context.Context, sessionID *string) ([]Sess
 			&i.Mode,
 			&i.Sources,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const sessionLead = `-- name: SessionLead :one
+SELECT code, kind FROM leads WHERE session_id = $1 ORDER BY created_at DESC, id LIMIT 1
+`
+
+type SessionLeadRow struct {
+	Code string
+	Kind string
+}
+
+// Заявка сессии (последняя): номер и тип для списка диалогов и карточки.
+func (q *Queries) SessionLead(ctx context.Context, sessionID *string) (SessionLeadRow, error) {
+	row := q.db.QueryRow(ctx, sessionLead, sessionID)
+	var i SessionLeadRow
+	err := row.Scan(&i.Code, &i.Kind)
+	return i, err
+}
+
+const sessionMessages = `-- name: SessionMessages :many
+SELECT m.role, m.content, m.answer_id, m.created_at,
+       COALESCE(a.sources, '[]'::jsonb) AS sources, COALESCE(a.fallback, false)::boolean AS fallback
+FROM session_messages m
+LEFT JOIN answers a ON a.id = m.answer_id
+WHERE m.session_id = $1
+ORDER BY m.seq
+`
+
+type SessionMessagesRow struct {
+	Role      string
+	Content   string
+	AnswerID  *string
+	CreatedAt time.Time
+	Sources   []byte
+	Fallback  bool
+}
+
+func (q *Queries) SessionMessages(ctx context.Context, sessionID string) ([]SessionMessagesRow, error) {
+	rows, err := q.db.Query(ctx, sessionMessages, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionMessagesRow{}
+	for rows.Next() {
+		var i SessionMessagesRow
+		if err := rows.Scan(
+			&i.Role,
+			&i.Content,
+			&i.AnswerID,
+			&i.CreatedAt,
+			&i.Sources,
+			&i.Fallback,
 		); err != nil {
 			return nil, err
 		}
