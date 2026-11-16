@@ -46,7 +46,9 @@ def make_app(url: str, **extra) -> core_api.App:
 
 def ask(app: core_api.App, mode: str = "chat", **body) -> tuple:
     events = []
-    payload = app.chat({"messages": QUESTION, "mode": mode, **body}, lambda name, data: events.append((name, data)))
+    # Вопрос о цене — триггер предложения менеджера (scripts/handoff.py); здесь проверяется потоковая выдача,
+    # поэтому заявка «уже есть»: к тексту ответа ничего не дописывается.
+    payload = app.chat({"messages": QUESTION, "mode": mode, "has_lead": True, **body}, lambda name, data: events.append((name, data)))
     deltas = [data["text"] for name, data in events if name == "delta"]
     return payload, deltas, [name for name, _ in events]
 

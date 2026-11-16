@@ -28,7 +28,7 @@ const clientTexts = (messages: Message[]) => messages.filter((m) => m.role === "
 const orgType = (passport?: Passport) => passport?.fields.find((f) => f.key === "org_type")?.value;
 
 /** Роль (T15) и уровень объяснения (T16), с которыми уходит вопрос. */
-type Profile = RoleState & { level?: LevelId | "" };
+type Profile = RoleState & { level?: LevelId | ""; hasLead?: boolean };
 
 /** История для API: только завершённые реплики, без отладочных полей. */
 export function toTurns(messages: Message[]): Turn[] {
@@ -180,6 +180,7 @@ export function useChat(
             role: profile.role,
             roleSource: profile.roleSource,
             level: profile.level,
+            hasLead: profile.hasLead,
           },
         );
       } catch (err) {
@@ -213,7 +214,7 @@ export function useChat(
       const assistant: Message = { id: uid(), role: "assistant", content: "", createdAt: now, pending: true };
       const history = [...active.messages.filter((m) => !m.error), user];
       const profile: Profile =
-        mode === "chat" ? { ...roleFields(resolveRole(active, clientTexts(history), orgType(active.passport))), level: active.level } : {};
+        mode === "chat" ? { ...roleFields(resolveRole(active, clientTexts(history), orgType(active.passport))), level: active.level, hasLead: !!active.lead } : {};
       update(active.id, (s) => ({
         ...s,
         ...profile,
@@ -249,7 +250,7 @@ export function useChat(
       }));
       const profile: Profile =
         mode === "chat"
-          ? { ...roleFields(resolveRole(active, clientTexts(history), orgType(active.passport))), level: level ?? active.level }
+          ? { ...roleFields(resolveRole(active, clientTexts(history), orgType(active.passport))), level: level ?? active.level, hasLead: !!active.lead }
           : {};
       void run(active.id, history, assistant.id, profile);
       return assistant.id;

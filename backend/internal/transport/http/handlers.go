@@ -136,6 +136,9 @@ type chatRequest struct {
 	// technical. Поле есть, а значение пустое — обычный уровень. Только
 	// форма ответа; в промпт попадает в режиме chat.
 	Level *string `json:"level"`
+	// HasLead — на фронте по этому разговору уже есть заявка: ядро не
+	// предлагает передать менеджеру повторно. Только режим chat.
+	HasLead bool `json:"has_lead"`
 }
 
 // maxOverrides — предел поля overrides. Настроек полтора десятка, и их
@@ -202,7 +205,8 @@ func (s *Server) chat(c echo.Context) error {
 
 	mode := dialog.ParseMode(body.Mode)
 	relay, err := s.deps.Chat.Ask(c.Request().Context(),
-		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref, Role: role, Level: level})
+		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref, Role: role, Level: level,
+			HasLead: body.HasLead})
 	if err != nil {
 		return s.coreFail(c, err)
 	}
