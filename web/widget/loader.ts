@@ -124,6 +124,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   .unread .badge { display: block; }
   .bubble {
     position: fixed; bottom: ${cfg.offsetY + 70}px; ${side}: ${cfg.offsetX}px; width: 304px;
+    max-width: calc(100vw - ${cfg.offsetX * 2}px); /* узкий экран (телефон 320 px, превью): не вылезать за край */
     background: #fff; color: #1D2023; border-radius: 20px; border-${side === "right" ? "bottom-right" : "bottom-left"}-radius: 6px;
     padding: 14px 14px 14px 14px; font: 14px/1.45 ${font};
     box-shadow: 0 2px 6px rgba(29,32,35,.06), 0 14px 40px rgba(29,32,35,.16), 0 0 0 1px rgba(29,32,35,.06); cursor: pointer;

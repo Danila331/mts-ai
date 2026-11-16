@@ -314,6 +314,41 @@ describe("сборка итогов из сессии", () => {
 });
 
 describe("краевые случаи", () => {
+  test("продукт с «честным нет» — в итогах с причиной, но без чек-листа (живой прогон: магазин на 40 кВт)", () => {
+    const reason = "Присоединённая мощность ниже 750 кВт - выход на оптовый рынок невозможен.";
+    const a = answer(
+      [
+        cite("Выход на оптовый рынок невозможен при присоединённой мощности ниже 750 кВт для вашего магазина.", [
+          sup("o1", OREM, "Порог доступа определяется присоединённой мощностью", 0.8),
+        ]),
+      ],
+      {
+        honest_no: [
+          {
+            rule: "orem_power",
+            product: "Выход на оптовый рынок",
+            reason,
+            fact: "40 кВт",
+            section: { chunk_id: "o1", doc: OREM, title: "Оптовый рынок", path: "Порог" },
+            alternative: null,
+          },
+        ],
+      },
+    );
+    const s = buildSummary({
+      id: "h",
+      title: "Магазин",
+      createdAt: 0,
+      updatedAt: 0,
+      messages: [user("У нас магазин, 40 кВт, хотим на оптовый рынок."), bot(a)],
+    });
+    const orem = s.products.find((p) => p.key === "wholesale");
+    assert.equal(orem?.notFit, reason);
+    assert.ok(!s.checklists.some((c) => c.key === "wholesale"), "данные под то, что не подойдёт, не просим");
+    assert.deepEqual(s.checklists.map((c) => c.key), ["general"]);
+  });
+
+
   test("случайное совпадение с разделом продукта не делает его обсуждённым (живой прогон)", () => {
     const s = buildSummary({
       id: "w",

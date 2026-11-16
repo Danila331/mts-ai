@@ -63,6 +63,8 @@ export function useChat(
   // Напечатанный текст незавершённых ответов (id сообщения → текст) — отдельно от сессий: они пишутся
   // в localStorage на каждое изменение, а дельты приходят по слову.
   const [live, setLive] = useState<Record<string, string>>({});
+  // Сколько раз нажали «Новый диалог»: пустой диалог переиспользуется, и открытый в нём мастер должен закрыться.
+  const [fresh, setFresh] = useState(0);
   const controllers = useRef(new Map<string, AbortController>());
   // Поля паспорта, которые ждут конца ответа (мастер T7): см. setWizard.
   const pendingPassport = useRef(new Map<string, Record<string, string>>());
@@ -260,6 +262,7 @@ export function useChat(
   }, [active]);
 
   const create = useCallback(() => {
+    setFresh((n) => n + 1);
     // Пустой диалог не плодим: если активный пуст — просто остаёмся в нём.
     if (active && !active.messages.length) return active.id;
     const s = newSession();
@@ -341,6 +344,7 @@ export function useChat(
     sessions,
     active,
     activeId: active?.id ?? "",
+    fresh,
     select: setActiveId,
     create,
     remove,

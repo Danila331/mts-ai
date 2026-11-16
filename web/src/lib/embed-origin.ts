@@ -48,8 +48,11 @@ export function isLocalOrigin(origin: string): boolean {
   }
 }
 
-/** Источники, которым разрешено встраивать локально (пустой allowlist): любые порты локального стенда. */
-export const LOCAL_ANCESTORS = ["http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*", "http://*.localhost:*"];
+/**
+ * Источники, которым разрешено встраивать локально (пустой allowlist): любые порты локального стенда. Без [::1]:
+ * грамматика CSP не знает IPv6-адресов, и Chrome отбрасывал источник с ошибкой в консоли на каждой странице.
+ */
+export const LOCAL_ANCESTORS = ["http://localhost:*", "http://127.0.0.1:*", "http://*.localhost:*"];
 
 /**
  * Значение frame-ancestors для /embed. Свой origin всегда; allowlist — если задан; пустой allowlist — только

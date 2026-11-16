@@ -18,12 +18,13 @@ import {
   flowTexts,
   kbChunkId,
   kbRefHref,
+  maxSteps,
   nextStep,
   passportValues,
   unanswer,
   visibleSteps,
 } from "./engine.ts";
-import { DIAGNOSTICS, FLOWS } from "./flows/index.ts";
+import { DIAGNOSTICS, FLOWS, PRICE_NAVIGATOR } from "./flows/index.ts";
 
 const KB = new URL("../../../../knowledge-base/", import.meta.url);
 const PASSPORT_GO = new URL("../../../../backend/internal/passport/passport.go", import.meta.url);
@@ -366,5 +367,23 @@ describe("движок: шаги, ветвления, паспорт", () => {
     // У раздела нет своего текста — первый подраздел.
     assert.equal(kbChunkId(docs, { doc: "20-products/22-askue.md", section: "Кому подходит" }), "ccc");
     assert.equal(kbRefHref(null, ref), `/kb?doc=${encodeURIComponent(ref.doc)}`);
+  });
+});
+
+describe("длина пути мастера", () => {
+  test("до первого ответа — самый длинный путь, а не одна видимая развилка (ручной прогон)", () => {
+    assert.equal(visibleSteps(PRICE_NAVIGATOR, {}).length, 1, "видна только развилка");
+    assert.equal(maxSteps(PRICE_NAVIGATOR, {}), 3, "а путь — до трёх вопросов");
+    for (const flow of FLOWS) {
+      const longest = maxSteps(flow, {});
+      assert.ok(longest >= 1 && longest <= flow.steps.length, flow.id);
+    }
+  });
+  test("после ответов длина сжимается до пройденного пути", () => {
+    let answers: WizardAnswers = {};
+    for (let step = nextStep(DIAGNOSTICS, answers); step; step = nextStep(DIAGNOSTICS, answers)) {
+      answers = answer(answers, step.id, { option: step.options[0].id });
+    }
+    assert.equal(maxSteps(DIAGNOSTICS, answers), visibleSteps(DIAGNOSTICS, answers).length);
   });
 });
