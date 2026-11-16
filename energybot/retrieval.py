@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -17,12 +16,12 @@ from pathlib import Path
 import numpy as np
 
 from .kb import Chunk, KnowledgeBase
+from .llm import env
 from .text import tokens
 
 # Общие правила консультации нужны в любом ответе.
 ALWAYS_DOC = "02-product-scope-and-limits.md"
 ALWAYS_SECTIONS = ("Общие границы", "Когда требуется специалист")
-REFERENCE_PREFIX = "00-reference/"
 
 
 class BM25:
@@ -49,72 +48,6 @@ class BM25:
         return out
 
 
-class CharTfidf:
-    """TF-IDF по символьным n-граммам внутри слов — как TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5)).
-
-    Ловит то, что стеммер режет по-разному: падежи и словообразование («шиферная» — «шифер»), опечатки,
-    составные и латинские слова (АСКУЭ, ОРЭМ, SIM). Своя реализация на словарях, чтобы не тащить
-    scikit-learn в сабмит: база — пара сотен разделов, обратный индекс считается за доли секунды."""
-
-    WORD = re.compile(r"\w+")
-
-    def __init__(self, docs: list, lo: int = 3, hi: int = 5):
-        self.lo, self.hi, self.n = lo, hi, len(docs)
-        counts = [self._grams(d) for d in docs]
-        df = Counter(g for c in counts for g in c)
-        # Сглаженный idf, как в scikit-learn по умолчанию.
-        self.idf = {g: math.log((1 + self.n) / (1 + f)) + 1 for g, f in df.items()}
-        self.postings = defaultdict(list)  # n-грамма → [(номер раздела, вес)]
-        for i, c in enumerate(counts):
-            for g, w in self._weigh(c).items():
-                self.postings[g].append((i, w))
-
-    def _grams(self, text: str) -> Counter:
-        out = Counter()
-        for word in self.WORD.findall(text.lower().replace("ё", "е")):
-            padded = f" {word} "
-            if len(padded) < self.lo:
-                continue
-            for n in range(self.lo, self.hi + 1):
-                if n > len(padded):
-                    break
-                for i in range(len(padded) - n + 1):
-                    out[padded[i:i + n]] += 1
-        return out
-
-    def _weigh(self, counts: Counter) -> dict:
-        vec = {g: c * self.idf[g] for g, c in counts.items() if g in self.idf}
-        norm = math.sqrt(sum(v * v for v in vec.values())) or 1.0
-        return {g: v / norm for g, v in vec.items()}
-
-    def scores(self, query: str) -> np.ndarray:
-        out = np.zeros(self.n)
-        for g, w in self._weigh(self._grams(query)).items():
-            for i, d in self.postings.get(g, ()):
-                out[i] += w * d
-        return out
-
-
-# Qwen3-Reranker — модель «да/нет» поверх чат-шаблона; инструкцию и шаблон собираем на клиенте
-# (как в примере vLLM для Qwen3-Reranker). EB_RERANK_TEMPLATE: qwen — полный шаблон, instruct — только
-# строки <Instruct>/<Query>, raw — запрос и раздел как есть (если прокси сам применяет шаблон).
-RERANK_INSTRUCTION = ("Given a customer question to an energy services consultant (MTS EnergyTool), "
-                      "judge whether this knowledge base section helps answer it")
-RERANK_PREFIX = ("<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and "
-                 "the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n"
-                 "<|im_start|>user\n")
-RERANK_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-
-
-def rerank_inputs(query: str, documents: list, template: str = "raw") -> tuple:
-    if template == "qwen":
-        return (f"{RERANK_PREFIX}<Instruct>: {RERANK_INSTRUCTION}\n<Query>: {query}\n",
-                [f"<Document>: {d}{RERANK_SUFFIX}" for d in documents])
-    if template == "instruct":
-        return f"<Instruct>: {RERANK_INSTRUCTION}\n<Query>: {query}", documents
-    return query, documents
-
-
 @dataclass
 class Hit:
     chunk: Chunk
@@ -123,18 +56,16 @@ class Hit:
 
 
 class Retriever:
-    def __init__(self, kb: KnowledgeBase, api=None, index_dir: Path | None = None, dense: bool = True,
-                 char_ngrams: bool = False):
+    def __init__(self, kb: KnowledgeBase, api=None, index_dir: Path | None = None, dense: bool = True):
         self.kb = kb
         self.api = api
+        # Отдельный мини-индекс по справочнику 00-reference: вопросы про продукт
+        # не вытягивают «какие данные нужны / что делаем» обычным поиском,
+        # а эталонные ответы жюри опираются на эти разделы.
+        self.ref_chunks = [c for c in kb.chunks if c.doc.startswith("00-reference/")]
+        self.ref_bm25 = BM25([tokens(f"{c.path} {c.text}") for c in self.ref_chunks]) if self.ref_chunks else None
         # Путь и заголовок документа повторяются, чтобы вопросы FAQ в заголовках весили больше.
         self.bm25 = BM25([tokens(f"{c.path} {c.path} {c.title} {c.text}") for c in kb.chunks])
-        # Мини-индекс справочника 00-reference (поиск из feature/verify-ensemble): в контекст подмешивается
-        # лучший справочный раздел по запросу.
-        self.ref_chunks = [c for c in kb.chunks if c.doc.startswith(REFERENCE_PREFIX)]
-        self.ref_bm25 = BM25([tokens(f"{c.path} {c.text}") for c in self.ref_chunks]) if self.ref_chunks else None
-        # Третий лексический канал (EB_ARCH=factmap): символьные n-граммы.
-        self.chars = CharTfidf([f"{c.path} {c.title} {c.text}" for c in kb.chunks]) if char_ngrams else None
         self.order = {c.id: i for i, c in enumerate(kb.chunks)}
         self.vectors = None
         if api is not None and dense:
@@ -168,44 +99,37 @@ class Retriever:
         (index_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     # ---------- поиск ----------
-    def candidates(self, query: str, query_vec=None, n: int = 20, exclude: set | None = None,
-                   char_query: str | None = None) -> list:
-        """Reciprocal Rank Fusion (k=60) каналов: BM25, символьные n-граммы (если включены), bge-m3.
-        exclude — id разделов, которые искать не нужно (например, уже стоящие в карте фактов)."""
+    def candidates(self, query: str, query_vec=None, n: int = 20) -> list:
         lex = self.bm25.scores(tokens(query, expand=True))
-        ranks = [np.argsort(-lex)]
-        if self.chars is not None:
-            ranks.append(np.argsort(-self.chars.scores(char_query or query), kind="stable"))
-        # Несовпадение размерности — индекс посчитан другой моделью: работаем без плотного канала.
-        if self.vectors is not None and query_vec is not None and len(query_vec) == self.vectors.shape[1]:
+        matched = np.flatnonzero(lex > 0)
+        ranks = [matched[np.argsort(-lex[matched], kind="stable")]]
+        # Несовпадение размерности = индекс посчитан другой моделью: работаем на BM25.
+        if self.vectors is not None and query_vec is not None \
+                and len(query_vec) == self.vectors.shape[1]:
             q = np.asarray(query_vec, dtype=np.float32)
-            q /= np.linalg.norm(q) + 1e-9
-            with np.errstate(all="ignore"):
-                sims = np.nan_to_num(self.vectors @ q, nan=0.0, posinf=0.0, neginf=0.0)
-            ranks.append(np.argsort(-sims))
+            norm = np.linalg.norm(q)
+            if np.isfinite(norm) and norm > 0:
+                with np.errstate(all="ignore"):
+                    sims = np.nan_to_num(self.vectors @ (q / norm), nan=0.0, posinf=0.0, neginf=0.0)
+                ranks.append(np.argsort(-sims, kind="stable"))
+        # Reciprocal Rank Fusion.
         fused = Counter()
-        for order in ranks:
-            r = 0
-            for idx in order:
-                if r >= 60:
-                    break
-                if exclude and self.kb.chunks[int(idx)].id in exclude:
-                    continue
-                fused[int(idx)] += 1.0 / (60 + r)
-                r += 1
+        for weight, order in zip((1.0, 1.2), ranks):  # dense-канал сильнее (как у 0.62-решения)
+            for r, idx in enumerate(order[:60]):
+                fused[int(idx)] += weight / (60 + r)
         return [Hit(self.kb.chunks[i], s, "rrf") for i, s in fused.most_common(n)]
 
     def search(self, query: str, query_vec=None, rerank_query: str | None = None,
-               n_candidates: int = 20, rerank: bool = True, exclude: set | None = None,
-               template: str = "raw", char_query: str | None = None) -> list:
+               n_candidates: int = 20, rerank: bool = True) -> list:
         """Кандидаты, упорядоченные по релевантности (после реранкера, если он доступен)."""
-        hits = self.candidates(query, query_vec, n_candidates, exclude, char_query)
+        hits = self.candidates(query, query_vec, n_candidates)
         if rerank and self.api is not None and self.api.can_rerank and hits:
             try:
-                scores = self.api.rerank(*rerank_inputs(rerank_query or query, [h.chunk.render() for h in hits],
-                                                        template))
-                hits = [Hit(h.chunk, scores[i], "rerank") for i, h in enumerate(hits)]
-                hits.sort(key=lambda h: -h.score)
+                scores = self.api.rerank(rerank_query or query, [h.chunk.render() for h in hits])
+                ranked = [Hit(h.chunk, score, "rerank")
+                          for h, score in zip(hits, scores) if math.isfinite(score)]
+                if ranked:
+                    return sorted(ranked, key=lambda h: -h.score)
             except Exception as exc:  # noqa: BLE001
                 print(f"[retrieval] реранкер недоступен: {exc}", file=sys.stderr)
         return hits
@@ -222,6 +146,9 @@ class Retriever:
         разделов с 0,53 до ~0,76).
         """
         main = [h.chunk for h in ranked[:top_k]]
+        # Lost-in-the-middle (Liu et al.): лучший чанк первым, второй по силе — последним.
+        if len(main) > 2:
+            main = [main[0], *main[2:], main[1]]
         seen = {c.id for c in main}
         rules = []
 
@@ -241,11 +168,12 @@ class Retriever:
         for c in self.kb.chunks:
             if c.doc.endswith(ALWAYS_DOC) and c.path in ALWAYS_SECTIONS:
                 add(rules, c)
-        if ref_query and self.ref_bm25:  # лучший справочный раздел по запросу
+        # Справочные разделы могут дополнять друг друга: условия и входные данные.
+        if ref_query and self.ref_bm25:
             scores = self.ref_bm25.scores(tokens(ref_query, expand=True))
-            best = int(np.argmax(scores)) if scores.size else -1
-            if best >= 0 and scores[best] > 0:
-                add(rules, self.ref_chunks[best])
+            for index in np.argsort(-scores, kind="stable")[:2]:
+                if scores[index] > 0:
+                    add(rules, self.ref_chunks[index])
 
         extra = []
         if expand_docs > 0:
@@ -254,64 +182,33 @@ class Retriever:
                 if math.isfinite(h.score):
                     doc_score[h.chunk.doc] += max(0.0, float(h.score))
             top_docs = [d for d, _ in sorted(doc_score.items(), key=lambda x: -x[1])[:expand_docs]]
+            # Второй и дальше — только если вес не ниже половины лидера (иначе шум).
+            if top_docs and env("EB_EXPAND_RATIO", "0.5") != "0":
+                top_docs = [top_docs[0]] + [d for d in top_docs[1:]
+                                            if doc_score[d] >= float(env("EB_EXPAND_RATIO", "0.5")) * doc_score[top_docs[0]]]
+            # Условное раскрытие: второй+ документ — только при весе >= EB_DOC_RATIO * вес первого.
+            if len(top_docs) > 1:
+                ratio = float(__import__("os").environ.get("EB_DOC_RATIO", "0.5"))
+                top_docs = top_docs[:1] + [d for d in top_docs[1:]
+                                           if doc_score[d] >= ratio * doc_score[top_docs[0]]]
             rank_pos = {h.chunk.id: i for i, h in enumerate(ranked)}
             pool = [c for c in self.kb.chunks if c.doc in top_docs and c.id not in seen]
-            pool.sort(key=lambda c: rank_pos.get(c.id, len(ranked) + self.order[c.id]))
+            lexical = self.bm25.scores(tokens(ref_query, expand=True))
+            pool.sort(key=lambda c: (rank_pos.get(c.id, len(ranked)), -lexical[self.order[c.id]]))
             size = sum(len(c.render()) for c in main + rules)
             for c in pool:
                 length = len(c.render())
                 if size + length <= char_budget:
                     add(extra, c)
                     size += length
-        return main + extra + rules
-
-    # ---------- контекст «справочник + документы целиком» ----------
-    def reference(self) -> list:
-        """Справочные документы (карта продуктов, числа, границы, состав данных для расчёта).
-        Нужны почти в каждом ответе и одинаковы для всех вопросов — идут в неизменяемую часть промпта."""
-        return [c for c in self.kb.chunks if c.doc.startswith(REFERENCE_PREFIX)]
-
-    def rank_docs(self, ranked: list, depth: int = 20) -> list:
-        """Документы по убыванию релевантности: вклад фрагмента убывает с его местом в выдаче."""
-        score = defaultdict(float)
-        for pos, h in enumerate(ranked[:depth]):
-            if not h.chunk.doc.startswith(REFERENCE_PREFIX):
-                score[h.chunk.doc] += 1.0 / (3 + pos)
-        return [d for d, _ in sorted(score.items(), key=lambda x: -x[1])]
-
-    def materials(self, ranked: list, top_k: int = 8, full_docs: int = 2, char_budget: int = 40000,
-                  skip_reference: bool = True) -> tuple:
-        """Материалы по вопросу: самые релевантные документы целиком + лучшие фрагменты остальных.
-
-        Документы базы небольшие (3–17 тыс. символов) и написаны связно: «Кому подходит»,
-        «Что мы не делаем», «Частые вопросы», «Чего утверждать нельзя». Эталон обычно собран из
-        нескольких разделов одного документа, поэтому документ целиком надёжнее набора фрагментов.
-        Возвращает (документы целиком, отдельные фрагменты).
-        """
-        skip = {c.id for c in self.reference()} if skip_reference else set()
-        docs = []
-        size = 0
-        for doc in self.rank_docs(ranked)[:full_docs]:
-            length = sum(len(c.render()) for c in self.kb.chunks if c.doc == doc)
-            if docs and size + length > char_budget:
-                continue
-            docs.append(doc)
-            size += length
-        extra = []
-        for h in ranked:
-            c = h.chunk
-            if len(extra) >= top_k:
-                break
-            if c.id in skip or c.doc in docs:
-                continue
-            if size + len(c.render()) > char_budget:
-                continue
-            extra.append(c)
-            size += len(c.render())
-        return docs, extra
-
-    def render_doc(self, doc: str) -> str:
-        chunks = [c for c in self.kb.chunks if c.doc == doc]
-        title = chunks[0].title if chunks else doc
-        body = "\n\n".join(f"## {c.path}\n{c.text}" if c.path != c.title else c.text for c in chunks)
-        return f"=== Документ «{title}» ({doc}) ===\n{body}"
+        # Include direct parent sections as a group when a retrieved subsection depends on them.
+        parents = []
+        for c in main:
+            parts = c.path.split(" > ")
+            for n in range(1, len(parts)):
+                path = " > ".join(parts[:n])
+                group = [x for x in self.kb.chunks if x.doc == c.doc and x.path == path and x.id not in seen]
+                if sum(len(x.render()) for x in main + parents + rules) + sum(len(x.render()) for x in group) <= char_budget:
+                    for x in group:
+                        add(parents, x)
+        return main + extra + parents + rules  # приоритет: документы → parent → (граф в pipeline)

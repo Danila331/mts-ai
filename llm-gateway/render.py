@@ -57,6 +57,7 @@ PRICES = {
     "energy-chat": ("GW_CHAT_PRICE_IN", "GW_CHAT_PRICE_OUT"),
     "energy-chat-fallback": ("GW_FALLBACK_PRICE_IN", "GW_FALLBACK_PRICE_OUT"),
     "energy-embed": ("GW_EMBED_PRICE_IN", None),
+    "energy-vision": ("GW_VISION_PRICE_IN", "GW_VISION_PRICE_OUT"),
 }
 
 

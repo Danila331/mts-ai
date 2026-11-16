@@ -44,5 +44,8 @@ next-env.d.ts
 /.data/
 /public/widget.js
 
+# playwright
+/test-results/
+/playwright-report/
 # снимки для ревью impeccable
 .impeccable/review/

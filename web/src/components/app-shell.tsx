@@ -94,7 +94,15 @@ function StandStatus() {
 
   const ok = health && !error;
   const tone = ok ? (health.llm ? "bg-success" : "bg-warning") : error ? "bg-destructive" : "bg-dim";
-  const model = ok ? (health.llm ? health.model.split("/").pop() : "без модели") : error ? "API недоступен" : "проверяю API…";
+  const model = ok
+    ? health.llm
+      ? health.model.split("/").pop()
+      : "без модели"
+    : error
+      ? error.startsWith("Ядро")
+        ? "ядро перезапускается"
+        : "API недоступен"
+      : "проверяю API…";
   const rows = ok
     ? [
         { label: "Модель", value: health.llm ? health.model : "не настроена", mono: true },
@@ -114,7 +122,7 @@ function StandStatus() {
           <button
             type="button"
             className="flex h-10 w-full items-center gap-2.5 rounded-md px-2 text-left outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/50 aria-expanded:bg-sidebar-accent"
-            aria-label={`Состояние стенда: ${model}`}
+            // Без aria-label: имя кнопки — её видимый текст «Стенд EnergyTool» и модель (WCAG 2.5.3, axe).
           />
         }
       >

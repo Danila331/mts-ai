@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Answer struct {
@@ -23,6 +24,8 @@ type Answer struct {
 	Guard     []byte
 	CreatedAt time.Time
 	RequestID string
+	SessionID *string
+	Sources   []byte
 }
 
 type Feedback struct {
@@ -37,15 +40,36 @@ type Feedback struct {
 }
 
 type Lead struct {
-	ID            uuid.UUID
-	Code          string
-	Name          string
-	Phone         string
-	Company       string
-	Comment       string
-	Summary       string
-	Messages      []byte
-	CreatedAt     time.Time
-	RequestID     string
-	SummarySource string
+	ID                 uuid.UUID
+	Code               string
+	Name               string
+	Phone              string
+	Company            string
+	Comment            string
+	Summary            string
+	Messages           []byte
+	CreatedAt          time.Time
+	RequestID          string
+	SummarySource      string
+	SessionID          *string
+	Passport           []byte
+	Score              []byte
+	CallbackPreference []byte
+	Status             string
+	StatusChangedAt    pgtype.Timestamptz
+	Kind               string
+}
+
+type Session struct {
+	ID         string
+	Channel    string
+	Mode       string
+	Title      string
+	Page       []byte
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Passport   []byte
+	Role       string
+	RoleSource string
+	Level      string
 }

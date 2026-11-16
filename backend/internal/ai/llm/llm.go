@@ -9,6 +9,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +75,25 @@ func (e *statusError) retryable() bool {
 
 // Chat отправляет диалог и возвращает ответ без размышлений.
 func (c *Client) Chat(ctx context.Context, messages []Message, maxTokens int) (string, error) {
+	return c.send(ctx, messages, maxTokens)
+}
+
+// ReadImage — один вопрос о картинке к модели с vision (OpenAI-совместимый
+// /chat/completions, часть image_url с data URL). Картинка уходит только
+// в тело запроса: ни в журнал, ни в ошибки она не попадает.
+func (c *Client) ReadImage(ctx context.Context, system, instruction string, image []byte, mime string, maxTokens int) (string, error) {
+	url := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(image)
+	messages := []map[string]any{
+		{"role": "system", "content": system},
+		{"role": "user", "content": []map[string]any{
+			{"type": "text", "text": instruction},
+			{"type": "image_url", "image_url": map[string]any{"url": url, "detail": "high"}},
+		}},
+	}
+	return c.send(ctx, messages, maxTokens)
+}
+
+func (c *Client) send(ctx context.Context, messages any, maxTokens int) (string, error) {
 	if !c.Configured() {
 		return "", ErrNotConfigured
 	}

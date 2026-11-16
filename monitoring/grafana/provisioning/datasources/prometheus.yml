@@ -1,0 +1,13 @@
+# Источник данных — Prometheus стенда. Адрес — имя службы в compose; на
+# Railway его задаёт PROMETHEUS_URL (см. docs/deploy.md).
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: ${PROMETHEUS_URL}
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s

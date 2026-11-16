@@ -1,7 +1,7 @@
 # Шлюз к моделям — LiteLLM Proxy.
 #
 # Ядро и api просят модель по псевдониму (energy-chat, energy-embed,
-# energy-rerank) и не знают, какой провайдер за ним стоит. Сменить модель
+# energy-rerank, energy-vision) и не знают, какой провайдер за ним стоит. Сменить модель
 # или провайдера — поменять переменные GW_* у этой службы, не трогая ни
 # ядро, ни api.
 #
@@ -42,6 +42,15 @@ model_list:
   - model_name: energy-rerank
     litellm_params:
       model: os.environ/GW_RERANK_MODEL # hosted_vllm/qwen/qwen3-reranker-8b
+      api_base: os.environ/GW_BASE_URL
+      api_key: os.environ/GW_API_KEY
+
+  # Распознавание фото документов (T9, ADR 0006): только OCR — модель
+  # переписывает текст с картинки, отвечает клиенту всё равно energy-chat.
+  # Не задан GW_VISION_MODEL — псевдонима нет, и api фото не принимает.
+  - model_name: energy-vision
+    litellm_params:
+      model: os.environ/GW_VISION_MODEL # openai/<модель с vision у того же провайдера>
       api_base: os.environ/GW_BASE_URL
       api_key: os.environ/GW_API_KEY
 

@@ -23,6 +23,8 @@ import (
 	chatuc "github.com/Danila331/mts-ai/backend/internal/chat/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/config"
 	"github.com/Danila331/mts-ai/backend/internal/core"
+	"github.com/Danila331/mts-ai/backend/internal/document"
+	"github.com/Danila331/mts-ai/backend/internal/document/pdftext"
 	feedbackuc "github.com/Danila331/mts-ai/backend/internal/feedback/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/health"
 	leaduc "github.com/Danila331/mts-ai/backend/internal/lead/usecase"
@@ -39,6 +41,9 @@ import (
 var version = "dev"
 
 func main() {
+	// Подкоманда pdftext — разбор PDF клиента в отдельном процессе
+	// (internal/document/pdftext): API запускает сам себя с ней.
+	pdftext.RunIfChild()
 	// Подкоманда forget — удаление данных человека по его запросу. Та же
 	// конфигурация и та же база, но без HTTP: её запускают руками
 	// (docker compose exec api /app/api forget …).
@@ -107,7 +112,9 @@ func run() error {
 	rateStore, closeRedis := rateLimits(ctx, cfg, log, m)
 	defer closeRedis()
 
-	coreClient := core.New(cfg.Core.URL, cfg.Core.Token)
+	coreClient := core.New(cfg.Core.URL, cfg.Core.Token).
+		WithBreaker(cfg.Core.BreakerFailures, cfg.Core.BreakerCooldown).
+		WithRetries(cfg.Core.Retries)
 
 	model := llm.New(llm.Options{
 		BaseURL:         cfg.LLM.BaseURL,
@@ -122,17 +129,25 @@ func run() error {
 	if !model.Configured() {
 		log.Warn().Msg("модель не настроена (LLM_BASE_URL, LLM_API_KEY): резюме заявок — списком вопросов")
 	}
+	documents := document.New(visionModel(cfg, log), document.Options{MaxPages: cfg.OCR.MaxPages})
+
 	if cfg.HTTP.Token == "" {
 		log.Warn().Msg("EB_API_TOKEN не задан: API открыт всем — годится только для машины разработчика")
 	}
 
 	srv := transport.New(cfg, transport.Deps{
-		Chat:      chatuc.New(coreClient, store, cfg.Core.Timeout),
-		Leads:     leaduc.New(store, model),
+		Chat:      chatuc.New(coreClient, store, cfg.Core.Timeout).WithPassport(store, model),
+		Leads:     leaduc.New(store, model).WithPassports(store),
 		Feedback:  feedbackuc.New(store),
 		Health:    health.New(coreClient, store),
 		KB:        coreClient,
 		Settings:  coreClient,
+		Sessions:  store,
+		Passports: store,
+		Board:     store,
+		Analytics: store,
+		Stats:     store,
+		Documents: documents,
 		Metrics:   m,
 		RateStore: rateStore,
 	}, log)
@@ -143,7 +158,7 @@ func run() error {
 		Leads:    config.Days(cfg.Retention.LeadsDays),
 		Answers:  config.Days(cfg.Retention.AnswersDays),
 		Feedback: config.Days(cfg.Retention.FeedbackDays),
-	}, cfg.Retention.Interval, log, func(n privacy.Counts) { m.RetentionPurged(n.Leads, n.Answers, n.Feedback) })
+	}, cfg.Retention.Interval, log, func(n privacy.Counts) { m.RetentionPurged(n.Leads, n.Answers, n.Feedback, n.Sessions) })
 	retentionCtx, stopRetention := context.WithCancel(context.Background())
 	retentionDone := make(chan struct{})
 	go func() {
@@ -205,6 +220,29 @@ func run() error {
 	<-retentionDone
 	log.Info().Msg("api остановлен")
 	return runErr
+}
+
+// visionModel — модель, которая переписывает текст с фото документа (T9).
+// Только OCR: отвечает клиенту всё равно Qwen. nil — фото не принимаются.
+func visionModel(cfg *config.Config, log zerolog.Logger) document.Vision {
+	if cfg.Vision.Model == "" {
+		log.Info().Msg("EB_VISION_MODEL не задан: фото документов не принимаются, кнопка вложения неактивна")
+		return nil
+	}
+	client := llm.New(llm.Options{
+		BaseURL: cfg.VisionBaseURL(),
+		APIKey:  cfg.VisionAPIKey(),
+		Model:   cfg.Vision.Model,
+		// Параметры размышлений — для Qwen ответов; vision-модели их не шлём.
+		ThinkingParam: "none",
+		Timeout:       cfg.Vision.Timeout,
+	})
+	if !client.Configured() {
+		log.Warn().Msg("EB_VISION_MODEL задан, но нет адреса или ключа модели: фото документов не принимаются")
+		return nil
+	}
+	log.Info().Str("model", cfg.Vision.Model).Msg("распознавание фото документов включено")
+	return client
 }
 
 // rateLimits — хранилище пределов: Redis, если задан, иначе память.
@@ -289,6 +327,6 @@ func forget(args []string) error {
 		verb = "удалено"
 	}
 	// В выводе нет ни телефона, ни имени: он остаётся в истории терминала.
-	fmt.Printf("%s: заявок %d, ответов %d, оценок %d\n", verb, n.Leads, n.Answers, n.Feedback)
+	fmt.Printf("%s: заявок %d, ответов %d, оценок %d, сессий %d\n", verb, n.Leads, n.Answers, n.Feedback, n.Sessions)
 	return nil
 }

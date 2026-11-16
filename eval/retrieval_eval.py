@@ -23,6 +23,22 @@ from energybot.dialog import parse  # noqa: E402
 from energybot.pipeline import Consultant  # noqa: E402
 
 
+def retrieved_context(bot, result) -> tuple:
+    """(выдача, разделы, которые видит модель) для любой версии Consultant.retrieve.
+
+    Старые версии возвращают (выдача, контекст), схема v3 — (выдача, документы целиком, фрагменты);
+    во втором случае контекст — разделы документов целиком, фрагменты и справочник в неизменной части
+    промпта (если он включён), как в scripts/core_api.py (WebConsultant.context_chunks).
+    """
+    if len(result) == 2:
+        return result
+    hits, docs, extra = result
+    context = [c for c in bot.kb.chunks if c.doc in docs] + list(extra)
+    if getattr(bot, "reference_text", ""):
+        context += bot.retriever.reference()
+    return hits, list({c.id: c for c in context}.values())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--questions", default=str(ROOT / "demo_questions.csv"))
@@ -59,7 +75,7 @@ def main():
     sizes = []
     misses = []
     for qid, question, docs in items:
-        hits, context = bot.retrieve(parse(question))
+        hits, context = retrieved_context(bot, bot.retrieve(parse(question)))
         found = [Path(h.chunk.doc).name for h in hits]
         ctx_docs = {Path(c.doc).name for c in context}
         main_doc = docs[0]
@@ -80,7 +96,7 @@ def main():
             print(f"{mark} [{qid}] нужен {docs} → {[f'{h.chunk.doc.split(chr(47))[-1]}|{h.chunk.path[:35]}' for h in hits]}")
     n = len(items)
     print(f"\nрежим: {'гибрид' if bot.dense else 'BM25'}{' + реранкер' if bot.api.configured and bot.api.can_rerank else ''}; "
-          f"k={bot.top_k}, расширение документов={bot.expand_docs}, бюджет={bot.context_chars}; вопросов: {n}")
+          f"k={bot.top_k}, документов целиком={getattr(bot, 'full_docs', getattr(bot, 'expand_docs', '?'))}, бюджет={bot.context_chars}; вопросов: {n}")
     print(f"hit@1 (главный документ первым): {hit1 / n:.2f}")
     print(f"hit@{bot.top_k} (главный документ в выдаче): {hitk / n:.2f}")
     print(f"покрытие всех нужных документов в контексте: {cover / n:.2f}")

@@ -1,0 +1,47 @@
+# Обновления зависимостей — PR в dev раз в неделю, мелкие обновления одной экосистемы
+# собираются в один PR. Безопасностные обновления Dependabot присылает сразу, вне расписания.
+#
+# pip: решение для автопроверки обязано держаться разрешённого набора организаторов
+# (requirements.txt), поэтому PR по solution-requirements.txt мержится только после
+# scripts/check_submission.py; сам requirements.txt организаторов Dependabot не трогает.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /backend
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+    groups:
+      go-minor: { update-types: [minor, patch] }
+
+  - package-ecosystem: npm
+    directory: /web
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+    groups:
+      npm-minor: { update-types: [minor, patch] }
+
+  - package-ecosystem: pip
+    directory: /
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+    ignore:
+      # Набор организаторов: версии задаёт платформа, а не мы.
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: docker
+    directories: [/backend, /core, /web, /llm-gateway, /monitoring]
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+
+  - package-ecosystem: docker-compose
+    directory: /
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/codex]
+    target-branch: dev
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions: { patterns: ["*"] }

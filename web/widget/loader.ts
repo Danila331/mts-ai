@@ -2,12 +2,28 @@
  * Загрузчик виджета ИИ-консультанта МТС EnergyTool. Собирается в public/widget.js (npm run build:widget).
  *
  *   <script src="https://<хост>/widget.js" async data-title="…" data-color="#FF0032" data-position="right"
- *           data-greeting="…" data-greeting-delay="6"></script>
+ *           data-greeting="…" data-greeting-delay="6" data-topics='{"/solar":"solar","/askue":"askue"}'></script>
  *
  * Кнопка и подсказка живут в Shadow DOM (стили сайта их не ломают и наоборот), чат — в iframe на /embed.
- * Связь с iframe — postMessage с проверкой origin. API страницы: window.EnergyToolChat.{open, close, toggle, ask, destroy}.
+ * Связь с iframe — postMessage: отправка на точный origin загрузчика (не «*»), приём только от этого origin и из
+ * окна нашего iframe (isTrustedMessage, T35). API страницы: window.EnergyToolChat.{open, close, toggle, ask, destroy}.
  * Любой элемент с data-energytool-ask="вопрос" открывает виджет с этим вопросом.
+ *
+ * Страница (T8): iframe получает сообщением eb:page только путь, заголовок и UTM-метки страницы — без cookies,
+ * других параметров адреса и referrer — и тему страницы по data-topics (префикс пути → тема). Тема ещё и в адресе
+ * iframe (?topic=), чтобы приветствие было верным с первого кадра; путь и метки в адрес iframe не попадают.
+ *
+ * Фасад (T32): до первого взаимодействия на сайт попадает только этот файл (несколько КБ, без зависимостей).
+ * Наведение, фокус или касание кнопки (и показ подсказки) — preconnect к хосту чата; iframe с бандлом чата создаётся
+ * по клику, при ask() и при восстановленном открытом состоянии. Сообщения до eb:ready встают в очередь.
+ *
+ * Потоковая выдача (T13): по умолчанию ответ печатается по мере генерации; data-stream="0" — ответ появляется
+ * целиком, когда его проверили. Флаг — так же, как тема: в адресе iframe (?stream=0) и в сообщении eb:page.
  */
+
+import { isTrustedMessage, targetOrigin } from "../src/lib/embed-origin";
+import { type PageInfo, matchTopic, pageFrom, parseTopics } from "../src/lib/page-context";
+import { parseStreamFlag } from "../src/lib/stream-text";
 
 interface Config {
   title: string;
@@ -21,6 +37,10 @@ interface Config {
   open: boolean;
   /** Быстрые вопросы в подсказке: data-quick="вопрос 1|вопрос 2", data-quick="" — без них. */
   quick: string[];
+  /** Темы страниц: data-topics='{"/solar":"solar"}' — префикс пути → тема приветствия и вопросов в чате. */
+  topics: Record<string, string>;
+  /** Печатать ответ по мере генерации: data-stream="0" — выключить (ответ целиком, уже проверенный). */
+  stream: boolean;
 }
 
 interface Api {
@@ -56,7 +76,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   const cfg: Config = {
     title: d.title || "Консультант EnergyTool",
     subtitle: d.subtitle || "Отвечает по базе знаний МТС",
-    color: d.color && hex.test(d.color) ? d.color : "#FF0032",
+    color: d.color && hex.test(d.color) ? d.color : "#E60030",
     position: d.position === "left" ? "left" : "right",
     greeting: d.greeting ?? "Здравствуйте! Подберу решение по энергоучёту, потерям и солнечной генерации.",
     greetingDelay: Number(d.greetingDelay ?? 6),
@@ -68,6 +88,8 @@ const STORAGE_GREETED = "energytool-chat:greeted";
       .map((q) => q.trim())
       .filter(Boolean)
       .slice(0, 3),
+    topics: parseTopics(d.topics),
+    stream: parseStreamFlag(d.stream) ?? true,
   };
 
   const side = cfg.position;
@@ -102,6 +124,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   .unread .badge { display: block; }
   .bubble {
     position: fixed; bottom: ${cfg.offsetY + 70}px; ${side}: ${cfg.offsetX}px; width: 304px;
+    max-width: calc(100vw - ${cfg.offsetX * 2}px); /* узкий экран (телефон 320 px, превью): не вылезать за край */
     background: #fff; color: #1b1c1e; border-radius: 16px; border-${side === "right" ? "bottom-right" : "bottom-left"}-radius: 4px;
     padding: 14px; font: 14px/1.45 ${font}; -webkit-font-smoothing: antialiased;
     box-shadow: 0 0 0 1px rgba(0,0,0,.07), 0 4px 8px -2px rgba(0,0,0,.06), 0 16px 40px -8px rgba(0,0,0,.18); cursor: pointer;
@@ -122,7 +145,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   .bubble .quick button:hover { background: #f8f8f9; border-color: #dadbdf; }
   .bubble .quick button:focus-visible { outline: 2px solid color-mix(in srgb, var(--c) 45%, white); outline-offset: 1px; }
   .bubble .x { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border: 0; padding: 0; background: none;
-    color: #8e9198; cursor: pointer; border-radius: 6px; display: grid; place-items: center; }
+    color: #626C77; cursor: pointer; border-radius: 50%; display: grid; place-items: center; }
   .bubble .x svg { width: 14px; height: 14px; }
   .bubble .x:hover { background: #f2f2f4; color: #1b1c1e; }
   .panel {
@@ -138,10 +161,14 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
   .loading { position: absolute; inset: 0; display: grid; place-items: center; color: #66696f; font: 13px ${font}; }
   @media (max-width: 640px) {
+    /* T43: цели касания ≥ 44 px */
+    .bubble .x { width: 44px; height: 44px; top: 0; right: 0; }
+    .bubble .x svg { width: 18px; height: 18px; }
+    .bubble .quick button { min-height: 44px; display: flex; align-items: center; }
     .panel { inset: 0; width: 100%; height: 100%; border-radius: 0; bottom: 0; ${side}: 0; }
     .open .launcher { display: none; }
   }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 <div class="wrap">
   <div class="panel" role="dialog" aria-label="${escapeHtml(cfg.title)}" aria-modal="false">
@@ -173,29 +200,56 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   let isOpen = false;
   const queue: unknown[] = [];
 
+  // Страница — в момент вопроса: на сайтах-SPA путь меняется без перезагрузки виджета.
+  const page = (): PageInfo => pageFrom(location.pathname, document.title, location.search);
+  const topic = () => matchTopic(location.pathname, cfg.topics);
+
   const embedUrl = () => {
     const u = new URL("/embed", origin);
     u.searchParams.set("title", cfg.title);
     u.searchParams.set("subtitle", cfg.subtitle);
     u.searchParams.set("color", cfg.color);
     if (cfg.greeting) u.searchParams.set("greeting", cfg.greeting);
+    const t = topic();
+    if (t) u.searchParams.set("topic", t);
+    if (!cfg.stream) u.searchParams.set("stream", "0");
     u.searchParams.set("parent", location.origin);
     return u.toString();
   };
+
+  /** Путь, заголовок и UTM — только сообщением с точным targetOrigin, не в адресе iframe. */
+  const sendPage = () => post({ type: "eb:page", page: page(), topic: topic() ?? null, stream: cfg.stream });
 
   function ensureFrame() {
     if (iframe) return;
     iframe = document.createElement("iframe");
     iframe.title = cfg.title;
     iframe.src = embedUrl();
-    iframe.allow = "clipboard-write";
+    // microphone — голосовой ввод в чате; без него браузер не покажет запрос доступа внутри iframe.
+    iframe.allow = "clipboard-write; microphone";
     iframe.addEventListener("load", () => root.querySelector(".loading")?.remove());
     panel.appendChild(iframe);
+    sendPage();
   }
 
+  // Точный origin сервера виджета; для «null» (скрипт со страницы file://) слать некуда — сообщения не уходят.
+  const target = targetOrigin(origin);
+
   function post(msg: unknown) {
-    if (ready && iframe?.contentWindow) iframe.contentWindow.postMessage(msg, origin);
+    if (!target) return;
+    if (ready && iframe?.contentWindow) iframe.contentWindow.postMessage(msg, target);
     else queue.push(msg);
+  }
+
+  /** Соединение с хостом чата заранее: к клику TCP и TLS уже готовы, а сам бандл ещё не скачан. */
+  let preconnected = false;
+  function preconnect() {
+    if (preconnected || iframe) return;
+    preconnected = true;
+    const link = document.createElement("link");
+    link.rel = "preconnect";
+    link.href = origin;
+    document.head.appendChild(link);
   }
 
   function hideBubble() {
@@ -212,6 +266,7 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     launcher.setAttribute("aria-label", "Закрыть чат");
     sessionStorage.setItem(STORAGE_OPEN, "1");
     sessionStorage.setItem(STORAGE_GREETED, "1");
+    if (ready) sendPage();
     post({ type: "eb:open" });
   }
 
@@ -232,11 +287,11 @@ const STORAGE_GREETED = "energytool-chat:greeted";
   }
 
   function onMessage(e: MessageEvent) {
-    if (e.origin !== origin || !iframe || e.source !== iframe.contentWindow) return;
+    if (!iframe || !isTrustedMessage(e, target, iframe.contentWindow)) return;
     const data = e.data as { type?: string };
     if (data?.type === "eb:ready") {
       ready = true;
-      while (queue.length) iframe.contentWindow!.postMessage(queue.shift(), origin);
+      while (queue.length) iframe.contentWindow!.postMessage(queue.shift(), target!);
     } else if (data?.type === "eb:close") close();
     else if (data?.type === "eb:unread" && !isOpen) wrap.classList.add("unread");
   }
@@ -274,17 +329,15 @@ const STORAGE_GREETED = "energytool-chat:greeted";
     document.body.appendChild(host);
     if (cfg.open || sessionStorage.getItem(STORAGE_OPEN)) open();
     else if (cfg.greeting && !sessionStorage.getItem(STORAGE_GREETED) && cfg.greetingDelay >= 0) {
-      setTimeout(() => !isOpen && bubble.classList.add("show"), cfg.greetingDelay * 1000);
+      setTimeout(() => {
+        if (isOpen) return;
+        preconnect();
+        bubble.classList.add("show");
+      }, cfg.greetingDelay * 1000);
     }
-    // Чат подгружаем по намерению — наведение или фокус на кнопке и подсказке, — чтобы открытие было мгновенным,
-    // а запасной вариант — через несколько секунд в простое: сайт клиента сначала грузит своё, потом наш чат.
-    for (const el of [launcher, bubble]) {
-      el.addEventListener("pointerenter", ensureFrame, { once: true });
-      el.addEventListener("focusin", ensureFrame, { once: true });
-      el.addEventListener("touchstart", ensureFrame, { once: true, passive: true });
-    }
-    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => void }).requestIdleCallback;
-    setTimeout(() => (idle ? idle(ensureFrame) : ensureFrame()), 6000);
+    // Фасад: iframe не грузим, пока посетитель не проявил интерес (наведение, фокус, касание, клик).
+    for (const ev of ["pointerenter", "focus", "touchstart"]) launcher.addEventListener(ev, preconnect, { once: true, passive: true });
+    bubble.addEventListener("pointerenter", preconnect, { once: true });
   };
   if (document.body) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });

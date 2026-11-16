@@ -88,7 +88,9 @@ export function ThinkingLine({ message, compact }: { message: Message; compact?:
   const size = compact ? "text-[14px]" : "text-[15px]";
 
   return (
-    <div role="status" aria-live="polite" aria-label={text} className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1">
+      {/* Без живой области: ответ озвучивается целиком по завершении (T43), а не каждой сменой фразы. */}
+      <span className="sr-only">Консультант готовит ответ</span>
       <div className="flex min-h-7 min-w-0 items-center gap-2">
         <BrandGlyph live className={compact ? "size-[18px]" : "size-5"} />
         <span

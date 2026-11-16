@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -18,14 +19,18 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/rs/zerolog"
 
+	"github.com/Danila331/mts-ai/backend/internal/analytics"
 	"github.com/Danila331/mts-ai/backend/internal/chat"
 	chatuc "github.com/Danila331/mts-ai/backend/internal/chat/usecase"
 	"github.com/Danila331/mts-ai/backend/internal/config"
+	"github.com/Danila331/mts-ai/backend/internal/document"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
 	"github.com/Danila331/mts-ai/backend/internal/metrics"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
 	"github.com/Danila331/mts-ai/backend/internal/ratelimit"
 	"github.com/Danila331/mts-ai/backend/internal/requestid"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // MaxBody — предел тела запроса. Самое объёмное, что сюда приходит, —
@@ -40,7 +45,7 @@ type (
 		Ask(ctx context.Context, req chat.Request) (*chatuc.Relay, error)
 	}
 	Leads interface {
-		Create(ctx context.Context, c lead.Contacts, messages json.RawMessage) (lead.Lead, error)
+		CreateForSession(ctx context.Context, c lead.Contacts, messages json.RawMessage, sessionID string) (lead.Lead, error)
 	}
 	Feedback interface {
 		Rate(ctx context.Context, f feedback.Feedback, rating int) error
@@ -52,6 +57,34 @@ type (
 	KB interface {
 		KB(ctx context.Context) (json.RawMessage, error)
 	}
+	Sessions interface {
+		History(ctx context.Context, id string) (session.History, error)
+	}
+	Passports interface {
+		LoadPassport(ctx context.Context, id string) (passport.Passport, error)
+		SavePassport(ctx context.Context, id string, p passport.Passport) error
+	}
+	// Documents — текст из фото и PDF клиента (T9). Файл живёт только в
+	// памяти запроса.
+	Documents interface {
+		Read(ctx context.Context, data []byte, declared string) (document.Result, error)
+		Photos() bool
+		MaxPages() int
+	}
+	// Board — заявки на экране менеджера (T5).
+	Board interface {
+		LeadList(ctx context.Context, status lead.Status, limit, offset int) (lead.ListPage, error)
+		LeadCard(ctx context.Context, code string) (lead.Card, error)
+		SetLeadStatus(ctx context.Context, code string, status lead.Status) error
+	}
+	// Stats — наблюдаемые исходы диалогов (GET /api/stats).
+	Stats interface {
+		Stats(ctx context.Context) (chat.ConversationStats, error)
+	}
+	// Analytics — отчёт экрана менеджера (T6).
+	Analytics interface {
+		Analytics(ctx context.Context, days int) (analytics.Report, error)
+	}
 	Settings interface {
 		Settings(ctx context.Context) (json.RawMessage, error)
 		SaveSettings(ctx context.Context, body json.RawMessage) (json.RawMessage, error)
@@ -61,12 +94,22 @@ type (
 
 // Deps — всё, из чего собирается сервер.
 type Deps struct {
-	Chat     Chat
-	Leads    Leads
-	Feedback Feedback
-	Health   Health
-	KB       KB
-	Settings Settings
+	Chat      Chat
+	Leads     Leads
+	Feedback  Feedback
+	Health    Health
+	KB        KB
+	Settings  Settings
+	Sessions  Sessions
+	Passports Passports
+	// Board — nil выключает заявки менеджера.
+	Board Board
+	// Analytics — nil выключает аналитику.
+	Analytics Analytics
+	// Stats — nil выключает /api/stats.
+	Stats Stats
+	// Documents — nil выключает приём документов.
+	Documents Documents
 	// Metrics — nil выключает метрики.
 	Metrics *metrics.Metrics
 	// RateStore — хранилище пределов; nil — память процесса.
@@ -138,7 +181,12 @@ func New(cfg *config.Config, deps Deps, log zerolog.Logger) *Server {
 			return err
 		},
 	}))
-	e.Use(middleware.BodyLimit(MaxBody))
+	// Документ (POST /api/ocr) больше общего предела: свой предел у него
+	// в обработчике (EB_OCR_MAX_BYTES).
+	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{
+		Limit:   MaxBody,
+		Skipper: func(c echo.Context) bool { return isOCRUpload(c.Request()) },
+	}))
 
 	// CORS нужен только тем, кто зовёт API из браузера напрямую: фронт
 	// ходит через свой прокси на том же origin. Пустой список — CORS
@@ -148,7 +196,7 @@ func New(cfg *config.Config, deps Deps, log zerolog.Logger) *Server {
 			AllowOrigins:  cfg.HTTP.AllowedOrigins,
 			AllowHeaders:  []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAuthorization, requestid.Header},
 			ExposeHeaders: []string{requestid.Header},
-			AllowMethods:  []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+			AllowMethods:  []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodOptions},
 		}))
 	}
 
@@ -164,23 +212,65 @@ func (s *Server) routes() {
 	// адреса — это живой человек, сотня — скрипт.
 	chatLimit := s.limiter(ratelimit.Rule{Name: "chat", PerPeriod: l.ChatPerMinute, Period: time.Minute, Burst: l.ChatBurst},
 		"Слишком много вопросов подряд — подождите минуту")
+	// Суточный потолок (T35): тот же счётчик пределов (Redis или память), окно
+	// в сутки. Без давления: чат вернётся завтра, а заявка менеджеру работает всегда.
+	chatDayLimit := s.limiter(ratelimit.Rule{Name: "chat_day", PerPeriod: l.ChatPerDay, Period: 24 * time.Hour, Burst: l.ChatPerDay},
+		"На сегодня лимит вопросов с вашего адреса исчерпан. Завтра чат снова заработает, а заявку менеджеру можно оставить в любое время")
 	// Каждая заявка — звонок менеджера. Поток заявок с одного адреса —
 	// это не клиенты.
 	leadLimit := s.limiter(ratelimit.Rule{Name: "lead", PerPeriod: l.LeadPerHour, Period: time.Hour, Burst: l.LeadBurst},
 		"Заявок с этого адреса слишком много — попробуйте позже")
 	feedbackLimit := s.limiter(ratelimit.Rule{Name: "feedback", PerPeriod: l.FeedbackPerMinute, Period: time.Minute, Burst: l.FeedbackBurst},
 		"Слишком много оценок подряд")
+	// Свой предел у настроек и входа администратора: перебор токена
+	// упирается в него, не задевая вопросы и заявки того же адреса.
+	settingsLimit := s.limiter(ratelimit.Rule{Name: "settings", PerPeriod: l.SettingsPerMinute, Period: time.Minute, Burst: l.SettingsBurst},
+		"Слишком много запросов к настройкам — подождите минуту")
+
+	// Экран менеджера опрашивает список раз в несколько секунд — у него
+	// свой предел, чтобы не делить его с настройками.
+	managerLimit := s.limiter(ratelimit.Rule{Name: "manager", PerPeriod: l.ManagerPerMinute, Period: time.Minute, Burst: l.ManagerBurst},
+		"Слишком много запросов менеджера — подождите минуту")
+
+	// Документ — до десяти мегабайт в памяти и, для фото, платный запрос
+	// к vision-модели. Свой предел — чтобы не отнимать вопросы и заявки.
+	ocrLimit := s.limiter(ratelimit.Rule{Name: "ocr", PerPeriod: l.OCRPerHour, Period: time.Hour, Burst: l.OCRBurst},
+		"Слишком много документов подряд — попробуйте позже")
 
 	api := s.echo.Group("/api", s.requireToken)
 	api.GET("/health", s.health)
+	if s.deps.Stats != nil {
+		api.GET("/stats", s.stats)
+	}
 	api.GET("/kb", s.kb)
-	api.POST("/chat", s.chat, chatLimit)
+	api.POST("/chat", s.chat, chatLimit, chatDayLimit)
 	api.POST("/lead", s.lead, leadLimit)
 	api.POST("/feedback", s.feedback, feedbackLimit)
-	// Настройки RAG глобальные: стенд для жюри, «Сохранить» меняет бота для всех.
-	api.GET("/settings", s.settings)
-	api.POST("/settings", s.saveSettings)
-	api.POST("/settings/reset", s.resetSettings)
+	// Документы (T9): что принимается — и сам документ → текст на проверку
+	// клиенту. В чат текст уходит только отдельным действием клиента.
+	api.GET("/ocr", s.ocrInfo)
+	api.POST("/ocr", s.ocr, ocrLimit)
+	// Настройки RAG: читать может каждый (страница /settings и песочница),
+	// менять для всех — только администратор (EB_ADMIN_TOKEN). Песочница
+	// идёт полем overrides в /api/chat и общих настроек не трогает.
+	api.GET("/settings", s.settings, settingsLimit)
+	api.POST("/settings", s.saveSettings, settingsLimit, s.requireAdmin)
+	api.POST("/settings/reset", s.resetSettings, settingsLimit, s.requireAdmin)
+	// Вход на /settings: прокси Next проверяет здесь введённый токен —
+	// под тем же пределом, что и сами настройки.
+	api.POST("/settings/login", s.adminLogin, settingsLimit, s.requireAdmin)
+	// Разговоры клиентов — только менеджеру (EB_MANAGER_TOKEN): там их
+	// реплики, то есть персональные данные.
+	api.GET("/sessions/:id", s.sessionHistory, settingsLimit, s.requireManager)
+	// Заявки на экране менеджера (T5): список, карточка с историей
+	// разговора и смена статуса. Тот же токен, что у разговоров.
+	api.GET("/leads", s.leadList, managerLimit, s.requireManager)
+	api.GET("/leads/:code", s.leadCard, managerLimit, s.requireManager)
+	api.PATCH("/leads/:code/status", s.leadStatus, managerLimit, s.requireManager)
+	// Аналитика воронки и пробелов базы (T6): ?days=7|30.
+	api.GET("/analytics", s.analytics, managerLimit, s.requireManager)
+	// Паспорт задачи правит сам клиент: id сессии знает только его браузер.
+	api.PATCH("/sessions/:id/passport", s.patchPassport, feedbackLimit)
 }
 
 // Start слушает адрес до Shutdown; после него — http.ErrServerClosed.
@@ -293,6 +383,39 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+// AdminHeader — заголовок с токеном администратора от прокси Next.
+const AdminHeader = "X-Admin-Token"
+
+// ManagerHeader — заголовок с токеном менеджера от прокси Next.
+const ManagerHeader = "X-Manager-Token"
+
+// requireAdmin пускает к глобальным настройкам только администратора.
+//
+// В отличие от requireToken, пустой токен не открывает доступ, а
+// закрывает: машина разработчика без EB_ADMIN_TOKEN получает песочницу,
+// как любой посетитель, — менять бота для всех по умолчанию нельзя.
+func (s *Server) requireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
+	return requireSecret(s.cfg.HTTP.AdminToken, AdminHeader, "Глобальные настройки меняет только администратор стенда")(next)
+}
+
+// requireManager пускает к разговорам и заявкам только менеджера. Пустой
+// EB_MANAGER_TOKEN — закрыто для всех.
+func (s *Server) requireManager(next echo.HandlerFunc) echo.HandlerFunc {
+	return requireSecret(s.cfg.HTTP.ManagerToken, ManagerHeader, "Разговоры клиентов видит только менеджер")(next)
+}
+
+func requireSecret(token, header, msg string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			got := c.Request().Header.Get(header)
+			if token == "" || got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				return fail(c, http.StatusUnauthorized, msg)
+			}
+			return next(c)
+		}
+	}
+}
+
 // clientIP — адрес человека, а не прокси.
 //
 // Запросы приходят через сервер Next на Vercel, и адрес соединения —
@@ -302,11 +425,22 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 // и обошёл предел.
 func (s *Server) clientIP(c echo.Context) string {
 	if s.cfg.HTTP.Token != "" {
-		if ip := strings.TrimSpace(c.Request().Header.Get("X-Client-IP")); ip != "" {
+		// Только настоящий адрес: произвольная строка стала бы ключом
+		// предела и записью в журнале.
+		if ip := parseIP(c.Request().Header.Get("X-Client-IP")); ip != "" {
 			return ip
 		}
 	}
 	return c.RealIP()
+}
+
+// parseIP отдаёт канонический адрес или пустую строку, если это не адрес.
+func parseIP(raw string) string {
+	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return addr.Unmap().String()
 }
 
 // limiter — предел частоты по адресу клиента.

@@ -1,30 +1,70 @@
 "use client";
 
-import { ArrowLeft, SquarePen, X } from "lucide-react";
+import { ArrowLeft, Headset, SquarePen, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChatView } from "@/components/chat/chat-view";
 import { LeadPanel } from "@/components/chat/lead-dialog";
+import { NewDialogConfirm } from "@/components/chat/new-dialog-confirm";
 import { BrandMark } from "@/components/brand";
+import { topicByName } from "@/components/chat/topics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChat } from "@/hooks/use-chat";
-import { kbHref } from "@/hooks/use-kb";
+import { AI_DISCLAIMER, AI_LABEL, hasUnsentLead } from "@/lib/answer-ux";
+import { FLOWS } from "@/lib/wizards/flows";
+import { kbHref, useKb } from "@/hooks/use-kb";
+import { MAX_MESSAGE, messageLength } from "@/lib/document-text";
+import { isTrustedMessage, resolveParent } from "@/lib/embed-origin";
+import { type PageInfo, isTopicName, sanitizePage } from "@/lib/page-context";
+import { parseStreamFlag } from "@/lib/stream-text";
 import { cn } from "@/lib/utils";
 
 const HEX = /^#[0-9a-f]{3,8}$/i;
+const NO_ORIGINS: string[] = [];
 
-/** Чат внутри iframe виджета. Общается со страницей-хозяином через postMessage (origin из ?parent=). */
-export function EmbedChat() {
+/**
+ * Чат внутри iframe виджета. Общается со страницей-хозяином через postMessage. Origin хозяина берётся из ?parent=,
+ * но принимается, только если он есть в EB_EMBED_ALLOWED_ORIGINS (allowedOrigins) и совпадает с настоящим хозяином
+ * окна, где браузер его сообщает (T35, resolveParent). Отправка — на этот точный origin, приём — только от него и только
+ * от window.parent (isTrustedMessage).
+ * Страница сайта (путь, заголовок, UTM) приходит сообщением eb:page и уходит с вопросами в сессию — для
+ * аналитики, не в промпт. Тема страницы (?topic= или eb:page) меняет приветствие и стартовые вопросы.
+ * Потоковая выдача (T13) — по умолчанию включена; data-stream="0" сайта приходит как ?stream=0 и полем stream
+ * в eb:page: тогда ответ показывается целиком, уже после проверки.
+ */
+export function EmbedChat({ allowedOrigins = NO_ORIGINS }: { allowedOrigins?: string[] }) {
   const params = useSearchParams();
   const title = params.get("title") || "Консультант EnergyTool";
   const subtitle = params.get("subtitle") || "Отвечает по базе знаний МТС";
-  const greeting = params.get("greeting") || undefined;
   const color = HEX.test(params.get("color") ?? "") ? params.get("color")! : undefined;
-  const parent = params.get("parent");
+  const parentParam = params.get("parent");
   const [embedded, setEmbedded] = useState(false);
+  // Доверенный origin хозяина; null — хозяин не прошёл проверку, сообщений ему не шлём и от него не принимаем.
+  const [parent, setParent] = useState<string | null>(null);
+  const [page, setPage] = useState<PageInfo | undefined>();
+  // undefined — тему ещё не присылали сообщением, берём из адреса; null — страница без темы.
+  const [pageTopic, setPageTopic] = useState<string | null | undefined>();
+  const topicName = pageTopic === undefined ? params.get("topic") : pageTopic;
+  const topic = topicByName(topicName);
+  // У темы своё приветствие; без темы — из data-greeting сайта или общее.
+  const greeting = topic?.greeting ?? (params.get("greeting") || undefined);
+  // undefined — флаг сообщением не приходил, берём из адреса; без него — печатаем.
+  const [pageStream, setPageStream] = useState<boolean | undefined>();
+  const stream = pageStream ?? parseStreamFlag(params.get("stream")) ?? true;
 
-  const chat = useChat("eb.widget.sessions.v1", "chat");
+  const chat = useChat("eb.widget.sessions.v1", "chat", { channel: "embed", page, stream });
+  // База нужна только для сводок, чек-листов и ссылок на разделы: в первый кадр её не грузим — чат уже готов,
+  // а база (232 КБ, с края Vercel) подтягивается в простое или с первой репликой.
+  const [kbIdle, setKbIdle] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setKbIdle(true), 2500);
+    return () => clearTimeout(t);
+  }, []);
+  const { kb } = useKb(kbIdle || (chat.active?.messages.length ?? 0) > 0);
   const [leadOpen, setLeadOpen] = useState(false);
+  // «Новый диалог» (T31): если в этом диалоге есть начатая, но не отправленная заявка — сначала спрашиваем.
+  const [confirmNew, setConfirmNew] = useState(false);
+  const requestNew = () => (hasUnsentLead(chat.active) ? setConfirmNew(true) : chat.create());
   const sendRef = useRef(chat.send);
   const pending = useRef<string[]>([]);
 
@@ -35,7 +75,10 @@ export function EmbedChat() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- window доступен только после монтирования
     setEmbedded(window.parent !== window);
-  }, []);
+    // ancestorOrigins есть в Chrome и Safari; в Firefox проверка опирается на allowlist и frame-ancestors.
+    const ancestor = (window.location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins?.[0];
+    setParent(resolveParent(parentParam, allowedOrigins, ancestor, window.location.origin));
+  }, [parentParam, allowedOrigins]);
 
   // Вопросы, пришедшие до загрузки истории, отправляем, как только чат готов.
   useEffect(() => {
@@ -50,13 +93,24 @@ export function EmbedChat() {
   useEffect(() => {
     if (!embedded || !parent) return;
     const onMessage = (e: MessageEvent) => {
-      if (e.origin !== parent || e.source !== window.parent) return;
-      const data = e.data as { type?: string; text?: string };
-      if (data?.type === "eb:ask" && data.text) {
-        if (chat.ready) sendRef.current(data.text);
-        else pending.current.push(data.text);
+      if (!isTrustedMessage(e, parent, window.parent)) return;
+      const data = e.data as { type?: string; text?: unknown };
+      if (data?.type === "eb:ask" && typeof data.text === "string" && data.text.trim()) {
+        // Вопрос от страницы тоже ограничен длиной реплики: сервер подрезал бы остальное молча.
+        const text = data.text.trim();
+        if (messageLength(text) > MAX_MESSAGE) return;
+        if (chat.ready) sendRef.current(text);
+        else pending.current.push(text);
       } else if (data?.type === "eb:open") {
         document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+      } else if (data?.type === "eb:page") {
+        // Сообщению не верим на слово: только известные поля, строки и пределы сервера.
+        const { page: raw, topic: next, stream: flag } = data as { page?: unknown; topic?: unknown; stream?: unknown };
+        const clean = sanitizePage(raw);
+        setPage(Object.keys(clean).length ? clean : undefined);
+        setPageTopic(isTopicName(next) ? next : null);
+        // Только true/false: старый загрузчик без поля оставляет флаг из адреса.
+        if (typeof flag === "boolean") setPageStream(flag);
       }
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && window.parent.postMessage({ type: "eb:close" }, parent);
@@ -89,7 +143,7 @@ export function EmbedChat() {
   } as React.CSSProperties;
 
   const headerButton =
-    "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-4";
+    "flex size-8 max-sm:size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none [&_svg]:size-4";
 
   return (
     <div className="flex h-dvh flex-col bg-background" style={style}>
@@ -114,9 +168,14 @@ export function EmbedChat() {
             <BrandMark className="size-7 rounded-[8px]" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-[14px] leading-tight font-semibold">{title}</div>
-              <div className="mt-0.5 flex items-center gap-1.5 truncate text-[12px] text-muted-foreground">
-                <span className="size-1.5 shrink-0 rounded-full bg-success" aria-hidden />
-                <span className="truncate">{subtitle}</span>
+              <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                <span className="relative flex size-1.5 shrink-0">
+                  <span className="absolute inset-0 animate-ping rounded-full bg-success motion-reduce:hidden" />
+                  <span className="relative size-1.5 rounded-full bg-success" />
+                </span>
+                <span className="truncate">
+                  <span className="font-medium text-foreground/70">{AI_LABEL}</span> · {subtitle}
+                </span>
               </div>
             </div>
           </>
@@ -127,7 +186,22 @@ export function EmbedChat() {
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <button type="button" onClick={() => chat.create()} className={headerButton} aria-label="Новый диалог" />
+                    <button
+                      type="button"
+                      onClick={() => setLeadOpen(true)}
+                      className={headerButton}
+                      aria-label="Связаться с менеджером"
+                    />
+                  }
+                >
+                  <Headset />
+                </TooltipTrigger>
+                <TooltipContent>Связаться с менеджером</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button type="button" onClick={requestNew} className={headerButton} aria-label="Новый диалог" />
                   }
                 >
                   <SquarePen />
@@ -148,11 +222,16 @@ export function EmbedChat() {
           <div className={cn("h-full", leadOpen && "invisible")} aria-hidden={leadOpen}>
             <ChatView
               chat={chat}
-              kb={null}
+              kb={kb}
               compact
               greeting={greeting}
-              onOpenChunk={(id) => window.open(kbHref(id), "_blank", "noopener")}
+              starters={topic?.starters}
+              onOpenChunk={(id, hl) => window.open(kbHref(id, hl), "_blank", "noopener")}
               onLead={() => setLeadOpen(true)}
+              summary
+              wizards={FLOWS}
+              showRoles
+              showLevel
             />
           </div>
         )}
@@ -164,9 +243,17 @@ export function EmbedChat() {
       </div>
       {!leadOpen && (
         <div className="shrink-0 px-5 pb-2 text-center text-[11px] leading-snug text-muted-foreground">
-          ИИ может ошибаться — цифры по вашему объекту подтвердит специалист МТС
+          {AI_DISCLAIMER} Цифры по вашему объекту подтвердит специалист МТС
         </div>
       )}
+      <NewDialogConfirm
+        open={confirmNew}
+        onCancel={() => setConfirmNew(false)}
+        onConfirm={() => {
+          setConfirmNew(false);
+          chat.create();
+        }}
+      />
     </div>
   );
 }

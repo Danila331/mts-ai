@@ -30,6 +30,11 @@ func (s *Store) Purge(ctx context.Context, c privacy.Cutoffs) (privacy.Counts, b
 			if n.Answers, err = q.PurgeAnswers(ctx, c.Answers); err != nil {
 				return fmt.Errorf("answers: %w", err)
 			}
+			// Сессия без единого живого ответа — пустой заголовок с
+			// текстом клиента: срок у неё тот же, что у журнала.
+			if n.Sessions, err = q.PurgeSessions(ctx, c.Answers); err != nil {
+				return fmt.Errorf("sessions: %w", err)
+			}
 		}
 		if !c.Leads.IsZero() {
 			if n.Leads, err = q.PurgeLeads(ctx, c.Leads); err != nil {
@@ -68,6 +73,7 @@ func (s *Store) Forget(ctx context.Context, subj privacy.Subject, dryRun bool) (
 				{"заявки с номером в тексте", &n.Leads, q.ForgetLeadsMentioning},
 				{"ответы с номером", &n.Answers, q.ForgetAnswersMentioning},
 				{"оценки с номером", &n.Feedback, q.ForgetFeedbackMentioning},
+				{"сессии с номером в заголовке", &n.Sessions, q.ForgetSessionsMentioning},
 			}
 			for _, st := range steps {
 				rows, err := st.run(ctx, subj.Phone10)

@@ -1,10 +1,26 @@
-import { BookOpen, Code2, MessageSquare, Monitor, Moon, SlidersHorizontal, Sun } from "lucide-react";
+import {
+  BookOpen,
+  ChartNoAxesCombined,
+  Code2,
+  FileCheck2,
+  FlaskConical,
+  MessageSquare,
+  Monitor,
+  Moon,
+  SlidersHorizontal,
+  Sun,
+  Users,
+} from "lucide-react";
 
 /** Разделы стенда — в сайдбаре и в палитре ⌘K. */
 export const NAV = [
   { href: "/playground", label: "Чат и отладка", icon: MessageSquare },
   { href: "/kb", label: "База знаний", icon: BookOpen },
   { href: "/widget", label: "Виджет для сайта", icon: Code2 },
+  { href: "/check-data", label: "Проверить выгрузку", icon: FileCheck2 },
+  { href: "/manager", label: "Менеджер", icon: Users },
+  { href: "/lab", label: "Стресс-тест", icon: FlaskConical },
+  { href: "/business", label: "Бизнес-кейс", icon: ChartNoAxesCombined },
   { href: "/settings", label: "Настройки RAG", icon: SlidersHorizontal },
 ];
 

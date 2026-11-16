@@ -5,7 +5,7 @@
 конфигурации в архив класть нельзя. Поэтому пакет energybot/ при сборке
 «расплющивается»: energybot/kb.py → eb_kb.py и т. д., импорты переписываются.
 
-    python scripts/build_submission.py [--out dist/submission.zip]
+    python scripts/build_submission.py [--final] [--out PATH]
 """
 
 from __future__ import annotations
@@ -15,9 +15,11 @@ import re
 import sys
 import zipfile
 from pathlib import Path
+from shutil import copyfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "energybot"
+FINAL = ROOT / "submissions" / "final"
 PREFIX = "eb_"
 
 
@@ -45,7 +47,31 @@ def check_requirements(path: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build(out: Path) -> list:
+def output_path(final: bool) -> Path:
+    return ROOT / "dist" / ("submission-final.zip" if final else "submission.zip")
+
+
+def build_final(out: Path) -> list:
+    original = FINAL / "original.zip"
+    if out.resolve() == original.resolve():
+        raise SystemExit("Укажи выходной путь вне исходного архива")
+    check_requirements(FINAL / "requirements.txt")
+    files = {name: (FINAL / name).read_bytes() for name in ("solution.py", "requirements.txt")}
+    with zipfile.ZipFile(original) as archive:
+        unchanged = all(archive.read(name) == data for name, data in files.items())
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if unchanged:
+        copyfile(original, out)
+    else:
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, data in files.items():
+                archive.writestr(name, data)
+    return list(files)
+
+
+def build(out: Path, *, final: bool = False) -> list:
+    if final:
+        return build_final(out)
     files = {"solution.py": rewrite_imports((ROOT / "solution.py").read_text(encoding="utf-8"))}
     for module in sorted(PACKAGE.glob("*.py")):
         if module.name == "__init__.py":
@@ -66,10 +92,11 @@ def build(out: Path) -> list:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(ROOT / "dist" / "submission.zip"))
+    ap.add_argument("--out", type=Path)
+    ap.add_argument("--final", action="store_true", help="сабмит AIblanki из submissions/final")
     args = ap.parse_args()
-    out = Path(args.out)
-    names = build(out)
+    out = args.out or output_path(args.final)
+    names = build(out, final=args.final)
     print(f"{out} ({out.stat().st_size // 1024} КБ): {', '.join(names)}")
 
 

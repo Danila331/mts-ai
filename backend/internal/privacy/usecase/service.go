@@ -57,7 +57,7 @@ func (r *Retention) Once(ctx context.Context) (privacy.Counts, error) {
 	if n.Total() > 0 {
 		event = r.log.Info()
 	}
-	event.Int64("leads", n.Leads).Int64("answers", n.Answers).Int64("feedback", n.Feedback).
+	event.Int64("leads", n.Leads).Int64("answers", n.Answers).Int64("feedback", n.Feedback).Int64("sessions", n.Sessions).
 		Msg("очистка по сроку хранения")
 	return n, nil
 }

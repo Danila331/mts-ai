@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,9 @@ import (
 	"github.com/Danila331/mts-ai/backend/internal/dialog"
 	"github.com/Danila331/mts-ai/backend/internal/feedback"
 	"github.com/Danila331/mts-ai/backend/internal/lead"
+	"github.com/Danila331/mts-ai/backend/internal/logger"
+	"github.com/Danila331/mts-ai/backend/internal/passport"
+	"github.com/Danila331/mts-ai/backend/internal/session"
 )
 
 // healthz — проба хостинга: процесс жив и база отвечает. Ядро сюда не
@@ -49,6 +53,15 @@ func (s *Server) kb(c echo.Context) error {
 		return s.coreFail(c, err)
 	}
 	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
+}
+
+// stats — наблюдаемые исходы диалогов, а не выдуманное «решение проблемы».
+func (s *Server) stats(c echo.Context) error {
+	stats, err := s.deps.Stats.Stats(c.Request().Context())
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, stats)
 }
 
 // settings — настройки RAG ядра как есть.
@@ -87,6 +100,11 @@ func (s *Server) saveSettings(c echo.Context) error {
 	return c.Blob(http.StatusOK, echo.MIMEApplicationJSONCharsetUTF8, raw)
 }
 
+// adminLogin — токен администратора верен (его проверил requireAdmin).
+func (s *Server) adminLogin(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]bool{"ok": true})
+}
+
 // resetSettings возвращает настройки из окружения ядра.
 func (s *Server) resetSettings(c echo.Context) error {
 	raw, err := s.deps.Settings.ResetSettings(c.Request().Context())
@@ -97,8 +115,47 @@ func (s *Server) resetSettings(c echo.Context) error {
 }
 
 type chatRequest struct {
-	Messages json.RawMessage `json:"messages"`
-	Mode     string          `json:"mode"`
+	Messages  json.RawMessage `json:"messages"`
+	Mode      string          `json:"mode"`
+	Overrides json.RawMessage `json:"overrides"`
+	// SessionID и Channel — разговор на фронте. Необязательны: без них
+	// ответ пишется в журнал без сессии.
+	SessionID string `json:"session_id"`
+	Channel   string `json:"channel"`
+	// Page — страница сайта, с которой открыт виджет: путь, заголовок,
+	// UTM (session.ParsePage). Пишется в сессию для аналитики, ядру и в
+	// промпт не уходит.
+	Page json.RawMessage `json:"page"`
+	// Role — роль-подсказка собеседника (T15, session.Roles), RoleSource —
+	// client (выбрал кнопкой) или auto (фронт определил по репликам).
+	// Необязательны: без роли служба определит её сама. В промпт роль
+	// попадает только в режиме chat.
+	Role       string `json:"role"`
+	RoleSource string `json:"role_source"`
+	// Level — уровень объяснения (T16, session.Levels): simple или
+	// technical. Поле есть, а значение пустое — обычный уровень. Только
+	// форма ответа; в промпт попадает в режиме chat.
+	Level *string `json:"level"`
+}
+
+// maxOverrides — предел поля overrides. Настроек полтора десятка, и их
+// объект — сотни байт; всё, что больше, — не настройки.
+const maxOverrides = 4 << 10
+
+// overrides — настройки песочницы как есть: шлюз проверяет только форму,
+// ключи и пределы проверяет ядро (отказ — 400 с его текстом).
+func overrides(raw json.RawMessage) (json.RawMessage, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) || bytes.Equal(raw, []byte("{}")) {
+		return nil, nil
+	}
+	if raw[0] != '{' {
+		return nil, apperr.Invalidf("overrides: ожидается объект {ключ: значение}")
+	}
+	if len(raw) > maxOverrides {
+		return nil, apperr.Invalidf("overrides: слишком много настроек")
+	}
+	return raw, nil
 }
 
 // chat отвечает на вопрос потоком server-sent events.
@@ -116,8 +173,36 @@ func (s *Server) chat(c echo.Context) error {
 		return s.mapErr(c, err)
 	}
 
+	sandbox, err := overrides(body.Overrides)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	ref, err := session.Parse(body.SessionID, body.Channel)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	// Страницу проверяем и без сессии: кривой page — ошибка клиента,
+	// даже если записать его некуда.
+	page, err := session.ParsePage(body.Page)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	if ref.ID != "" {
+		ref.Page = page
+	}
+	role, err := session.ParseRole(body.Role, body.RoleSource)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+
+	level, err := session.ParseLevel(body.Level)
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+
 	mode := dialog.ParseMode(body.Mode)
-	relay, err := s.deps.Chat.Ask(c.Request().Context(), chat.Request{Turns: turns, Mode: mode})
+	relay, err := s.deps.Chat.Ask(c.Request().Context(),
+		chat.Request{Turns: turns, Mode: mode, Overrides: sandbox, Session: ref, Role: role, Level: level})
 	if err != nil {
 		return s.coreFail(c, err)
 	}
@@ -138,7 +223,18 @@ func (s *Server) chat(c echo.Context) error {
 
 	out := &sseWriter{w: w}
 	stop := out.heartbeat(s.cfg.HTTP.SSEHeartbeat)
-	outcome := relay.Forward(out.event)
+	emit := out.event
+	if chat.PublicChannel(strings.TrimSpace(body.Channel)) {
+		// Виджет получает ответ без полей отладки (промпт, выдача поиска,
+		// вызовы модели). Журнал пишется из полного события до этой точки.
+		emit = func(ev chat.Event) error {
+			if ev.Name == chat.EventAnswer {
+				ev.Data = chat.StripDebug(ev.Data)
+			}
+			return out.event(ev)
+		}
+	}
+	outcome := relay.Forward(emit)
 	stop()
 	s.deps.Metrics.ChatOutcome(string(outcome), string(mode))
 	return nil
@@ -210,17 +306,101 @@ func (s *sseWriter) heartbeat(every time.Duration) (stop func()) {
 	}
 }
 
+// sessionHistory — разговор целиком: сессия и реплики по порядку.
+func (s *Server) sessionHistory(c echo.Context) error {
+	if s.deps.Sessions == nil {
+		return fail(c, http.StatusNotFound, "not found")
+	}
+	h, err := s.deps.Sessions.History(c.Request().Context(), c.Param("id"))
+	if errors.Is(err, session.ErrNotFound) {
+		return fail(c, http.StatusNotFound, "Сессии нет: не было или удалена по сроку хранения")
+	}
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, h)
+}
+
+type passportRequest struct {
+	// Values — поля паспорта: строка — новое значение, null или "" — стереть.
+	Values map[string]*string `json:"values"`
+}
+
+// patchPassport — клиент поправил паспорт задачи. Его правка главнее того,
+// что понял бот, и бот её больше не перезапишет.
+func (s *Server) patchPassport(c echo.Context) error {
+	if s.deps.Passports == nil {
+		return fail(c, http.StatusNotFound, "not found")
+	}
+	ref, err := session.Parse(c.Param("id"), "")
+	if err != nil || ref.ID == "" {
+		return fail(c, http.StatusBadRequest, "Неверный id сессии")
+	}
+	var body passportRequest
+	if err := decode(c, &body); err != nil {
+		return s.mapErr(c, err)
+	}
+	if len(body.Values) == 0 || len(body.Values) > len(passport.Catalog) {
+		return fail(c, http.StatusBadRequest, "values: ожидается объект {поле: значение}")
+	}
+	clean := make(map[string]string, len(body.Values))
+	for key, v := range body.Values {
+		value := ""
+		if v != nil {
+			value = *v
+		}
+		if clean[key], err = passport.Clean(key, value); err != nil {
+			return s.mapErr(c, err)
+		}
+	}
+	ctx := c.Request().Context()
+	p, err := s.deps.Passports.LoadPassport(ctx, ref.ID)
+	if errors.Is(err, session.ErrNotFound) {
+		return fail(c, http.StatusNotFound, "Разговора нет на сервере: задайте вопрос в чате")
+	}
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	now := time.Now()
+	for key, value := range clean {
+		p.Set(key, value, passport.FromClient, now)
+	}
+	if err := s.deps.Passports.SavePassport(ctx, ref.ID, p); err != nil {
+		return s.mapErr(c, err)
+	}
+	return c.JSON(http.StatusOK, p.Render())
+}
+
 type leadRequest struct {
 	Name     string          `json:"name"`
 	Phone    string          `json:"phone"`
 	Company  string          `json:"company"`
 	Comment  string          `json:"comment"`
 	Messages json.RawMessage `json:"messages"`
+	// SessionID — разговор: заявка возьмёт его паспорт задачи с сервера.
+	SessionID string `json:"session_id"`
+	// Callback — когда удобнее звонок (T4): часть дня и часовой пояс
+	// браузера. Предпочтение, а не запись на время.
+	Callback lead.Callback `json:"callback"`
+	// Kind — тип заявки (T17): callback | assessment | demo | pilot;
+	// пусто — обратный звонок.
+	Kind string `json:"kind"`
+	// Consent — согласие на обработку персональных данных, на том же шаге,
+	// что и контакты (раздел базы «Согласие на обработку персональных
+	// данных»). Без него заявки нет.
+	Consent bool `json:"consent"`
+	// Website — скрытое поле-ловушка формы (T35): человек его не видит и
+	// не заполняет. ElapsedMS — сколько форма была на экране до отправки.
+	// Оба поля нужны только антиботу и дальше обработчика не идут.
+	Website   string `json:"website"`
+	ElapsedMS *int64 `json:"elapsed_ms"`
 }
 
 type leadResponse struct {
 	ID      string `json:"id"`
 	Summary string `json:"summary"`
+	// Kind — тип принятой заявки: фронт показывает подтверждение под него.
+	Kind lead.Kind `json:"kind"`
 }
 
 // lead принимает заявку менеджеру и отвечает номером и резюме.
@@ -229,14 +409,30 @@ func (s *Server) lead(c echo.Context) error {
 	if err := decode(c, &body); err != nil {
 		return s.mapErr(c, err)
 	}
-	l, err := s.deps.Leads.Create(c.Request().Context(), lead.Contacts{
-		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment,
-	}, body.Messages)
+	if msg := checkHuman(body.Website, body.ElapsedMS, s.cfg.Limits.LeadMinFill); msg != "" {
+		s.deps.Metrics.RateLimited("lead_antibot")
+		zerolog.Ctx(c.Request().Context()).Warn().Bool("honeypot", body.Website != "").
+			Msg("заявка отклонена антиботом")
+		return fail(c, http.StatusBadRequest, msg)
+	}
+	if !body.Consent {
+		return fail(c, http.StatusBadRequest, "Нужно согласие на обработку персональных данных")
+	}
+	ref, err := session.Parse(body.SessionID, "")
+	if err != nil {
+		return s.mapErr(c, err)
+	}
+	// Контакты из формы не должны попасть в журнал, даже в тексте ошибки.
+	logger.Remember(body.Name, body.Company, body.Phone)
+	l, err := s.deps.Leads.CreateForSession(c.Request().Context(), lead.Contacts{
+		Name: body.Name, Phone: body.Phone, Company: body.Company, Comment: body.Comment, Callback: body.Callback,
+		Kind: lead.Kind(body.Kind),
+	}, body.Messages, ref.ID)
 	if err != nil {
 		return s.mapErr(c, err)
 	}
 	s.deps.Metrics.Lead(string(l.SummarySource))
-	return c.JSON(http.StatusOK, leadResponse{ID: l.Code, Summary: l.Summary})
+	return c.JSON(http.StatusOK, leadResponse{ID: l.Code, Summary: l.Summary, Kind: l.Kind})
 }
 
 type feedbackRequest struct {
@@ -320,6 +516,10 @@ func (s *Server) coreFail(c echo.Context, err error) error {
 		return fail(c, coreErr.Status, coreErr.Msg)
 	}
 	zerolog.Ctx(c.Request().Context()).Error().Err(err).Str("route", c.Path()).Msg("ядро не ответило")
+	if errors.Is(err, core.ErrCircuitOpen) {
+		return fail(c, http.StatusServiceUnavailable,
+			"Ядро консультанта перезапускается — ответ появится через минуту. Заявки и оценки принимаются.")
+	}
 	if errors.Is(err, core.ErrUnavailable) {
 		return fail(c, http.StatusBadGateway, "Ядро консультанта не запущено или перезапускается")
 	}

@@ -57,41 +57,50 @@ export function ChunkText({
   kb,
   onDoc,
   highlight,
+  focusLine,
   className,
 }: {
   text: string;
   kb: KbIndex | null;
   onDoc?: (doc: string) => void;
   highlight?: string;
+  /** Строка раздела, на которую опирается ответ: помечается data-line и плавно подсвечивается. */
+  focusLine?: number;
   className?: string;
 }) {
-  const blocks: { list: boolean; ordered: boolean; lines: string[] }[] = [];
+  const blocks: { list: boolean; ordered: boolean; lines: string[]; idx: number[] }[] = [];
+  // idx — номер строки среди непустых: по нему ссылка из ответа находит нужное место (lib/line-match.ts)
+  let n = -1;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
+    n++;
     const list = /^\s*(-|\d+\.)\s/.test(line);
     const ordered = /^\s*\d+\.\s/.test(line);
     const content = line.replace(/^\s*(-|\d+\.)\s+/, "");
     const prev = blocks[blocks.length - 1];
-    if (prev && list && prev.list && prev.ordered === ordered) prev.lines.push(content);
-    else blocks.push({ list, ordered, lines: [content] });
+    if (prev && list && prev.list && prev.ordered === ordered) {
+      prev.lines.push(content);
+      prev.idx.push(n);
+    } else blocks.push({ list, ordered, lines: [content], idx: [n] });
   }
+  const at = (i: number) => ({ "data-line": i, "data-hl": i === focusLine ? "" : undefined });
   const ink = (l: string) => inline(l, kb, onDoc, highlight);
   return (
     <div className={cn("space-y-3", className ?? "text-[14px] leading-relaxed")}>
       {blocks.map((b, i) => {
-        if (!b.list) return <p key={i}>{ink(b.lines[0])}</p>;
+        if (!b.list) return <p key={i} {...at(b.idx[0])} className="line-mark">{ink(b.lines[0])}</p>;
         const rows = b.lines.map(pairs);
         const keys = rows[0]?.map(([k]) => k).join("|");
         // «Показатель: …; Значение: …; Оговорка: …» в каждой строке — это таблица, записанная текстом.
         if (rows.length > 1 && rows.every((r) => r && r.length > 1 && r.map(([k]) => k).join("|") === keys)) {
-          return <KvTable key={i} head={rows[0]!.map(([k]) => k)} rows={rows as [string, string][][]} ink={ink} />;
+          return <KvTable key={i} head={rows[0]!.map(([k]) => k)} rows={rows as [string, string][][]} idx={b.idx} at={at} ink={ink} />;
         }
         // «Кто: …», «Что: …» — пары «ключ — значение» по одной в строке.
         if (rows.every((r) => r && r.length === 1) && rows.length > 1) {
           return (
             <dl key={i} className="divide-y overflow-hidden rounded-lg border">
               {(rows as [string, string][][]).map(([[k, v]], j) => (
-                <div key={j} className="grid gap-1 px-4 py-2.5 sm:grid-cols-[minmax(0,12rem)_1fr] sm:gap-4">
+                <div key={j} {...at(b.idx[j])} className="line-mark grid gap-1 px-4 py-2.5 sm:grid-cols-[minmax(0,12rem)_1fr] sm:gap-4">
                   <dt className="text-[13px] font-medium text-muted-foreground sm:pt-px">{k}</dt>
                   <dd>{ink(v)}</dd>
                 </div>
@@ -101,7 +110,7 @@ export function ChunkText({
         }
         if (rows.length === 1 && rows[0] && rows[0].length > 1) {
           return (
-            <dl key={i} className="grid gap-x-4 gap-y-1.5 rounded-lg border px-4 py-3 sm:grid-cols-[minmax(0,12rem)_1fr]">
+            <dl key={i} {...at(b.idx[0])} className="line-mark grid gap-x-4 gap-y-1.5 rounded-lg border px-4 py-3 sm:grid-cols-[minmax(0,12rem)_1fr]">
               {rows[0].map(([k, v], j) => (
                 <div key={j} className="contents">
                   <dt className="text-[13px] font-medium text-muted-foreground sm:pt-px">{k}</dt>
@@ -123,8 +132,9 @@ export function ChunkText({
             {b.lines.map((l, j) => (
               <li
                 key={j}
+                {...at(b.idx[j])}
                 className={cn(
-                  "relative",
+                  "line-mark relative",
                   !b.ordered &&
                     "before:absolute before:top-[0.72em] before:-left-4 before:h-px before:w-2 before:bg-dim",
                 )}
@@ -154,10 +164,14 @@ function pairs(line: string): [string, string][] | null {
 function KvTable({
   head,
   rows,
+  idx,
+  at,
   ink,
 }: {
   head: string[];
   rows: [string, string][][];
+  idx: number[];
+  at: (i: number) => Record<string, unknown>;
   ink: (text: string) => ReactNode[];
 }) {
   // На узких экранах строка таблицы превращается в карточку «подпись — значение».
@@ -175,7 +189,7 @@ function KvTable({
         </thead>
         <tbody className="divide-y border-t max-sm:block max-sm:border-t-0">
           {rows.map((r, i) => (
-            <tr key={i} className="align-top max-sm:block max-sm:space-y-2 max-sm:px-3.5 max-sm:py-3">
+            <tr key={i} {...at(idx[i])} className="line-mark align-top max-sm:block max-sm:space-y-2 max-sm:px-3.5 max-sm:py-3">
               {r.map(([, v], j) => (
                 <td
                   key={j}

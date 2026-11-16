@@ -139,11 +139,12 @@ func (m *Metrics) RateStoreError(rule string) {
 }
 
 // RetentionPurged — удалено по сроку хранения.
-func (m *Metrics) RetentionPurged(leads, answers, feedback int64) {
+func (m *Metrics) RetentionPurged(leads, answers, feedback, sessions int64) {
 	if m == nil {
 		return
 	}
 	m.retentionPurged.WithLabelValues("leads").Add(float64(leads))
 	m.retentionPurged.WithLabelValues("answers").Add(float64(answers))
 	m.retentionPurged.WithLabelValues("feedback").Add(float64(feedback))
+	m.retentionPurged.WithLabelValues("sessions").Add(float64(sessions))
 }

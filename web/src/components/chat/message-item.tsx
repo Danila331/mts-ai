@@ -1,13 +1,17 @@
 "use client";
 
-import { AlertCircle, Check, Copy, PanelRight, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
+import { AlertCircle, Check, Copy, PanelRight, RotateCcw, ShieldCheck, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KbIndex } from "@/hooks/use-kb";
+import { tidyStream } from "@/lib/stream-text";
+import { LEVELS, type LevelId, otherLevels } from "@/lib/level";
 import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand";
-import { AnswerText, SourcesRow } from "./answer-text";
+import { AnswerText, type OpenChunk, SourcesRow } from "./answer-text";
+import { DegradedSections } from "./degraded-sections";
+import { HonestNoNotice } from "./honest-no";
 import { ThinkingLine } from "./thinking-line";
 
 export function BotAvatar({ className }: { className?: string }) {
@@ -35,7 +39,7 @@ function IconAction({
             aria-label={label}
             aria-pressed={active}
             className={cn(
-              "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-[15px]",
+              "flex size-7 max-sm:size-11 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-[15px]",
               active && "text-foreground",
             )}
           />
@@ -63,6 +67,38 @@ function Tag({ tone, children }: { tone: "warning" | "danger" | "neutral"; child
   );
 }
 
+/** Ответ, который печатается по мере генерации (T13): тот же шрифт, что у готового, и мигающая каретка. */
+function StreamingText({ text, compact }: { text: string; compact?: boolean }) {
+  return (
+    <div aria-busy="true" className="flex flex-col gap-1">
+      <p className={cn("text-foreground", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}>
+        {tidyStream(text)}
+        <span aria-hidden className="stream-caret" />
+      </p>
+    </div>
+  );
+}
+
+/** Метка у ответа, который проверка по базе поправила уже после того, как он напечатался. */
+function RevisedTag() {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            className="inline-flex h-5 items-center gap-1 rounded-md bg-muted px-1.5 text-[11px] font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 [&_svg]:size-3"
+          />
+        }
+      >
+        <ShieldCheck aria-hidden />
+        Уточнено проверкой
+      </TooltipTrigger>
+      <TooltipContent>Пока ответ печатался, проверка по базе знаний поправила его — показан проверенный текст</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function MessageItem({
   message,
   kb,
@@ -70,15 +106,21 @@ export function MessageItem({
   onRegenerate,
   onRate,
   onDebug,
+  onLead,
+  onExplain,
   selected,
   compact,
 }: {
   message: Message;
   kb: KbIndex | null;
-  onOpenChunk: (chunkId: string) => void;
+  onOpenChunk: OpenChunk;
   onRegenerate?: () => void;
   onRate?: (rating: 1 | -1) => void;
   onDebug?: () => void;
+  /** Открыть форму заявки — кнопка в блоке «вот что есть в материалах» (T30). */
+  onLead?: () => void;
+  /** «Объяснить проще / технически» (T16): тот же ответ с другим уровнем объяснения. */
+  onExplain?: (level: LevelId) => void;
   selected?: boolean;
   compact?: boolean;
 }) {
@@ -126,7 +168,9 @@ export function MessageItem({
         onDebug();
       }}
     >
-      {message.pending ? (
+      {message.pending && message.streamed ? (
+        <StreamingText text={message.streamed} compact={compact} />
+      ) : message.pending ? (
         <ThinkingLine message={message} compact={compact} />
       ) : message.error ? (
         <div className="flex flex-wrap items-center gap-2 text-[14px]">
@@ -145,7 +189,8 @@ export function MessageItem({
           )}
         </div>
       ) : (
-        <div className={cn(waited && "answer-in")}>
+        // Напечатанный ответ не проявляется заново; заменённый проверкой — проявляется, чтобы замену было видно.
+        <div className={cn(waited && (!message.typed || message.revised) && "answer-in")}>
           <AnswerText
             answer={a}
             text={message.content}
@@ -154,6 +199,26 @@ export function MessageItem({
             showCitations={!compact}
             className={cn("text-foreground text-pretty", compact ? "text-[14px] leading-[1.6]" : "text-[15px] leading-[1.7]")}
           />
+          {/* Модель недоступна (T30): разделы базы вместо ответа и кнопка заявки — заявка работает без модели. */}
+          <DegradedSections answer={a} onOpenChunk={onOpenChunk} onLead={onLead} compact={compact} />
+          {/* «Честно: не подойдёт» (T26) — и на стенде, и в виджете: это ответ клиенту, а не отладка. */}
+          <HonestNoNotice answer={a} onOpenChunk={onOpenChunk} compact={compact} />
+          {onExplain && a && !a.fallback && !a.error && a.route !== "clarify" && (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {otherLevels(a.level).map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => onExplain(level)}
+                  title={LEVELS[level].hint}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border/80 px-2.5 text-[12.5px] text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <RotateCcw className="size-3" aria-hidden />
+                  {LEVELS[level].action}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Клиенту в виджете — чистый текст; номера и источники нужны жюри на стенде. */}
           {!compact && <SourcesRow answer={a} kb={kb} onOpen={onOpenChunk} />}
           <div
@@ -184,6 +249,11 @@ export function MessageItem({
               <IconAction label={selected ? "Открыто в отладке" : "Показать в отладке"} onClick={onDebug} active={selected}>
                 <PanelRight />
               </IconAction>
+            )}
+            {message.revised && (
+              <span className="ml-2 flex items-center">
+                <RevisedTag />
+              </span>
             )}
             {!compact && a && (
               <span className="ml-2 flex items-center gap-1.5 text-xs text-muted-foreground">

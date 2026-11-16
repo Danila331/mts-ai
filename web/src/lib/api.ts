@@ -1,11 +1,33 @@
-import type { AnswerPayload, ChatMode, Health, KbData, RagSettings, Retrieval, SettingValue, Turn } from "./types";
+import type { CallbackPreference } from "./callback";
+import type { LeadKind } from "./lead-kinds";
+import type { LevelId } from "./level";
+import type { PageInfo } from "./page-context";
+import type { RoleId, RoleSource } from "./roles";
+import type {
+  AnswerPayload,
+  ChatMode,
+  Health,
+  KbData,
+  OcrInfo,
+  OcrResult,
+  Passport,
+  RagSettings,
+  Retrieval,
+  SettingValue,
+  Turn,
+} from "./types";
 
 // Все запросы идут на тот же origin (/api/* проксируется в Python-API), поэтому работает и внутри iframe виджета.
 const BASE = "/api";
 
 export async function getHealth(signal?: AbortSignal): Promise<Health> {
   const res = await fetch(`${BASE}/health`, { signal, cache: "no-store" });
-  if (!res.ok) throw new Error(`API недоступен (${res.status})`);
+  if (!res.ok) {
+    // API отвечает, а ядро за ним перезапускается (502 с текстом Go-API) — это не «API недоступен» (QA).
+    const detail = await res.json().catch(() => ({}));
+    if (res.status === 502 && /ядро/i.test(String(detail.error ?? ""))) throw new Error("Ядро перезапускается");
+    throw new Error(`API недоступен (${res.status})`);
+  }
   return res.json();
 }
 
@@ -21,23 +43,89 @@ export function getKb(): Promise<KbData> {
   return kbPromise;
 }
 
+const OCR_OFF: OcrInfo = { enabled: false, photos: false, pdf: false, types: [], max_bytes: 0, max_pages: 0 };
+let ocrPromise: Promise<OcrInfo> | null = null;
+
+/** Что принимается из документов (T9). Не меняется во время работы стенда — один запрос на вкладку;
+ * API недоступен — кнопки вложения нет, следующий вызов спросит снова. */
+export function getOcrInfo(): Promise<OcrInfo> {
+  ocrPromise ??= fetch(`${BASE}/ocr`, { cache: "no-store" })
+    .then((res) => (res.ok ? (res.json() as Promise<OcrInfo>) : Promise.reject(new Error(String(res.status)))))
+    .catch(() => {
+      ocrPromise = null;
+      return OCR_OFF;
+    });
+  return ocrPromise;
+}
+
+/** Документ → текст на проверку клиенту. Тело — сам файл: сервер проверяет его сигнатуру и ничего не хранит. */
+export async function readDocument(file: Blob, type: string, signal?: AbortSignal): Promise<OcrResult> {
+  const res = await fetch(`${BASE}/ocr`, {
+    method: "POST",
+    headers: { "Content-Type": type || "application/octet-stream" },
+    body: file,
+    signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (data.error) throw new Error(data.error);
+    throw new Error(res.status === 413 ? "Файл слишком большой" : `Не удалось распознать документ (${res.status})`);
+  }
+  return data as OcrResult;
+}
+
 export interface StreamHandlers {
   onRetrieval?: (r: Retrieval & { ms?: number }) => void;
   onGeneration?: () => void;
+  /** Кусок ответа по мере генерации (T13). Без обработчика дельты пропускаются — ответ придёт целиком в onAnswer. */
+  onDelta?: (text: string) => void;
+  /** Готовый ответ. Главнее дельт: проверка могла переписать напечатанное. */
   onAnswer: (a: AnswerPayload) => void;
+  /** Паспорт задачи после ответа (режим chat с сессией). */
+  onPassport?: (p: Passport) => void;
 }
 
-/** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → answer → done. */
+/** Откуда разговор: стенд или виджет на сайте. Сервер хранит сессию с этим каналом. */
+export type Channel = "playground" | "embed";
+
+export interface ChatOptions {
+  signal?: AbortSignal;
+  /** Настройки песочницы (src/lib/sandbox.ts): действуют только на этот ответ. */
+  overrides?: Record<string, SettingValue>;
+  /** id разговора на фронте: сервер собирает по нему историю сессии для менеджера. */
+  sessionId?: string;
+  channel?: Channel;
+  /** Страница сайта, где открыт виджет (путь, заголовок, UTM): пишется в сессию для аналитики, в промпт не идёт. */
+  page?: PageInfo;
+  /**
+   * Роль-подсказка (T15) и откуда она: client — выбрал кнопкой (пустая роль — снял), auto — определил фронт.
+   * Без источника не отправляется: сервер определит роль сам. В промпт попадает только в режиме chat.
+   */
+  role?: RoleId | "";
+  roleSource?: RoleSource;
+  /** Уровень объяснения (T16): только режим chat. undefined — не отправляется; "" — обычный уровень. */
+  level?: LevelId | "";
+}
+
+/** POST /api/chat отдаёт SSE: stage(retrieval) → stage(generation) → delta… → answer → passport → done. */
 export async function streamChat(
   messages: Turn[],
   mode: ChatMode,
   handlers: StreamHandlers,
-  signal?: AbortSignal,
+  { signal, overrides, sessionId, channel, page, role, roleSource, level }: ChatOptions = {},
 ): Promise<void> {
+  const body: Record<string, unknown> = { messages, mode };
+  if (overrides && Object.keys(overrides).length) body.overrides = overrides;
+  if (mode === "chat" && roleSource) Object.assign(body, { role: role ?? "", role_source: roleSource });
+  if (mode === "chat" && level !== undefined) body.level = level;
+  if (sessionId) {
+    Object.assign(body, { session_id: sessionId, channel: channel ?? "playground" });
+    if (page && Object.keys(page).length) body.page = page;
+  }
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, mode }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!res.ok || !res.body) {
@@ -65,10 +153,13 @@ export async function streamChat(
       const payload = JSON.parse(data);
       if (event === "stage" && payload.name === "retrieval") handlers.onRetrieval?.(payload);
       else if (event === "stage" && payload.name === "generation") handlers.onGeneration?.();
-      else if (event === "answer") {
+      else if (event === "delta") {
+        if (!answered && typeof payload.text === "string") handlers.onDelta?.(payload.text);
+      } else if (event === "answer") {
         answered = true;
         handlers.onAnswer(payload);
-      } else if (event === "error") throw new Error(payload.error || "Ошибка ответа");
+      } else if (event === "passport") handlers.onPassport?.(payload);
+      else if (event === "error") throw new Error(payload.error || "Ошибка ответа");
     }
   }
   if (!answered) throw new Error("Соединение оборвалось до ответа");
@@ -80,14 +171,40 @@ export async function sendLead(body: {
   company: string;
   comment: string;
   messages: Turn[];
-}): Promise<{ id: string; summary: string }> {
+  /** Разговор: заявка возьмёт его паспорт задачи с сервера. */
+  session_id?: string;
+  /** Удобное время звонка (T4): часть дня и часовой пояс — пожелание, а не запись на время. */
+  callback?: CallbackPreference;
+  /** Тип заявки (T17); без него — обратный звонок. */
+  kind?: LeadKind;
+  /** Согласие на обработку персональных данных — на том же шаге, что и контакты. */
+  consent: boolean;
+  /** Антибот (T35): скрытая ловушка (у человека пусто) и сколько форма была на экране, мс. */
+  website?: string;
+  elapsed_ms?: number;
+}): Promise<{ id: string; summary: string; kind?: LeadKind }> {
   const res = await fetch(`${BASE}/lead`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error("Не удалось отправить заявку");
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.error || "Не удалось отправить заявку");
+  }
   return res.json();
+}
+
+/** Клиент правит паспорт задачи: строка — новое значение, null — стереть поле. */
+export async function patchPassport(sessionId: string, values: Record<string, string | null>): Promise<Passport> {
+  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/passport`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Не удалось сохранить");
+  return data as Passport;
 }
 
 export async function sendFeedback(body: {
@@ -116,7 +233,7 @@ export async function getSettings(): Promise<RagSettings> {
   return settingsJson(await fetch(`${BASE}/settings`, { cache: "no-store" }));
 }
 
-/** Сохранить настройки — глобально, для всех ответов стенда до перезапуска ядра. */
+/** Сохранить настройки — глобально, для всех ответов стенда до перезапуска ядра. Только администратор. */
 export async function saveSettings(values: Record<string, SettingValue>): Promise<RagSettings> {
   return settingsJson(
     await fetch(`${BASE}/settings`, {
@@ -130,4 +247,33 @@ export async function saveSettings(values: Record<string, SettingValue>): Promis
 /** Вернуть значения из окружения ядра. */
 export async function resetSettings(): Promise<RagSettings> {
   return settingsJson(await fetch(`${BASE}/settings/reset`, { method: "POST" }));
+}
+
+export interface AdminSession {
+  /** Задан ли EB_ADMIN_TOKEN: можно ли вообще войти. */
+  enabled: boolean;
+  admin: boolean;
+}
+
+/** Вошёл ли посетитель как администратор стенда (httpOnly-cookie видит только сервер). */
+export async function getAdminSession(): Promise<AdminSession> {
+  const res = await fetch(`${BASE}/admin/session`, { cache: "no-store" });
+  if (!res.ok) return { enabled: false, admin: false };
+  return res.json();
+}
+
+export async function adminLogin(token: string): Promise<void> {
+  const res = await fetch(`${BASE}/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.error || `Вход не удался (${res.status})`);
+  }
+}
+
+export async function adminLogout(): Promise<void> {
+  await fetch(`${BASE}/admin/logout`, { method: "POST" });
 }
