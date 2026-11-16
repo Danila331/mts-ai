@@ -63,6 +63,14 @@ class Suggest(unittest.TestCase):
         got = quick_replies.suggest("Есть ли у вас приборы учёта? Какая у вас задача?", None)
         self.assertIn("Найти потери", got)
 
+    def test_task_question_with_adjective(self):
+        # Живой ответ v28: «площадкам» не должно включать правило про кровлю, вопрос — о задаче.
+        q = ("Уточните, какая у вас основная задача: снизить стоимость электроэнергии "
+             "или наладить учёт по площадкам?")
+        got = quick_replies.suggest(q, None)
+        self.assertIn("Снизить платёж", got)
+        self.assertNotIn("Плоская кровля", got)
+
     def test_tasks_follow_passport(self):
         passport = {"fields": [{"key": "task", "value": "поиск потерь"}]}
         got = quick_replies.suggest("Какая у вас задача?", passport)
