@@ -170,7 +170,9 @@ class MockRunTest(unittest.TestCase):
 
 class PublishedReportTest(unittest.TestCase):
     def test_committed_report_is_real_or_absent(self):
-        """Страница /lab показывает только настоящий прогон; заглушка — «прогона ещё нет»."""
+        """Опубликованный отчёт (если он есть) — только настоящий прогон, не заглушка."""
+        if not personas.PUBLISHED.is_file():
+            self.skipTest("страница /lab убрана со стенда, отчёт не публикуется")
         data = json.loads(personas.PUBLISHED.read_text(encoding="utf-8"))
         if isinstance(data, dict) and "dialogs" in data:
             self.assertEqual(data["schema"], personas.SCHEMA)

@@ -11,7 +11,7 @@ import {
   Headset,
   Loader2,
   RotateCcw,
-  ShieldCheck,
+  Info,
   Upload,
   X,
 } from "lucide-react";
@@ -128,7 +128,7 @@ function Verdict({ analysis, kbHref }: { analysis: Analysis; kbHref: string }) {
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button nativeButton={false} render={<Link href="/playground" />}>
               <Headset />
-              Передать менеджеру
+              Обсудить в чате
             </Button>
             <Button variant="outline" nativeButton={false} render={<Link href={kbHref} />}>
               <BookOpen />
@@ -246,8 +246,7 @@ function Columns({ file, onChange, onReset }: { file: Loaded; onChange: (m: Mapp
 
 /**
  * «Проверить выгрузку» (T21): хватает ли в выгрузке сетевой компании сведений для поиска коммерческих потерь.
- * Файл читается только в этой вкладке — ни одного запроса с его содержимым. Единственный запрос страницы —
- * `GET /api/kb`, чтобы найти id раздела базы для ссылки. Итог для паспорта клиента (T2) — `DataReadiness` из `@/lib/data-readiness`:
+ * Единственный сетевой запрос страницы — `GET /api/kb`, чтобы найти id раздела базы для ссылки. Итог для паспорта клиента (T2) — `DataReadiness` из `@/lib/data-readiness`:
  * только флаги, пока никуда не отправляется.
  */
 export function CheckDataView() {
@@ -301,11 +300,9 @@ export function CheckDataView() {
           </p>
 
           <div className="mt-4 flex gap-3 rounded-xl bg-muted/60 px-4 py-3 text-[13.5px] leading-relaxed">
-            <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
             <p className="text-muted-foreground">
-              <span className="font-medium text-foreground">Файл не покидает браузер.</span> Он читается и проверяется
-              на этом устройстве и никуда не отправляется — ни на сервер стенда, ни в модель. В базе для поиска потерь
-              названа «{KB_QUOTES.anonymized}» — обезличьте её перед проверкой.
+              В базе для поиска потерь названа «{KB_QUOTES.anonymized}» — обезличьте её перед проверкой.
             </p>
           </div>
 
