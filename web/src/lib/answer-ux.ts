@@ -69,6 +69,31 @@ export function suggestionsFor(
   return visibleSuggestions(last.answer, passport, hasLead);
 }
 
+// ---------- предложение менеджера ----------
+
+/** Кнопки-ответы на предложение менеджера (scripts/quick_replies.py: HANDOFF). */
+export const HANDOFF_YES = "Да, передайте менеджеру";
+export const HANDOFF_NO = "Пока продолжим здесь";
+
+const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+export const isHandoffYes = (text: string) => norm(text) === norm(HANDOFF_YES);
+
+/**
+ * Ответ, под которым нужна карточка «Передать менеджеру»: последнее сообщение — готовый ответ бота с полем
+ * handoff, заявки ещё нет и клиент не закрыл карточку. Иначе undefined. dismissed — id закрытых карточек.
+ */
+export function handoffOffer(
+  messages: readonly Message[],
+  hasLead: boolean,
+  dismissed?: ReadonlySet<string>,
+): Message | undefined {
+  const last = messages[messages.length - 1];
+  if (hasLead || !last || last.role !== "assistant" || last.pending || last.error) return undefined;
+  const a = last.answer;
+  if (!a || a.fallback || a.error || !a.handoff || dismissed?.has(last.id)) return undefined;
+  return last;
+}
+
 // ---------- первый полезный ответ ----------
 
 /** Полезный ответ: завершён, не запасной, не ошибка и не уточнение ниже порога уверенности. */
